@@ -31,7 +31,7 @@
       {% elif msg.role == "tool_result" %}
       <details class="agent-tool-result">
         <summary>Result: {{ msg.tool_name }}</summary>
-        <pre>{{ msg.tool_output }}</pre>
+        <pre>{{ msg.tool_output | pretty_json }}</pre>
       </details>
       {% endif %}
     {% endfor %}
@@ -43,15 +43,13 @@
   </form>
 </div>
 
-<script src="/-/static-plugins/datasette-agent/agent.js"></script>
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-  const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
-  const pending = sessionStorage.getItem("agent_pending_message");
-  if (pending) {
-    sessionStorage.removeItem("agent_pending_message");
-    sendMessage(conversationId, pending);
-  }
-});
+<script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
+<script type="module">
+const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
+const pending = sessionStorage.getItem("agent_pending_message");
+if (pending) {
+  sessionStorage.removeItem("agent_pending_message");
+  window.sendMessage(conversationId, pending);
+}
 </script>
 {% endblock %}

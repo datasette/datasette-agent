@@ -1,14 +1,43 @@
+import * as smd from "./smd.js";
+
+function scrollToBottom() {
+  const messages = document.getElementById("messages");
+  messages.scrollTop = messages.scrollHeight;
+}
+
 function appendMessage(role, content) {
   const messages = document.getElementById("messages");
   const div = document.createElement("div");
   div.className = "agent-message agent-message-" + role;
   const contentDiv = document.createElement("div");
   contentDiv.className = "agent-message-content";
-  contentDiv.textContent = content;
+  if (role === "assistant" && content) {
+    // Render existing content as markdown
+    const renderer = smd.default_renderer(contentDiv);
+    const parser = smd.parser(renderer);
+    smd.parser_write(parser, content);
+    smd.parser_end(parser);
+  } else {
+    contentDiv.textContent = content;
+  }
   div.appendChild(contentDiv);
   messages.appendChild(div);
-  messages.scrollTop = messages.scrollHeight;
+  scrollToBottom();
   return contentDiv;
+}
+
+function startAssistantMessage() {
+  const messages = document.getElementById("messages");
+  const div = document.createElement("div");
+  div.className = "agent-message agent-message-assistant";
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "agent-message-content";
+  div.appendChild(contentDiv);
+  messages.appendChild(div);
+
+  const renderer = smd.default_renderer(contentDiv);
+  const parser = smd.parser(renderer);
+  return { contentDiv, parser };
 }
 
 function appendToolCall(name, args) {
@@ -22,7 +51,15 @@ function appendToolCall(name, args) {
   pre.textContent = JSON.stringify(args, null, 2);
   details.appendChild(pre);
   messages.appendChild(details);
-  messages.scrollTop = messages.scrollHeight;
+  scrollToBottom();
+}
+
+function prettyPrintJson(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 function appendToolResult(name, output) {
@@ -33,10 +70,10 @@ function appendToolResult(name, output) {
   summary.textContent = "Result: " + name;
   details.appendChild(summary);
   const pre = document.createElement("pre");
-  pre.textContent = output;
+  pre.textContent = prettyPrintJson(output);
   details.appendChild(pre);
   messages.appendChild(details);
-  messages.scrollTop = messages.scrollHeight;
+  scrollToBottom();
 }
 
 async function sendMessage(conversationId, message) {
@@ -49,9 +86,7 @@ async function sendMessage(conversationId, message) {
   appendMessage("user", message);
   input.value = "";
 
-  // Create assistant message placeholder
-  let assistantContent = null;
-  let currentText = "";
+  let currentAssistant = null;
 
   try {
     const response = await fetch("/-/agent/" + conversationId + "/stream", {
@@ -80,21 +115,29 @@ async function sendMessage(conversationId, message) {
           const data = JSON.parse(line.slice(6));
 
           if (eventType === "text_chunk") {
-            if (!assistantContent) {
-              assistantContent = appendMessage("assistant", "");
-              currentText = "";
+            if (!currentAssistant) {
+              currentAssistant = startAssistantMessage();
             }
-            currentText += data.content;
-            assistantContent.textContent = currentText;
-            document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+            smd.parser_write(currentAssistant.parser, data.content);
+            scrollToBottom();
           } else if (eventType === "tool_call") {
-            // Reset assistant content for text after tool calls
-            assistantContent = null;
-            currentText = "";
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
             appendToolCall(data.name, data.arguments);
           } else if (eventType === "tool_result") {
             appendToolResult(data.name, data.output);
+          } else if (eventType === "done") {
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
           } else if (eventType === "error") {
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
             appendMessage("assistant", "Error: " + data.message);
           }
 
@@ -102,7 +145,15 @@ async function sendMessage(conversationId, message) {
         }
       }
     }
+
+    // Ensure parser is ended if stream closes without done event
+    if (currentAssistant) {
+      smd.parser_end(currentAssistant.parser);
+    }
   } catch (err) {
+    if (currentAssistant) {
+      smd.parser_end(currentAssistant.parser);
+    }
     appendMessage("assistant", "Connection error: " + err.message);
   } finally {
     sendBtn.disabled = false;
@@ -110,6 +161,20 @@ async function sendMessage(conversationId, message) {
     input.focus();
   }
 }
+
+// Make sendMessage available globally for the inline script
+window.sendMessage = sendMessage;
+
+// Render existing assistant messages as markdown on page load
+document.querySelectorAll(".agent-message-assistant .agent-message-content").forEach(el => {
+  const raw = el.textContent;
+  if (!raw) return;
+  el.textContent = "";
+  const renderer = smd.default_renderer(el);
+  const parser = smd.parser(renderer);
+  smd.parser_write(parser, raw);
+  smd.parser_end(parser);
+});
 
 // Wire up form
 document.getElementById("chat-form").addEventListener("submit", (e) => {

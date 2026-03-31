@@ -42,6 +42,19 @@ def register_llm_purposes(datasette):
 
 
 @hookimpl
+def prepare_jinja2_environment(env, datasette):
+    import json
+
+    def pretty_json(value):
+        try:
+            return json.dumps(json.loads(value), indent=2)
+        except (json.JSONDecodeError, TypeError):
+            return value
+
+    env.filters["pretty_json"] = pretty_json
+
+
+@hookimpl
 def register_agent_tools(datasette):
     from .sql_tools import get_default_tools
 

@@ -29,3 +29,7 @@ To run the tests:
 ```bash
 uv run pytest
 ```
+
+## Credits
+
+This plugin includes [streaming-markdown](https://github.com/thetarnav/streaming-markdown) by Damian Tarnawski, MIT licensed.

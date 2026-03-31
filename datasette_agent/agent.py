@@ -13,7 +13,12 @@ async def _build_system_prompt(datasette, actor):
         "You have access to tools that let you explore and query databases. "
         "Use the tools to answer questions about the data. "
         "Always start by listing databases and tables, then describe relevant tables "
-        "before writing queries."
+        "before writing queries.\n\n"
+        "Your output will be rendered as markdown. "
+        "Escape underscores in identifiers like column names and table names "
+        "with a backslash (e.g. table\\_name, row\\_count) to prevent "
+        "them from being interpreted as italic markers. "
+        "This is not necessary inside backtick code spans like `table_name`."
     ]
     # Include available databases in system prompt
     db_info = {}

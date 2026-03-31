@@ -48,8 +48,92 @@
 }
 
 .agent-message-content {
-  white-space: pre-wrap;
   word-wrap: break-word;
+  overflow-wrap: break-word;
+  overflow-x: auto;
+}
+
+.agent-message-user .agent-message-content {
+  white-space: pre-wrap;
+}
+
+/* Markdown content styling for assistant messages */
+.agent-message-assistant .agent-message-content p {
+  margin: 0.4em 0;
+}
+
+.agent-message-assistant .agent-message-content p:first-child {
+  margin-top: 0;
+}
+
+.agent-message-assistant .agent-message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.agent-message-assistant .agent-message-content pre {
+  background: #e0e0e0;
+  border-radius: 4px;
+  padding: 0.5rem;
+  overflow-x: auto;
+  margin: 0.4em 0;
+}
+
+.agent-message-assistant .agent-message-content code {
+  background: #e0e0e0;
+  border-radius: 2px;
+  padding: 0.1em 0.3em;
+  font-size: 0.9em;
+}
+
+.agent-message-assistant .agent-message-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.agent-message-assistant .agent-message-content table {
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.agent-message-assistant .agent-message-content th,
+.agent-message-assistant .agent-message-content td {
+  border: 1px solid #ccc;
+  padding: 0.3em 0.6em;
+}
+
+.agent-message-assistant .agent-message-content th {
+  background: #e0e0e0;
+}
+
+.agent-message-assistant .agent-message-content ul,
+.agent-message-assistant .agent-message-content ol {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+
+.agent-message-assistant .agent-message-content blockquote {
+  border-left: 3px solid #ccc;
+  margin: 0.4em 0;
+  padding-left: 0.75em;
+  color: #666;
+}
+
+.agent-message-assistant .agent-message-content h1,
+.agent-message-assistant .agent-message-content h2,
+.agent-message-assistant .agent-message-content h3 {
+  margin: 0.5em 0 0.3em;
+}
+
+.agent-message-assistant .agent-message-content h1:first-child,
+.agent-message-assistant .agent-message-content h2:first-child,
+.agent-message-assistant .agent-message-content h3:first-child {
+  margin-top: 0;
+}
+
+.agent-message-assistant .agent-message-content hr {
+  border: none;
+  border-top: 1px solid #ccc;
+  margin: 0.5em 0;
 }
 
 .agent-tool-call,
