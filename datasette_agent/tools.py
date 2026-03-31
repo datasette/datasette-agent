@@ -1,0 +1,42 @@
+from dataclasses import dataclass
+from typing import Callable
+
+import llm as llm_library
+from datasette.utils import await_me_maybe
+from datasette.plugins import pm
+
+
+@dataclass
+class AgentTool:
+    name: str
+    description: str
+    input_schema: dict
+    fn: Callable  # async fn(datasette, actor, **tool_params) -> str
+
+
+async def get_agent_tools(datasette):
+    tools = []
+    for result in pm.hook.register_agent_tools(datasette=datasette):
+        result = await await_me_maybe(result)
+        if result:
+            tools.extend(result)
+    return tools
+
+
+def make_llm_tools(agent_tools, datasette, actor):
+    """Convert AgentTool instances to llm.Tool instances with context bound."""
+    llm_tools = []
+    for agent_tool in agent_tools:
+
+        async def _impl(_agent_tool=agent_tool, **kwargs):
+            return await _agent_tool.fn(datasette=datasette, actor=actor, **kwargs)
+
+        llm_tools.append(
+            llm_library.Tool(
+                name=agent_tool.name,
+                description=agent_tool.description,
+                input_schema=agent_tool.input_schema,
+                implementation=_impl,
+            )
+        )
+    return llm_tools

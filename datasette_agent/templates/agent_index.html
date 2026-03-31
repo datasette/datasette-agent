@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Agent{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+{% endblock %}
+
+{% block content %}
+<h1>Agent</h1>
+
+<form id="new-chat-form">
+  <div class="agent-new-chat">
+    <textarea id="new-message" placeholder="Ask a question about your data..." rows="3"></textarea>
+    <button type="submit">Start chat</button>
+  </div>
+</form>
+
+{% if conversations %}
+<h2>Previous conversations</h2>
+<ul class="agent-conversations">
+  {% for conv in conversations %}
+  <li>
+    <a href="/-/agent/{{ conv.id }}">{{ conv.title or "Untitled conversation" }}</a>
+    <span class="agent-timestamp">{{ conv.updated_at }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<script>
+document.getElementById("new-chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const message = document.getElementById("new-message").value.trim();
+  if (!message) return;
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  btn.textContent = "Starting...";
+  try {
+    const resp = await fetch("/-/agent/api/conversations", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message}),
+    });
+    const data = await resp.json();
+    // Store the initial message to send after redirect
+    sessionStorage.setItem("agent_pending_message", message);
+    window.location.href = "/-/agent/" + data.conversation_id;
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Start chat";
+    alert("Error: " + err.message);
+  }
+});
+</script>
+{% endblock %}

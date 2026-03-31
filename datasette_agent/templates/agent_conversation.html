@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Agent - {{ conversation.title or "Chat" }}{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+{% endblock %}
+
+{% block content %}
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}">
+  <div class="agent-header">
+    <a href="/-/agent">&larr; Back</a>
+    <h1>{{ conversation.title or "Chat" }}</h1>
+  </div>
+
+  <div class="agent-messages" id="messages">
+    {% for msg in messages %}
+      {% if msg.role == "user" %}
+      <div class="agent-message agent-message-user">
+        <div class="agent-message-content">{{ msg.content }}</div>
+      </div>
+      {% elif msg.role == "assistant" %}
+      <div class="agent-message agent-message-assistant">
+        <div class="agent-message-content">{{ msg.content }}</div>
+      </div>
+      {% elif msg.role == "tool_call" %}
+      <details class="agent-tool-call">
+        <summary>Tool: {{ msg.tool_name }}</summary>
+        <pre>{{ msg.tool_arguments }}</pre>
+      </details>
+      {% elif msg.role == "tool_result" %}
+      <details class="agent-tool-result">
+        <summary>Result: {{ msg.tool_name }}</summary>
+        <pre>{{ msg.tool_output }}</pre>
+      </details>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  <form id="chat-form" class="agent-input">
+    <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
+    <button type="submit" id="send-btn">Send</button>
+  </form>
+</div>
+
+<script src="/-/static-plugins/datasette-agent/agent.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
+  const pending = sessionStorage.getItem("agent_pending_message");
+  if (pending) {
+    sessionStorage.removeItem("agent_pending_message");
+    sendMessage(conversationId, pending);
+  }
+});
+</script>
+{% endblock %}
