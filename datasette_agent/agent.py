@@ -62,7 +62,15 @@ async def _build_conversation_history(db, conversation_id):
     return "\n".join(parts)
 
 
-async def _save_message(db, conversation_id, role, content=None, tool_name=None, tool_arguments=None, tool_output=None):
+async def _save_message(
+    db,
+    conversation_id,
+    role,
+    content=None,
+    tool_name=None,
+    tool_arguments=None,
+    tool_output=None,
+):
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
         "INSERT INTO datasette_agent_messages "
@@ -110,22 +118,34 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
 
     # Tool call/result callback for SSE streaming
     async def after_call(tool, tool_call, tool_result):
-        await _send_sse(writer, "tool_call", {
-            "name": tool_call.name,
-            "arguments": tool_call.arguments,
-        })
+        await _send_sse(
+            writer,
+            "tool_call",
+            {
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+            },
+        )
         await _save_message(
-            db, conversation_id, "tool_call",
+            db,
+            conversation_id,
+            "tool_call",
             tool_name=tool_call.name,
             tool_arguments=json.dumps(tool_call.arguments),
         )
         output = tool_result.output if tool_result.output else ""
-        await _send_sse(writer, "tool_result", {
-            "name": tool_result.name,
-            "output": output,
-        })
+        await _send_sse(
+            writer,
+            "tool_result",
+            {
+                "name": tool_result.name,
+                "output": output,
+            },
+        )
         await _save_message(
-            db, conversation_id, "tool_result",
+            db,
+            conversation_id,
+            "tool_result",
             tool_name=tool_result.name,
             tool_output=output,
         )

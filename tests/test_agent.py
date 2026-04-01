@@ -65,7 +65,9 @@ async def test_conversation_page(datasette_instance):
 
 @pytest.mark.asyncio
 async def test_conversation_not_found(datasette_instance):
-    response = await datasette_instance.client.get("/-/agent/01234567890123456789012345")
+    response = await datasette_instance.client.get(
+        "/-/agent/01234567890123456789012345"
+    )
     assert response.status_code == 404
 
 
