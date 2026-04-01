@@ -43,7 +43,8 @@ function startAssistantMessage() {
 function appendToolCall(name, args) {
   const messages = document.getElementById("messages");
   const details = document.createElement("details");
-  details.className = "agent-tool-call";
+  details.className = "agent-tool-call pending";
+  details.dataset.toolName = name;
   const summary = document.createElement("summary");
   summary.textContent = "Tool: " + name;
   details.appendChild(summary);
@@ -64,6 +65,12 @@ function prettyPrintJson(text) {
 
 function appendToolResult(name, output) {
   const messages = document.getElementById("messages");
+
+  // Remove pending indicator from the matching tool call
+  const pendingCalls = messages.querySelectorAll('.agent-tool-call.pending[data-tool-name="' + name + '"]');
+  if (pendingCalls.length > 0) {
+    pendingCalls[pendingCalls.length - 1].classList.remove("pending");
+  }
 
   // Check for rich HTML content
   let parsed;

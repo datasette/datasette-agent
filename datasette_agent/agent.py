@@ -116,8 +116,8 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         [model.model_id, now, conversation_id],
     )
 
-    # Tool call/result callback for SSE streaming
-    async def after_call(tool, tool_call, tool_result):
+    # Tool call callbacks for SSE streaming
+    async def before_call(tool, tool_call):
         await _send_sse(
             writer,
             "tool_call",
@@ -133,6 +133,8 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             tool_name=tool_call.name,
             tool_arguments=json.dumps(tool_call.arguments),
         )
+
+    async def after_call(tool, tool_call, tool_result):
         output = tool_result.output if tool_result.output else ""
         await _send_sse(
             writer,
@@ -169,6 +171,7 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             system=system_prompt,
             tools=llm_tools,
             stream=True,
+            before_call=before_call,
             after_call=after_call,
         )
 

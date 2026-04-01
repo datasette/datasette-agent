@@ -152,6 +152,23 @@
   color: #666;
 }
 
+.agent-tool-call.pending summary::after {
+  content: "";
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  margin-left: 0.5em;
+  border-radius: 50%;
+  background: #999;
+  animation: pulse 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
 .agent-tool-call pre,
 .agent-tool-result pre {
   margin: 0.5rem 0 0;
