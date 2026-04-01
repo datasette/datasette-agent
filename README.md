@@ -43,6 +43,83 @@ async def _render_widget(datasette, actor, database, sql):
 
 The `_html` value is inserted into the chat as raw HTML, so it can include custom elements, scripts, and styles. The remaining keys (`summary` in this example) are what the LLM receives as the tool result to inform its next response.
 
+## Registering additional tools from plugins
+
+Other Datasette plugins can register additional tools for the agent using the `register_agent_tools` plugin hook.
+
+### Defining a tool
+
+Create a Datasette plugin that implements the `register_agent_tools` hook, returning a list of `AgentTool` instances:
+
+```python
+from datasette import hookimpl
+from datasette_agent.tools import AgentTool
+
+
+@hookimpl
+def register_agent_tools(datasette):
+    return [
+        AgentTool(
+            name="my_tool",
+            description="Description of what this tool does, used by the LLM to decide when to call it.",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The query to run",
+                    },
+                    "style": {
+                        "type": "string",
+                        "enum": ["brief", "detailed"],
+                        "description": "Output style",
+                    },
+                },
+                "required": ["query"],
+            },
+            fn=my_tool_handler,
+        ),
+    ]
+```
+
+### Tool handler function
+
+Each tool's `fn` must be an async function that accepts `datasette` and `actor` as keyword arguments, plus any parameters defined in `input_schema`. It must return a JSON string:
+
+```python
+import json
+
+
+async def my_tool_handler(datasette, actor, query, style=None):
+    # Do work here...
+    return json.dumps({
+        "result": "Tool output that the LLM will see",
+    })
+```
+
+To render rich HTML inline in the chat UI, include an `_html` key in the returned JSON. The HTML will be displayed to the user, while the remaining keys are passed to the LLM as the tool result (the `_html` key is stripped before the LLM sees it):
+
+```python
+return json.dumps({
+    "_html": '<div class="my-widget">Rich content here</div>',
+    "summary": "Widget rendered successfully",
+})
+```
+
+### Entry point
+
+Register the plugin via `pyproject.toml`:
+
+```toml
+[project.entry-points.datasette]
+my_plugin = "datasette_my_plugin"
+```
+
+### Example plugins
+
+- [datasette-agent-charts](https://github.com/datasette/datasette-agent-charts) - renders charts from SQL query results using Observable Plot
+- [datasette-agent-openai-imagegen](https://github.com/datasette/datasette-agent-openai-imagegen) - generates images using OpenAI's image generation API
+
 ## Development
 
 To set up this plugin locally, first checkout the code. You can confirm it is available like this:
