@@ -22,10 +22,6 @@ dev = [
     "llm-echo>=0.3",
 ]
 
-[tool.uv.sources]
-datasette-llm = { path = "/Users/simon/dev/scratch/datasette-llm", editable = true }
-llm-echo = { path = "/Users/simon/dev/scratch/llm-echo", editable = true }
-
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
@@ -49,4 +45,3 @@ include = ["datasette_agent*"]
 
 [tool.setuptools.package-data]
 datasette_agent = ["static/*", "templates/*"]
-

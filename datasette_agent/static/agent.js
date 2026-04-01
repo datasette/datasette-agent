@@ -64,6 +64,26 @@ function prettyPrintJson(text) {
 
 function appendToolResult(name, output) {
   const messages = document.getElementById("messages");
+
+  // Check for rich HTML content
+  let parsed;
+  try { parsed = JSON.parse(output); } catch {}
+  if (parsed && parsed._html) {
+    const container = document.createElement("div");
+    container.className = "agent-rich-result";
+    container.innerHTML = parsed._html;
+    // Re-create script elements so they execute (innerHTML doesn't run scripts)
+    container.querySelectorAll("script").forEach(oldScript => {
+      const newScript = document.createElement("script");
+      for (const attr of oldScript.attributes) {
+        newScript.setAttribute(attr.name, attr.value);
+      }
+      newScript.textContent = oldScript.textContent;
+      oldScript.replaceWith(newScript);
+    });
+    messages.appendChild(container);
+  }
+
   const details = document.createElement("details");
   details.className = "agent-tool-result";
   const summary = document.createElement("summary");

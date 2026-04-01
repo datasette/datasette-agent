@@ -29,6 +29,10 @@
         <pre>{{ msg.tool_arguments }}</pre>
       </details>
       {% elif msg.role == "tool_result" %}
+      {% set html_content = msg.tool_output | extract_html %}
+      {% if html_content %}
+      <div class="agent-rich-result">{{ html_content | safe }}</div>
+      {% endif %}
       <details class="agent-tool-result">
         <summary>Result: {{ msg.tool_name }}</summary>
         <pre>{{ msg.tool_output | pretty_json }}</pre>

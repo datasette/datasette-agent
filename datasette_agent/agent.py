@@ -149,6 +149,18 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             tool_name=tool_result.name,
             tool_output=output,
         )
+        # Strip keys the LLM shouldn't see (e.g. _html, sql) so it
+        # doesn't parrot back raw HTML or talk about the SQL query
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict):
+                stripped = {
+                    k: v for k, v in parsed.items() if k not in ("_html", "sql")
+                }
+                if stripped != parsed:
+                    tool_result.output = json.dumps(stripped)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     try:
         # Run the chain

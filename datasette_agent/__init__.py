@@ -53,6 +53,17 @@ def prepare_jinja2_environment(env, datasette):
 
     env.filters["pretty_json"] = pretty_json
 
+    def extract_html(value):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed.get("_html", "")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return ""
+
+    env.filters["extract_html"] = extract_html
+
 
 @hookimpl
 def register_agent_tools(datasette):
