@@ -14,31 +14,51 @@
   </div>
 
   <div class="agent-messages" id="messages">
+    {% set in_tool_group = namespace(value=false) %}
     {% for msg in messages %}
-      {% if msg.role == "user" %}
-      <div class="agent-message agent-message-user">
-        <div class="agent-message-content">{{ msg.content }}</div>
-      </div>
-      {% elif msg.role == "assistant" %}
-      <div class="agent-message agent-message-assistant">
-        <div class="agent-message-content">{{ msg.content }}</div>
-      </div>
-      {% elif msg.role == "tool_call" %}
-      <details class="agent-tool-call">
-        <summary>Tool: {{ msg.tool_name }}</summary>
-        <pre>{{ msg.tool_arguments }}</pre>
-      </details>
-      {% elif msg.role == "tool_result" %}
-      {% set html_content = msg.tool_output | extract_html %}
-      {% if html_content %}
-      <div class="agent-rich-result">{{ html_content | safe }}</div>
-      {% endif %}
-      <details class="agent-tool-result">
-        <summary>Result: {{ msg.tool_name }}</summary>
-        <pre>{{ msg.tool_output | pretty_json }}</pre>
-      </details>
+      {% if msg.role in ("tool_call", "tool_result") %}
+        {% if not in_tool_group.value %}
+        <div class="agent-tool-group">
+          {% set in_tool_group.value = true %}
+        {% endif %}
+        {% if msg.role == "tool_call" %}
+        <details class="agent-tool-call">
+          <summary>Tool: {{ msg.tool_name }}</summary>
+          <pre>{{ msg.tool_arguments }}</pre>
+        </details>
+        {% elif msg.role == "tool_result" %}
+        {% set html_content = msg.tool_output | extract_html %}
+        {% if html_content %}
+        </div>
+        {% set in_tool_group.value = false %}
+        <div class="agent-rich-result">{{ html_content | safe }}</div>
+        <div class="agent-tool-group">
+        {% set in_tool_group.value = true %}
+        {% endif %}
+        <details class="agent-tool-result">
+          <summary>Result: {{ msg.tool_name }}</summary>
+          <pre>{{ msg.tool_output | pretty_json }}</pre>
+        </details>
+        {% endif %}
+      {% else %}
+        {% if in_tool_group.value %}
+        </div>
+        {% set in_tool_group.value = false %}
+        {% endif %}
+        {% if msg.role == "user" %}
+        <div class="agent-message agent-message-user">
+          <div class="agent-message-content">{{ msg.content }}</div>
+        </div>
+        {% elif msg.role == "assistant" %}
+        <div class="agent-message agent-message-assistant">
+          <div class="agent-message-content">{{ msg.content }}</div>
+        </div>
+        {% endif %}
       {% endif %}
     {% endfor %}
+    {% if in_tool_group.value %}
+    </div>
+    {% endif %}
   </div>
 
   <form id="chat-form" class="agent-input">

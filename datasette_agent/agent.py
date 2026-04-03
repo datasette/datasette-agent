@@ -56,6 +56,19 @@ async def _build_conversation_history(db, conversation_id):
             parts.append(f"\n[Tool call: {msg['tool_name']}({msg['tool_arguments']})]")
         elif role == "tool_result":
             output = msg["tool_output"] or ""
+            # Strip keys the LLM shouldn't see (e.g. _html) before truncating
+            try:
+                parsed = json.loads(output)
+                if isinstance(parsed, dict):
+                    stripped = {
+                        k: v
+                        for k, v in parsed.items()
+                        if k not in ("_html", "sql")
+                    }
+                    if stripped != parsed:
+                        output = json.dumps(stripped)
+            except (json.JSONDecodeError, TypeError):
+                pass
             if len(output) > 500:
                 output = output[:500] + "..."
             parts.append(f"\n[Tool result: {output}]")

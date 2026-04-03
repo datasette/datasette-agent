@@ -136,10 +136,20 @@
   margin: 0.5em 0;
 }
 
+.agent-rich-result iframe {
+  max-height: 800px;
+}
+
+.agent-tool-group {
+  align-self: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-width: 85%;
+}
+
 .agent-tool-call,
 .agent-tool-result {
-  align-self: flex-start;
-  max-width: 85%;
   font-size: 0.85rem;
   border: 1px solid #ddd;
   border-radius: 4px;
