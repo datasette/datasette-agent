@@ -1,9 +1,20 @@
 from datasette import hookimpl
+from datasette.permissions import Action
 from datasette.plugins import pm
 
 from . import hookspecs
 
 pm.add_hookspecs(hookspecs)
+
+
+@hookimpl
+def register_actions():
+    return [
+        Action(
+            name="datasette-agent",
+            description="Access the agent chat assistant",
+        ),
+    ]
 
 
 @hookimpl

@@ -15,7 +15,17 @@ def datasette_instance():
                 }
             }
         },
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+            }
+        },
     )
+
+
+@pytest.fixture
+def cookies(datasette_instance):
+    return {"ds_actor": datasette_instance.client.actor_cookie({"id": "user"})}
 
 
 @pytest.mark.asyncio
@@ -28,18 +38,25 @@ async def test_plugin_is_installed():
 
 
 @pytest.mark.asyncio
-async def test_agent_index(datasette_instance):
+async def test_agent_permission_denied(datasette_instance):
     response = await datasette_instance.client.get("/-/agent")
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_agent_index(datasette_instance, cookies):
+    response = await datasette_instance.client.get("/-/agent", cookies=cookies)
     assert response.status_code == 200
     assert "Agent" in response.text
 
 
 @pytest.mark.asyncio
-async def test_create_conversation(datasette_instance):
+async def test_create_conversation(datasette_instance, cookies):
     response = await datasette_instance.client.post(
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     assert response.status_code == 200
     data = response.json()
@@ -48,48 +65,52 @@ async def test_create_conversation(datasette_instance):
 
 
 @pytest.mark.asyncio
-async def test_conversation_page(datasette_instance):
+async def test_conversation_page(datasette_instance, cookies):
     # Create a conversation first
     resp = await datasette_instance.client.post(
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     conversation_id = resp.json()["conversation_id"]
 
     # Load conversation page
-    response = await datasette_instance.client.get(f"/-/agent/{conversation_id}")
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}", cookies=cookies
+    )
     assert response.status_code == 200
     assert "Chat" in response.text
 
 
 @pytest.mark.asyncio
-async def test_conversation_not_found(datasette_instance):
+async def test_conversation_not_found(datasette_instance, cookies):
     response = await datasette_instance.client.get(
-        "/-/agent/01234567890123456789012345"
+        "/-/agent/01234567890123456789012345", cookies=cookies
     )
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_conversation_actor_scoping(datasette_instance):
+async def test_conversation_actor_scoping(datasette_instance, cookies):
     ds = datasette_instance
 
-    # Create conversation as anonymous user
+    # Create conversation as "user"
     resp = await ds.client.post(
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     conversation_id = resp.json()["conversation_id"]
 
-    # Anonymous user can access it
-    response = await ds.client.get(f"/-/agent/{conversation_id}")
+    # Same user can access it
+    response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert response.status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_stream_endpoint(datasette_instance):
+async def test_stream_endpoint(datasette_instance, cookies):
     ds = datasette_instance
 
     # Create conversation
@@ -97,6 +118,7 @@ async def test_stream_endpoint(datasette_instance):
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     conversation_id = resp.json()["conversation_id"]
 
@@ -105,6 +127,7 @@ async def test_stream_endpoint(datasette_instance):
         f"/-/agent/{conversation_id}/stream",
         content=json.dumps({"message": "What databases are available?"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
@@ -118,7 +141,7 @@ async def test_stream_endpoint(datasette_instance):
 
 
 @pytest.mark.asyncio
-async def test_messages_persisted(datasette_instance):
+async def test_messages_persisted(datasette_instance, cookies):
     ds = datasette_instance
 
     # Create conversation
@@ -126,6 +149,7 @@ async def test_messages_persisted(datasette_instance):
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     conversation_id = resp.json()["conversation_id"]
 
@@ -134,6 +158,7 @@ async def test_messages_persisted(datasette_instance):
         f"/-/agent/{conversation_id}/stream",
         content=json.dumps({"message": "Hi there"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
 
     # Check messages were saved
@@ -150,7 +175,7 @@ async def test_messages_persisted(datasette_instance):
 
 
 @pytest.mark.asyncio
-async def test_conversation_title_auto_set(datasette_instance):
+async def test_conversation_title_auto_set(datasette_instance, cookies):
     ds = datasette_instance
 
     # Create conversation
@@ -158,6 +183,7 @@ async def test_conversation_title_auto_set(datasette_instance):
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     conversation_id = resp.json()["conversation_id"]
 
@@ -166,6 +192,7 @@ async def test_conversation_title_auto_set(datasette_instance):
         f"/-/agent/{conversation_id}/stream",
         content=json.dumps({"message": "What tables exist?"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
 
     # Check title was set
@@ -180,7 +207,7 @@ async def test_conversation_title_auto_set(datasette_instance):
 
 
 @pytest.mark.asyncio
-async def test_agent_index_shows_conversations(datasette_instance):
+async def test_agent_index_shows_conversations(datasette_instance, cookies):
     ds = datasette_instance
 
     # Create a conversation and send a message to set title
@@ -188,16 +215,18 @@ async def test_agent_index_shows_conversations(datasette_instance):
         "/-/agent/api/conversations",
         content=json.dumps({"message": "hello"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
     conversation_id = resp.json()["conversation_id"]
     await ds.client.post(
         f"/-/agent/{conversation_id}/stream",
         content=json.dumps({"message": "Test conversation"}),
         headers={"Content-Type": "application/json"},
+        cookies=cookies,
     )
 
     # Check index page
-    response = await ds.client.get("/-/agent")
+    response = await ds.client.get("/-/agent", cookies=cookies)
     assert response.status_code == 200
     assert "Test conversation" in response.text
 

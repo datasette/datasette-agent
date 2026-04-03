@@ -15,7 +15,7 @@ datasette install datasette-agent
 ```
 ## Usage
 
-Visit `/-/agent` to start a conversation with the agent.
+Visit `/-/agent` to start a conversation. Users must have the `datasette-agent` permission (or be `--root`) to interact with the agent.
 
 ## Rendering custom HTML from tools
 

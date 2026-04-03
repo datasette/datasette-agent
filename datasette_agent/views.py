@@ -15,6 +15,7 @@ def _actor_id(request):
 
 
 async def agent_index(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
     await ensure_tables(db)
     actor_id = _actor_id(request)
@@ -43,6 +44,7 @@ async def agent_index(request, datasette):
 
 
 async def api_create_conversation(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
     db = datasette.get_internal_database()
@@ -58,6 +60,7 @@ async def api_create_conversation(request, datasette):
 
 
 async def agent_conversation(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
     await ensure_tables(db)
     conversation_id = request.url_vars["conversation_id"]
@@ -96,6 +99,7 @@ async def agent_conversation(request, datasette):
 
 
 async def agent_stream(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
 
