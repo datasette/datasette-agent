@@ -231,6 +231,10 @@ document.getElementById("chat-form").addEventListener("submit", (e) => {
 document.getElementById("message-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
-    document.getElementById("chat-form").dispatchEvent(new Event("submit"));
+    const input = document.getElementById("message-input");
+    const message = input.value.trim();
+    if (!message) return;
+    const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
+    sendMessage(conversationId, message);
   }
 });
