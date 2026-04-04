@@ -12,6 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "datasette",
     "datasette-llm",
+    "httpx",
     "python-ulid",
 ]
 

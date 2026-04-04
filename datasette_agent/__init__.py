@@ -20,6 +20,7 @@ def register_actions():
 @hookimpl
 def register_routes():
     from . import views
+    from . import realtime_views
 
     return [
         (r"^/-/agent$", views.agent_index),
@@ -32,12 +33,17 @@ def register_routes():
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stream$",
             views.agent_stream,
         ),
+        (r"^/-/agent-realtime$", realtime_views.realtime_page),
+        (r"^/-/agent-realtime/token$", realtime_views.realtime_token),
+        (r"^/-/agent-realtime/tool-call$", realtime_views.realtime_tool_call),
     ]
 
 
 @hookimpl
 def skip_csrf(scope):
-    return scope["path"].startswith("/-/agent/")
+    return scope["path"].startswith("/-/agent/") or scope["path"].startswith(
+        "/-/agent-realtime/"
+    )
 
 
 @hookimpl

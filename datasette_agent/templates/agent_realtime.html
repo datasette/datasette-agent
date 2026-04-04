@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Realtime Agent{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/realtime.css">
+{% endblock %}
+
+{% block content %}
+<div id="realtime-app">
+  <!-- Canvas area: shows tool results, starts with mic icon -->
+  <div id="canvas">
+    <div id="canvas-content">
+      <button id="mic-btn" title="Start voice session">
+        <svg id="mic-icon" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+        <span id="mic-label">Click to start</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar">
+    <span id="status-text">Ready</span>
+    <div id="status-controls">
+      <button id="toggle-transcript" class="panel-toggle" title="Toggle transcript">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button id="toggle-history" class="panel-toggle" title="Toggle history">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Transcript side panel (model text responses) -->
+  <div id="transcript-panel" class="side-panel hidden">
+    <div class="side-panel-header">
+      <h3>Transcript</h3>
+      <button class="close-panel" data-panel="transcript-panel">&times;</button>
+    </div>
+    <div id="transcript-content" class="side-panel-body"></div>
+  </div>
+
+  <!-- History side panel (tool calls log) -->
+  <div id="history-panel" class="side-panel hidden">
+    <div class="side-panel-header">
+      <h3>History</h3>
+      <button class="close-panel" data-panel="history-panel">&times;</button>
+    </div>
+    <div id="history-content" class="side-panel-body"></div>
+  </div>
+</div>
+
+<script type="module" src="/-/static-plugins/datasette-agent/realtime.js"></script>
+{% endblock %}
