@@ -41,9 +41,9 @@ async def _describe_table(datasette, actor, database: str, table: str):
             ],
             "foreign_keys": [
                 {
-                    "column": fk.column,
-                    "other_table": fk.other_table,
-                    "other_column": fk.other_column,
+                    "column": fk["column"],
+                    "other_table": fk["other_table"],
+                    "other_column": fk["other_column"],
                 }
                 for fk in foreign_keys
             ],
