@@ -92,10 +92,10 @@ def register_commands(cli):
     def tools(output_json):
         "List available agent tools"
         from datasette.app import Datasette
-        from .tools import get_agent_tools
+        from .tools import get_agent_tools_by_plugin
 
         ds = Datasette(memory=True)
-        agent_tools = asyncio.run(get_agent_tools(ds))
+        grouped = asyncio.run(get_agent_tools_by_plugin(ds))
 
         if output_json:
             click.echo(
@@ -105,16 +105,20 @@ def register_commands(cli):
                             "name": t.name,
                             "description": t.description,
                             "input_schema": t.input_schema,
+                            "plugin": plugin_name,
                         }
-                        for t in agent_tools
+                        for plugin_name, plugin_tools in grouped.items()
+                        for t in plugin_tools
                     ],
                     indent=2,
                 )
             )
         else:
-            for tool in agent_tools:
-                click.echo(f"{tool.name}")
-                click.echo(f"  {tool.description}")
+            for plugin_name, plugin_tools in grouped.items():
+                click.echo(f"{plugin_name}:")
+                for tool in plugin_tools:
+                    click.echo(f"  {tool.name}")
+                    click.echo(f"    {tool.description}")
                 click.echo()
 
 
