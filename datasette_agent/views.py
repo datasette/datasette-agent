@@ -250,7 +250,10 @@ async def explorer_page(request, datasette):
     if table_name:
         reports = (
             await db.execute(
-                "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message "
+                "SELECT r.*, a.status as agent_status, "
+                "a.final_message as agent_final_message, "
+                "a.error as agent_error, "
+                "a.conversation_id as agent_conversation_id "
                 "FROM datasette_agent_explorer_reports r "
                 "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
                 "WHERE r.database_name = ? AND r.table_name = ? AND r.actor_id = ? "
@@ -261,7 +264,10 @@ async def explorer_page(request, datasette):
     else:
         reports = (
             await db.execute(
-                "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message "
+                "SELECT r.*, a.status as agent_status, "
+                "a.final_message as agent_final_message, "
+                "a.error as agent_error, "
+                "a.conversation_id as agent_conversation_id "
                 "FROM datasette_agent_explorer_reports r "
                 "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
                 "WHERE r.database_name = ? AND r.table_name IS NULL AND r.actor_id = ? "
@@ -320,7 +326,7 @@ async def api_explorer_report(request, datasette):
     row = (
         await db.execute(
             "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
-            "a.error as agent_error "
+            "a.error as agent_error, a.conversation_id as agent_conversation_id "
             "FROM datasette_agent_explorer_reports r "
             "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
             "WHERE r.id = ?",

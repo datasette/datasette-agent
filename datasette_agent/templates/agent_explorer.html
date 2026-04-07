@@ -27,13 +27,21 @@
     Report from {{ report.created_at }}
     {% if report.extra_prompt %}<em> &mdash; {{ report.extra_prompt }}</em>{% endif %}
   </h3>
-  {% if report.agent_id %}
-  <p><a href="/-/agent/{{ report.agent_id }}">View agent conversation</a></p>
+  {% if report.agent_conversation_id %}
+  <p><a href="/-/agent/{{ report.agent_conversation_id }}">View agent conversation</a></p>
+  {% endif %}
+  {% if report.agent_error %}
+  <div class="explorer-report-error">
+    <strong>Error:</strong>
+    <pre>{{ report.agent_error }}</pre>
+  </div>
+  {% elif report.agent_final_message %}
+  <p class="explorer-report-message">{{ report.agent_final_message }}</p>
   {% endif %}
   <div class="explorer-report-content">
     {% if report.content %}
     <pre class="explorer-markdown">{{ report.content }}</pre>
-    {% else %}
+    {% elif not report.agent_error %}
     <p><em>No findings recorded yet.</em></p>
     {% endif %}
   </div>

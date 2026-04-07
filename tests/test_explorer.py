@@ -254,6 +254,50 @@ async def test_explorer_page_requires_permission(datasette_instance):
     assert response.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_explorer_page_shows_background_agent_error(datasette_instance, cookies):
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+    agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+    report_id = "01ARZ3NDEKTSV4RRFFQ69G5FAX"
+    error = "No model_id provided and no default_model configured."
+
+    await db.execute_write(
+        "INSERT INTO datasette_agent_conversations "
+        "(id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Background: test", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, error, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, "user", "Explore test_db", "error", error, now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_explorer_reports "
+        "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, '', ?, ?)",
+        [report_id, agent_id, "user", "test_db", now, now],
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+
+    assert response.status_code == 200
+    assert error in response.text
+    assert f"/-/agent/{conversation_id}" in response.text
+    assert f"/-/agent/{agent_id}" not in response.text
+    assert "No findings recorded yet" not in response.text
+
+
 # --- API endpoint tests ---
 
 
