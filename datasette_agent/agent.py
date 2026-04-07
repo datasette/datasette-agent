@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from datasette_llm import LLM
 
+from .context import current_conversation_id
 from .schema import ensure_tables
 from .tools import get_agent_tools, make_llm_tools
 
@@ -104,6 +105,27 @@ async def _send_sse(writer, event, data):
 async def run_agent(datasette, actor, conversation_id, user_message, writer):
     db = datasette.get_internal_database()
     await ensure_tables(db)
+
+    # Set context var so tools can access conversation_id
+    current_conversation_id.set(conversation_id)
+
+    # Check for pending notifications and prepend to user message
+    notifications = (
+        await db.execute(
+            "SELECT id, content FROM datasette_agent_pending_notifications "
+            "WHERE conversation_id = ? ORDER BY id",
+            [conversation_id],
+        )
+    ).rows
+    if notifications:
+        prefix_parts = [row["content"] for row in notifications]
+        notification_ids = [row["id"] for row in notifications]
+        for nid in notification_ids:
+            await db.execute_write(
+                "DELETE FROM datasette_agent_pending_notifications WHERE id = ?",
+                [nid],
+            )
+        user_message = "\n".join(prefix_parts) + "\n\n" + user_message
 
     # Save user message
     await _save_message(db, conversation_id, "user", content=user_message)

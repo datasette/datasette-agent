@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from datasette.utils.asgi import AsgiStream, Response
 from ulid import ULID
 
-from .schema import ensure_tables
 from .agent import run_agent
+from .schema import ensure_tables
 
 
 def _actor_id(request):
@@ -138,3 +138,85 @@ async def agent_stream(request, datasette):
         headers={"Cache-Control": "no-cache"},
         content_type="text/event-stream",
     )
+
+
+async def agent_background_index(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    actor_id = _actor_id(request)
+
+    if actor_id:
+        agents = (
+            await db.execute(
+                "SELECT * FROM datasette_agent_background_agents "
+                "WHERE actor_id = ? ORDER BY created_at DESC",
+                [actor_id],
+            )
+        ).rows
+    else:
+        agents = (
+            await db.execute(
+                "SELECT * FROM datasette_agent_background_agents "
+                "WHERE actor_id IS NULL ORDER BY created_at DESC",
+            )
+        ).rows
+
+    return Response.html(
+        await datasette.render_template(
+            "agent_background.html",
+            {"agents": [dict(a) for a in agents]},
+            request=request,
+        )
+    )
+
+
+async def api_create_background_agent(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    from .api import get_background_agent_status, start_background_agent
+
+    body = await request.post_body()
+    data = json.loads(body)
+    goal = data.get("goal", "")
+    if not goal:
+        return Response.json({"error": "goal is required"}, status=400)
+
+    actor = request.actor
+    agent_id = await start_background_agent(
+        datasette=datasette,
+        actor=actor,
+        goal=goal,
+    )
+    status = await get_background_agent_status(datasette, agent_id)
+    return Response.json(
+        {
+            "agent_id": agent_id,
+            "conversation_id": status["conversation_id"],
+            "status": status["status"],
+        }
+    )
+
+
+async def api_background_agent_status(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    agent_id = request.url_vars["agent_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT * FROM datasette_agent_background_agents WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    return Response.json(dict(row))

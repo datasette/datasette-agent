@@ -24,6 +24,12 @@ def register_routes():
     return [
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
+        (r"^/-/agent/background$", views.agent_background_index),
+        (r"^/-/agent/api/background$", views.api_create_background_agent),
+        (
+            r"^/-/agent/api/background/(?P<agent_id>[A-Za-z0-9]{26})$",
+            views.api_background_agent_status,
+        ),
         (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})$",
             views.agent_conversation,
@@ -78,6 +84,7 @@ def prepare_jinja2_environment(env, datasette):
 
 @hookimpl
 def register_agent_tools(datasette):
+    from .background_tools import get_background_tools
     from .sql_tools import get_default_tools
 
-    return get_default_tools()
+    return get_default_tools() + get_background_tools()
