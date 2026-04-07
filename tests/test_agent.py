@@ -242,6 +242,50 @@ async def test_default_tools_registered(datasette_instance):
     assert "sql_query" in tool_names
 
 
+def test_agent_tools_command():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools"])
+    assert result.exit_code == 0
+    # Should list the default tools with descriptions
+    assert "list_databases_and_tables" in result.output
+    assert "describe_table" in result.output
+    assert "sql_query" in result.output
+
+
+def test_agent_tools_command_descriptions():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools"])
+    assert result.exit_code == 0
+    # Should include tool descriptions
+    assert "Execute a read-only SQL query" in result.output
+
+
+def test_agent_tools_command_json():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    tool_names = {t["name"] for t in data}
+    assert "list_databases_and_tables" in tool_names
+    assert "describe_table" in tool_names
+    assert "sql_query" in tool_names
+    # Each tool should have name, description, input_schema
+    for tool in data:
+        assert "name" in tool
+        assert "description" in tool
+        assert "input_schema" in tool
+
+
 def _parse_sse(text):
     """Parse SSE text into a list of {event, data} dicts."""
     events = []

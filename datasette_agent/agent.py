@@ -61,9 +61,7 @@ async def _build_conversation_history(db, conversation_id):
                 parsed = json.loads(output)
                 if isinstance(parsed, dict):
                     stripped = {
-                        k: v
-                        for k, v in parsed.items()
-                        if k not in ("_html", "sql")
+                        k: v for k, v in parsed.items() if k not in ("_html", "sql")
                     }
                     if stripped != parsed:
                         output = json.dumps(stripped)
