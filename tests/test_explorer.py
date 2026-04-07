@@ -483,3 +483,60 @@ async def test_explorer_listing_links_to_report_page(datasette_instance, cookies
     assert f"/-/agent/explore/report/{report_id}" in response.text
     # Should NOT contain the raw markdown content inline
     assert "## Some content" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_database_explorer_includes_table_reports(datasette_instance, cookies):
+    """The database-level explorer page should include reports for specific tables too."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Create a database-level report
+    db_conv_id = "01ARZ3NDEKTSV4RRFFQ69G5FC1"
+    db_agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FC2"
+    db_report_id = "01ARZ3NDEKTSV4RRFFQ69G5FC3"
+    await db.execute_write(
+        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        [db_conv_id, "user", "Background: db explore", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [db_agent_id, db_conv_id, "user", "Explore test_db", "completed", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+        [db_report_id, db_agent_id, "user", "test_db", "DB findings", now, now],
+    )
+
+    # Create a table-level report
+    tbl_conv_id = "01ARZ3NDEKTSV4RRFFQ69G5FC4"
+    tbl_agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FC5"
+    tbl_report_id = "01ARZ3NDEKTSV4RRFFQ69G5FC6"
+    await db.execute_write(
+        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        [tbl_conv_id, "user", "Background: table explore", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [tbl_agent_id, tbl_conv_id, "user", "Explore users table", "completed", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [tbl_report_id, tbl_agent_id, "user", "test_db", "users", "Table findings", now, now],
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # Both reports should appear
+    assert f"/-/agent/explore/report/{db_report_id}" in response.text
+    assert f"/-/agent/explore/report/{tbl_report_id}" in response.text
+    # Table-scoped report should show table name
+    assert "users" in response.text

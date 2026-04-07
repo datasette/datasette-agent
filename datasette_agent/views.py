@@ -262,6 +262,8 @@ async def explorer_page(request, datasette):
             )
         ).rows
     else:
+        # Database-level page: show all reports for this database
+        # (both database-wide and table-specific)
         reports = (
             await db.execute(
                 "SELECT r.*, a.status as agent_status, "
@@ -270,7 +272,7 @@ async def explorer_page(request, datasette):
                 "a.conversation_id as agent_conversation_id "
                 "FROM datasette_agent_explorer_reports r "
                 "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
-                "WHERE r.database_name = ? AND r.table_name IS NULL AND r.actor_id = ? "
+                "WHERE r.database_name = ? AND r.actor_id = ? "
                 "ORDER BY r.created_at DESC",
                 [database_name, actor_id],
             )
