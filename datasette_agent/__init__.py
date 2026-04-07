@@ -77,6 +77,48 @@ def prepare_jinja2_environment(env, datasette):
 
 
 @hookimpl
+def register_commands(cli):
+    import asyncio
+    import click
+    import json
+
+    @cli.group()
+    def agent():
+        "Commands for the datasette-agent plugin"
+        pass
+
+    @agent.command()
+    @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+    def tools(output_json):
+        "List available agent tools"
+        from datasette.app import Datasette
+        from .tools import get_agent_tools
+
+        ds = Datasette(memory=True)
+        agent_tools = asyncio.run(get_agent_tools(ds))
+
+        if output_json:
+            click.echo(
+                json.dumps(
+                    [
+                        {
+                            "name": t.name,
+                            "description": t.description,
+                            "input_schema": t.input_schema,
+                        }
+                        for t in agent_tools
+                    ],
+                    indent=2,
+                )
+            )
+        else:
+            for tool in agent_tools:
+                click.echo(f"{tool.name}")
+                click.echo(f"  {tool.description}")
+                click.echo()
+
+
+@hookimpl
 def register_agent_tools(datasette):
     from .sql_tools import get_default_tools
 
