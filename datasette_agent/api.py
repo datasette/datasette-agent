@@ -40,7 +40,15 @@ async def start_background_agent(
         "INSERT INTO datasette_agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, spawned_by_conversation_id, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
-        [agent_id, conversation_id, actor_id, goal, spawned_by_conversation_id, now, now],
+        [
+            agent_id,
+            conversation_id,
+            actor_id,
+            goal,
+            spawned_by_conversation_id,
+            now,
+            now,
+        ],
     )
 
     # Resolve tools if not provided

@@ -89,7 +89,9 @@ def _build_explorer_goal(database_name, table_name=None, extra_prompt=None):
     return goal
 
 
-async def start_explorer(datasette, actor, database_name, table_name=None, extra_prompt=None):
+async def start_explorer(
+    datasette, actor, database_name, table_name=None, extra_prompt=None
+):
     """Start an explorer agent. Returns (report_id, agent_id)."""
     db = datasette.get_internal_database()
     await ensure_tables(db)

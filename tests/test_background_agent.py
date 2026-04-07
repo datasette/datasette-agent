@@ -6,7 +6,6 @@ import pytest
 
 from datasette_agent.schema import ensure_tables
 
-
 # The echo model treats JSON prompts with "tool_calls" specially - it will
 # invoke those tools. We use this to make the background agent call mark_finished.
 GOAL_THAT_FINISHES = json.dumps(

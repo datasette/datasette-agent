@@ -6,7 +6,6 @@ import pytest
 
 from datasette_agent.schema import ensure_tables
 
-
 # Echo model JSON that makes the agent call append_to_report then mark_finished.
 # The echo model processes tool_calls from JSON prompts sequentially.
 EXPLORER_GOAL_THAT_FINISHES = json.dumps(
@@ -54,7 +53,9 @@ def cookies(datasette_instance):
 async def _setup_test_db(datasette_instance):
     """Create a test database with some data."""
     db = datasette_instance.add_memory_database("test_db")
-    await db.execute_write("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+    await db.execute_write(
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"
+    )
     await db.execute_write("INSERT OR IGNORE INTO users VALUES (1, 'Alice', 30)")
     await db.execute_write("INSERT OR IGNORE INTO users VALUES (2, 'Bob', 25)")
     return db
@@ -277,7 +278,16 @@ async def test_explorer_page_shows_background_agent_error(datasette_instance, co
         "INSERT INTO datasette_agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, error, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [agent_id, conversation_id, "user", "Explore test_db", "error", error, now, now],
+        [
+            agent_id,
+            conversation_id,
+            "user",
+            "Explore test_db",
+            "error",
+            error,
+            now,
+            now,
+        ],
     )
     await db.execute_write(
         "INSERT INTO datasette_agent_explorer_reports "

@@ -124,9 +124,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     f"Keep going. Reminder: your goal is: {goal}. "
                     "You must call mark_finished() when done."
                 )
-                await _save_message(
-                    db, conversation_id, "user", content=keep_going_msg
-                )
+                await _save_message(db, conversation_id, "user", content=keep_going_msg)
                 prompt_text = keep_going_msg
 
             # Tool callbacks - DB only, no SSE
@@ -153,9 +151,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     parsed = json.loads(output)
                     if isinstance(parsed, dict):
                         stripped = {
-                            k: v
-                            for k, v in parsed.items()
-                            if k not in ("_html", "sql")
+                            k: v for k, v in parsed.items() if k not in ("_html", "sql")
                         }
                         if stripped != parsed:
                             tool_result.output = json.dumps(stripped)
