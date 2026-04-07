@@ -533,11 +533,28 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
     )
     await db.execute_write(
         "INSERT INTO datasette_agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [tbl_agent_id, tbl_conv_id, "user", "Explore users table", "completed", now, now],
+        [
+            tbl_agent_id,
+            tbl_conv_id,
+            "user",
+            "Explore users table",
+            "completed",
+            now,
+            now,
+        ],
     )
     await db.execute_write(
         "INSERT INTO datasette_agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [tbl_report_id, tbl_agent_id, "user", "test_db", "users", "Table findings", now, now],
+        [
+            tbl_report_id,
+            tbl_agent_id,
+            "user",
+            "test_db",
+            "users",
+            "Table findings",
+            now,
+            now,
+        ],
     )
 
     response = await datasette_instance.client.get(
