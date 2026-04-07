@@ -38,6 +38,18 @@ CREATE TABLE IF NOT EXISTS datasette_agent_pending_notifications (
     content TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS datasette_agent_explorer_reports (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT REFERENCES datasette_agent_background_agents(id),
+    actor_id TEXT,
+    database_name TEXT NOT NULL,
+    table_name TEXT,
+    extra_prompt TEXT,
+    content TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 
+from datasette.utils import tilde_decode
 from datasette.utils.asgi import AsgiStream, Response
 from ulid import ULID
 
@@ -212,6 +213,118 @@ async def api_background_agent_status(request, datasette):
         await db.execute(
             "SELECT * FROM datasette_agent_background_agents WHERE id = ?",
             [agent_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    return Response.json(dict(row))
+
+
+async def explorer_page(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    database_name = tilde_decode(request.url_vars["database"])
+    table_name = request.url_vars.get("table")
+    if table_name:
+        table_name = tilde_decode(table_name)
+    actor_id = _actor_id(request)
+
+    # Verify the database exists
+    try:
+        target_db = datasette.get_database(database_name)
+    except KeyError:
+        return Response.html("Database not found", status=404)
+
+    # Verify the table exists if specified
+    if table_name:
+        tables = await target_db.table_names()
+        if table_name not in tables:
+            return Response.html("Table not found", status=404)
+
+    # Fetch reports for this database/table
+    if table_name:
+        reports = (
+            await db.execute(
+                "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message "
+                "FROM datasette_agent_explorer_reports r "
+                "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+                "WHERE r.database_name = ? AND r.table_name = ? AND r.actor_id = ? "
+                "ORDER BY r.created_at DESC",
+                [database_name, table_name, actor_id],
+            )
+        ).rows
+    else:
+        reports = (
+            await db.execute(
+                "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message "
+                "FROM datasette_agent_explorer_reports r "
+                "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+                "WHERE r.database_name = ? AND r.table_name IS NULL AND r.actor_id = ? "
+                "ORDER BY r.created_at DESC",
+                [database_name, actor_id],
+            )
+        ).rows
+
+    return Response.html(
+        await datasette.render_template(
+            "agent_explorer.html",
+            {
+                "database_name": database_name,
+                "table_name": table_name,
+                "reports": [dict(r) for r in reports],
+            },
+            request=request,
+        )
+    )
+
+
+async def api_start_explorer(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    body = await request.post_body()
+    data = json.loads(body)
+    database_name = data.get("database")
+    table_name = data.get("table")
+    extra_prompt = data.get("extra_prompt") or None
+
+    if not database_name:
+        return Response.json({"error": "database is required"}, status=400)
+
+    from .explorer import start_explorer
+
+    report_id, agent_id = await start_explorer(
+        datasette=datasette,
+        actor=request.actor,
+        database_name=database_name,
+        table_name=table_name,
+        extra_prompt=extra_prompt,
+    )
+    return Response.json({"report_id": report_id, "agent_id": agent_id})
+
+
+async def api_explorer_report(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    report_id = request.url_vars["report_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
+            "a.error as agent_error "
+            "FROM datasette_agent_explorer_reports r "
+            "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+            "WHERE r.id = ?",
+            [report_id],
         )
     ).first()
     if row is None:
