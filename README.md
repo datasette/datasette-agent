@@ -120,6 +120,34 @@ my_plugin = "datasette_my_plugin"
 - [datasette-agent-charts](https://github.com/datasette/datasette-agent-charts) - renders charts from SQL query results using Observable Plot
 - [datasette-agent-openai-imagegen](https://github.com/datasette/datasette-agent-openai-imagegen) - generates images using OpenAI's image generation API
 
+## CLI commands
+
+### Listing available tools
+
+To see all registered agent tools, grouped by plugin:
+
+```bash
+datasette agent tools
+```
+
+Output:
+
+```
+agent:
+  list_databases_and_tables
+    List all available databases and their tables
+  describe_table
+    Get column names, types, and foreign keys for a table
+  sql_query
+    Execute a read-only SQL query against a database
+```
+
+Add `--json` for machine-readable output:
+
+```bash
+datasette agent tools --json
+```
+
 ## Development
 
 To set up this plugin locally, first checkout the code. You can confirm it is available like this:

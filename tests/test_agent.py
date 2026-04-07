@@ -253,6 +253,8 @@ def test_agent_tools_command():
     assert "list_databases_and_tables" in result.output
     assert "describe_table" in result.output
     assert "sql_query" in result.output
+    # Should show plugin grouping
+    assert "agent:" in result.output
 
 
 def test_agent_tools_command_descriptions():
@@ -279,11 +281,14 @@ def test_agent_tools_command_json():
     assert "list_databases_and_tables" in tool_names
     assert "describe_table" in tool_names
     assert "sql_query" in tool_names
-    # Each tool should have name, description, input_schema
+    # Each tool should have name, description, input_schema, plugin
     for tool in data:
         assert "name" in tool
         assert "description" in tool
         assert "input_schema" in tool
+        assert "plugin" in tool
+    # Check plugin name
+    assert all(t["plugin"] == "agent" for t in data)
 
 
 def _parse_sse(text):
