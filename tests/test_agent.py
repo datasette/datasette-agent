@@ -242,6 +242,30 @@ async def test_default_tools_registered(datasette_instance):
     assert "sql_query" in tool_names
 
 
+@pytest.mark.asyncio
+async def test_describe_table_tool(tmp_path):
+    import sqlite3
+
+    from datasette_agent.sql_tools import _describe_table
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER REFERENCES authors(id))"
+    )
+    conn.close()
+
+    ds = Datasette([db_path])
+    await ds.invoke_startup()
+    result = json.loads(await _describe_table(ds, {"id": "test"}, "test", "books"))
+    assert result["table"] == "books"
+    assert any(c["name"] == "title" for c in result["columns"])
+    assert len(result["foreign_keys"]) == 1
+    assert result["foreign_keys"][0]["column"] == "author_id"
+    assert result["foreign_keys"][0]["other_table"] == "authors"
+
+
 def test_agent_tools_command():
     from click.testing import CliRunner
     from datasette.cli import cli
