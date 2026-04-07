@@ -30,6 +30,7 @@ def register_routes():
             r"^/-/agent/api/background/(?P<agent_id>[A-Za-z0-9]{26})$",
             views.api_background_agent_status,
         ),
+        (r"^/-/agent/explore/report/(?P<report_id>[A-Za-z0-9]{26})$", views.explorer_report_page),
         (r"^/-/agent/explore/(?P<database>[^/]+)/(?P<table>[^/]+)$", views.explorer_page),
         (r"^/-/agent/explore/(?P<database>[^/]+)$", views.explorer_page),
         (r"^/-/agent/api/explore$", views.api_start_explorer),

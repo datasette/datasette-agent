@@ -289,6 +289,38 @@ async def explorer_page(request, datasette):
     )
 
 
+async def explorer_report_page(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    report_id = request.url_vars["report_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
+            "a.error as agent_error, a.conversation_id as agent_conversation_id "
+            "FROM datasette_agent_explorer_reports r "
+            "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+            "WHERE r.id = ?",
+            [report_id],
+        )
+    ).first()
+    if row is None:
+        return Response.html("Report not found", status=404)
+    if row["actor_id"] != actor_id:
+        return Response.html("Forbidden", status=403)
+
+    return Response.html(
+        await datasette.render_template(
+            "agent_explorer_report.html",
+            {"report": dict(row)},
+            request=request,
+        )
+    )
+
+
 async def api_start_explorer(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     if request.method != "POST":

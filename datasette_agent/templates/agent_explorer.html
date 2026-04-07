@@ -24,27 +24,14 @@
     <span class="agent-status agent-status-{{ report.agent_status or 'pending' }}">
       {{ report.agent_status or 'pending' }}
     </span>
-    Report from {{ report.created_at }}
+    <a href="/-/agent/explore/report/{{ report.id }}">Report from {{ report.created_at }}</a>
     {% if report.extra_prompt %}<em> &mdash; {{ report.extra_prompt }}</em>{% endif %}
   </h3>
-  {% if report.agent_conversation_id %}
-  <p><a href="/-/agent/{{ report.agent_conversation_id }}">View agent conversation</a></p>
-  {% endif %}
   {% if report.agent_error %}
-  <div class="explorer-report-error">
-    <strong>Error:</strong>
-    <pre>{{ report.agent_error }}</pre>
-  </div>
+  <p class="explorer-report-error"><strong>Error:</strong> {{ report.agent_error }}</p>
   {% elif report.agent_final_message %}
   <p class="explorer-report-message">{{ report.agent_final_message }}</p>
   {% endif %}
-  <div class="explorer-report-content">
-    {% if report.content %}
-    <pre class="explorer-markdown">{{ report.content }}</pre>
-    {% elif not report.agent_error %}
-    <p><em>No findings recorded yet.</em></p>
-    {% endif %}
-  </div>
 </div>
 {% endfor %}
 {% endif %}

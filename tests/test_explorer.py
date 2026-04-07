@@ -293,8 +293,8 @@ async def test_explorer_page_shows_background_agent_error(datasette_instance, co
 
     assert response.status_code == 200
     assert error in response.text
-    assert f"/-/agent/{conversation_id}" in response.text
-    assert f"/-/agent/{agent_id}" not in response.text
+    # Listing page links to the report detail page, not directly to conversation
+    assert f"/-/agent/explore/report/{report_id}" in response.text
     assert "No findings recorded yet" not in response.text
 
 
@@ -377,3 +377,109 @@ async def test_table_actions_includes_explore(datasette_instance, cookies):
     )
     assert response.status_code == 200
     assert "Explore with AI agent" in response.text
+
+
+# --- Report detail page tests ---
+
+
+@pytest.mark.asyncio
+async def test_report_detail_page_loads(datasette_instance, cookies):
+    """The report detail page should render with smd.js for markdown."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01ARZ3NDEKTSV4RRFFQ69G5FA1"
+    agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FA2"
+    report_id = "01ARZ3NDEKTSV4RRFFQ69G5FA3"
+
+    await db.execute_write(
+        "INSERT INTO datasette_agent_conversations "
+        "(id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Background: test", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, "user", "Explore test_db", "completed", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_explorer_reports "
+        "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [report_id, agent_id, "user", "test_db", "## Findings\n\nSome data.", now, now],
+    )
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/explore/report/{report_id}",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # Should include smd.js for markdown rendering
+    assert "smd.js" in response.text
+    # Should contain the raw report content for JS to render
+    assert "## Findings" in response.text
+
+
+@pytest.mark.asyncio
+async def test_report_detail_page_requires_permission(datasette_instance):
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/report/01ARZ3NDEKTSV4RRFFQ69G5FA3"
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_report_detail_page_not_found(datasette_instance, cookies):
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/report/01ARZ3NDEKTSV4RRFFQ69G5FA9",
+        cookies=cookies,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_explorer_listing_links_to_report_page(datasette_instance, cookies):
+    """The explorer listing page should link to report detail pages, not show inline content."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01ARZ3NDEKTSV4RRFFQ69G5FB1"
+    agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FB2"
+    report_id = "01ARZ3NDEKTSV4RRFFQ69G5FB3"
+
+    await db.execute_write(
+        "INSERT INTO datasette_agent_conversations "
+        "(id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Background: test", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, "user", "Explore test_db", "completed", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO datasette_agent_explorer_reports "
+        "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [report_id, agent_id, "user", "test_db", "## Some content", now, now],
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # Should link to the report detail page
+    assert f"/-/agent/explore/report/{report_id}" in response.text
+    # Should NOT contain the raw markdown content inline
+    assert "## Some content" not in response.text
