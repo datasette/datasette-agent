@@ -267,6 +267,132 @@ async def test_describe_table_handles_foreign_keys(datasette_instance):
     ]
 
 
+@pytest.mark.asyncio
+async def test_describe_table_tool(tmp_path):
+    import sqlite3
+
+    from datasette_agent.sql_tools import _describe_table
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER REFERENCES authors(id))"
+    )
+    conn.close()
+
+    ds = Datasette([db_path])
+    await ds.invoke_startup()
+    result = json.loads(await _describe_table(ds, {"id": "test"}, "test", "books"))
+    assert result["table"] == "books"
+    assert any(c["name"] == "title" for c in result["columns"])
+    assert len(result["foreign_keys"]) == 1
+    assert result["foreign_keys"][0]["column"] == "author_id"
+    assert result["foreign_keys"][0]["other_table"] == "authors"
+
+
+def test_agent_tools_command():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools"])
+    assert result.exit_code == 0
+    # Should list the default tools with descriptions
+    assert "list_databases_and_tables" in result.output
+    assert "describe_table" in result.output
+    assert "sql_query" in result.output
+    # Should show plugin grouping
+    assert "agent:" in result.output
+
+
+def test_agent_tools_command_descriptions():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools"])
+    assert result.exit_code == 0
+    # Should include tool descriptions
+    assert "Execute a read-only SQL query" in result.output
+
+
+def test_agent_tools_command_json():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    tool_names = {t["name"] for t in data}
+    assert "list_databases_and_tables" in tool_names
+    assert "describe_table" in tool_names
+    assert "sql_query" in tool_names
+    # Each tool should have name, description, input_schema, plugin
+    for tool in data:
+        assert "name" in tool
+        assert "description" in tool
+        assert "input_schema" in tool
+        assert "plugin" in tool
+    # Check plugin name
+    assert all(t["plugin"] == "agent" for t in data)
+
+
+def test_chat_command_with_prompt(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    # Create a test database
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE dogs (name TEXT, age INTEGER)")
+    conn.execute("INSERT INTO dogs VALUES ('Cleo', 5)")
+    conn.close()
+
+    runner = CliRunner()
+    # -p sends one prompt, then we send empty input to exit the loop
+    result = runner.invoke(cli, ["agent", "chat", db_path, "-m", "echo", "-p", "hello"])
+    assert result.exit_code == 0
+    # echo model echoes back the prompt, so "hello" should appear in output
+    assert "hello" in result.output
+
+
+def test_chat_command_interactive(tmp_path):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    # Type a message then empty line to quit
+    result = runner.invoke(
+        cli, ["agent", "chat", ":memory:", "-m", "echo"], input="hi there\n\n"
+    )
+    assert result.exit_code == 0
+    # echo model echoes the input
+    assert "hi there" in result.output
+
+
+def test_chat_command_shows_tool_calls(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE dogs (name TEXT)")
+    conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["agent", "chat", db_path, "-m", "echo", "-p", "list tables"]
+    )
+    assert result.exit_code == 0
+
+
 def _parse_sse(text):
     """Parse SSE text into a list of {event, data} dicts."""
     events = []
