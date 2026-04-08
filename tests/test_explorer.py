@@ -26,7 +26,7 @@ EXPLORER_GOAL_THAT_FINISHES = json.dumps(
 
 
 @pytest.fixture
-def datasette_instance():
+def datasette_instance(tmp_path):
     ds = Datasette(
         metadata={
             "plugins": {
@@ -40,6 +40,7 @@ def datasette_instance():
                 "datasette-agent": {"id": "user"},
             }
         },
+        internal=str(tmp_path / "internal.db"),
     )
     # Add a test database with a table
     return ds

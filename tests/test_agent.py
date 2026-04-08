@@ -5,7 +5,7 @@ import pytest
 
 
 @pytest.fixture
-def datasette_instance():
+def datasette_instance(tmp_path):
     return Datasette(
         memory=True,
         metadata={
@@ -20,6 +20,7 @@ def datasette_instance():
                 "datasette-agent": {"id": "user"},
             }
         },
+        internal=str(tmp_path / "internal.db"),
     )
 
 
