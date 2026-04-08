@@ -1,8 +1,15 @@
 import json
+from collections.abc import Mapping
 
 from datasette.resources import DatabaseResource, TableResource
 
 from .tools import AgentTool
+
+
+def _get_value(item, key):
+    if isinstance(item, Mapping):
+        return item[key]
+    return getattr(item, key)
 
 
 async def _list_databases_and_tables(datasette, actor):
@@ -41,9 +48,9 @@ async def _describe_table(datasette, actor, database: str, table: str):
             ],
             "foreign_keys": [
                 {
-                    "column": fk["column"],
-                    "other_table": fk["other_table"],
-                    "other_column": fk["other_column"],
+                    "column": _get_value(fk, "column"),
+                    "other_table": _get_value(fk, "other_table"),
+                    "other_column": _get_value(fk, "other_column"),
                 }
                 for fk in foreign_keys
             ],

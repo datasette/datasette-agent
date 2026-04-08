@@ -5,7 +5,7 @@ import pytest
 
 
 @pytest.fixture
-def datasette_instance():
+def datasette_instance(tmp_path):
     return Datasette(
         memory=True,
         metadata={
@@ -20,6 +20,7 @@ def datasette_instance():
                 "datasette-agent": {"id": "user"},
             }
         },
+        internal=str(tmp_path / "internal.db"),
     )
 
 
@@ -240,6 +241,31 @@ async def test_default_tools_registered(datasette_instance):
     assert "list_databases_and_tables" in tool_names
     assert "describe_table" in tool_names
     assert "sql_query" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_describe_table_handles_foreign_keys(datasette_instance):
+    from datasette_agent.sql_tools import _describe_table
+
+    db = datasette_instance.add_memory_database("describe_fk_test_db")
+    await db.execute_write("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    await db.execute_write(
+        "CREATE TABLE repos (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES users(id), name TEXT)"
+    )
+    await datasette_instance.client.get("/-/plugins.json")
+
+    result = json.loads(
+        await _describe_table(
+            datasette_instance,
+            {"id": "user"},
+            "describe_fk_test_db",
+            "repos",
+        )
+    )
+
+    assert result["foreign_keys"] == [
+        {"column": "owner", "other_table": "users", "other_column": "id"}
+    ]
 
 
 @pytest.mark.asyncio

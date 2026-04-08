@@ -18,6 +18,38 @@ CREATE TABLE IF NOT EXISTS datasette_agent_messages (
     tool_output TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS datasette_agent_background_agents (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES datasette_agent_conversations(id),
+    actor_id TEXT,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    final_message TEXT,
+    error TEXT,
+    spawned_by_conversation_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS datasette_agent_pending_notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS datasette_agent_explorer_reports (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT REFERENCES datasette_agent_background_agents(id),
+    actor_id TEXT,
+    database_name TEXT NOT NULL,
+    table_name TEXT,
+    extra_prompt TEXT,
+    content TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

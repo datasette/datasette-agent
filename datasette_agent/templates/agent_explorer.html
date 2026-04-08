@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}Explore {{ database_name }}{% if table_name %} / {{ table_name }}{% endif %}{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+{% endblock %}
+
+{% block content %}
+<h1>Explore {{ database_name }}{% if table_name %} / {{ table_name }}{% endif %}</h1>
+
+<form id="explore-form">
+  <div class="agent-new-chat">
+    <textarea id="extra-prompt" placeholder="Optional: guide the exploration (e.g., 'focus on trends over time')" rows="2"></textarea>
+    <button type="submit">Start exploration</button>
+  </div>
+</form>
+
+{% if reports %}
+<h2>Reports</h2>
+{% for report in reports %}
+<div class="explorer-report" data-report-id="{{ report.id }}">
+  <h3>
+    <span class="agent-status agent-status-{{ report.agent_status or 'pending' }}">
+      {{ report.agent_status or 'pending' }}
+    </span>
+    <a href="/-/agent/explore/report/{{ report.id }}">Report from {{ report.created_at }}</a>
+    {% if report.table_name and not table_name %}<span class="explorer-report-table">table: {{ report.table_name }}</span>{% endif %}
+    {% if report.extra_prompt %}<em> &mdash; {{ report.extra_prompt }}</em>{% endif %}
+  </h3>
+  {% if report.agent_error %}
+  <p class="explorer-report-error"><strong>Error:</strong> {{ report.agent_error }}</p>
+  {% elif report.agent_final_message %}
+  <p class="explorer-report-message">{{ report.agent_final_message }}</p>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<script>
+document.getElementById("extra-prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    document.getElementById("explore-form").requestSubmit();
+  }
+});
+document.getElementById("explore-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  btn.textContent = "Starting...";
+  try {
+    const resp = await fetch("/-/agent/api/explore", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        database: {{ database_name|tojson }},
+        table: {{ table_name|tojson if table_name else "null" }},
+        extra_prompt: document.getElementById("extra-prompt").value.trim() || null,
+      }),
+    });
+    const data = await resp.json();
+    window.location.reload();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Start exploration";
+    alert("Error: " + err.message);
+  }
+});
+</script>
+{% endblock %}
