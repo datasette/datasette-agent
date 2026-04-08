@@ -17,32 +17,6 @@ datasette install datasette-agent
 
 Visit `/-/agent` to start a conversation. Users must have the `datasette-agent` permission (or be `--root`) to interact with the agent.
 
-## Rendering custom HTML from tools
-
-Tool plugins can render rich HTML inline in the chat UI by returning a JSON object with an `_html` key. The HTML will be rendered directly in the conversation, while the remaining keys are passed back to the LLM as the tool result (the `_html` and `sql` keys are stripped before the LLM sees them, so it won't parrot back raw HTML or SQL).
-
-Example tool implementation:
-
-```python
-import json
-
-async def _render_widget(datasette, actor, database, sql):
-    html = (
-        '<script src="/-/static-plugins/my-plugin/widget.js" type="module"></script>\n'
-        '<my-widget>\n'
-        f'<script type="application/json">{json.dumps({"database": database, "sql": sql})}</script>\n'
-        '</my-widget>'
-    )
-    return json.dumps({
-        "_html": html,
-        "database": database,
-        "sql": sql,
-        "summary": "Widget rendered successfully",
-    })
-```
-
-The `_html` value is inserted into the chat as raw HTML, so it can include custom elements, scripts, and styles. The remaining keys (`summary` in this example) are what the LLM receives as the tool result to inform its next response.
-
 ## Registering additional tools from plugins
 
 Other Datasette plugins can register additional tools for the agent using the `register_agent_tools` plugin hook.
@@ -106,14 +80,31 @@ return json.dumps({
 })
 ```
 
-### Entry point
+## Rendering custom HTML from tools
 
-Register the plugin via `pyproject.toml`:
+Tool plugins can render rich HTML inline in the chat UI by returning a JSON object with an `_html` key. The HTML will be rendered directly in the conversation, while the remaining keys are passed back to the LLM as the tool result (the `_html` and `sql` keys are stripped before the LLM sees them, so it won't parrot back raw HTML or SQL).
 
-```toml
-[project.entry-points.datasette]
-my_plugin = "datasette_my_plugin"
+Example tool implementation:
+
+```python
+import json
+
+async def _render_widget(datasette, actor, database, sql):
+    html = (
+        '<script src="/-/static-plugins/my-plugin/widget.js" type="module"></script>\n'
+        '<my-widget>\n'
+        f'<script type="application/json">{json.dumps({"database": database, "sql": sql})}</script>\n'
+        '</my-widget>'
+    )
+    return json.dumps({
+        "_html": html,
+        "database": database,
+        "sql": sql,
+        "summary": "Widget rendered successfully",
+    })
 ```
+
+The `_html` value is inserted into the chat as raw HTML, so it can include custom elements, scripts, and styles. The remaining keys (`summary` in this example) are what the LLM receives as the tool result to inform its next response.
 
 ### Example plugins
 
@@ -121,6 +112,27 @@ my_plugin = "datasette_my_plugin"
 - [datasette-agent-openai-imagegen](https://github.com/datasette/datasette-agent-openai-imagegen) - generates images using OpenAI's image generation API
 
 ## CLI commands
+
+### Interactive chat
+
+Start an interactive chat session with the agent from the command line:
+
+```bash
+datasette agent chat mydata.db
+```
+
+You can pass multiple database files, use `:memory:` for an in-memory database, specify a model, or send a single prompt:
+
+```bash
+datasette agent chat mydata.db other.db
+datasette agent chat mydata.db -m gpt-5.4-mini
+datasette agent chat mydata.db -p "List all tables"
+```
+
+Options:
+
+- `-p`, `--prompt` — Send a single prompt and exit (non-interactive mode)
+- `-m`, `--model` — LLM model to use
 
 ### Listing available tools
 

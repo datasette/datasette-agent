@@ -315,6 +315,59 @@ def test_agent_tools_command_json():
     assert all(t["plugin"] == "agent" for t in data)
 
 
+def test_chat_command_with_prompt(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    # Create a test database
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE dogs (name TEXT, age INTEGER)")
+    conn.execute("INSERT INTO dogs VALUES ('Cleo', 5)")
+    conn.close()
+
+    runner = CliRunner()
+    # -p sends one prompt, then we send empty input to exit the loop
+    result = runner.invoke(cli, ["agent", "chat", db_path, "-m", "echo", "-p", "hello"])
+    assert result.exit_code == 0
+    # echo model echoes back the prompt, so "hello" should appear in output
+    assert "hello" in result.output
+
+
+def test_chat_command_interactive(tmp_path):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    # Type a message then empty line to quit
+    result = runner.invoke(
+        cli, ["agent", "chat", ":memory:", "-m", "echo"], input="hi there\n\n"
+    )
+    assert result.exit_code == 0
+    # echo model echoes the input
+    assert "hi there" in result.output
+
+
+def test_chat_command_shows_tool_calls(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE dogs (name TEXT)")
+    conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["agent", "chat", db_path, "-m", "echo", "-p", "list tables"]
+    )
+    assert result.exit_code == 0
+
+
 def _parse_sse(text):
     """Parse SSE text into a list of {event, data} dicts."""
     events = []
