@@ -121,6 +121,34 @@ def register_commands(cli):
                     click.echo(f"    {tool.description}")
                 click.echo()
 
+    @agent.command()
+    @click.argument("files", nargs=-1, type=click.Path(exists=False))
+    @click.option("-p", "--prompt", help="Initial prompt to send")
+    @click.option("-m", "--model", "model_id", help="LLM model to use")
+    def chat(files, prompt, model_id):
+        "Interactive chat session with the agent"
+        from datasette.app import Datasette
+        from .cli_chat import run_chat
+
+        db_files = []
+        memory = False
+        for f in files:
+            if f == ":memory:":
+                memory = True
+            else:
+                db_files.append(f)
+
+        kwargs = {}
+        if memory or not db_files:
+            kwargs["memory"] = True
+
+        metadata = {}
+        if model_id:
+            metadata = {"plugins": {"datasette-llm": {"default_model": model_id}}}
+
+        ds = Datasette(db_files, metadata=metadata, **kwargs)
+        asyncio.run(run_chat(ds, initial_prompt=prompt))
+
 
 @hookimpl
 def register_agent_tools(datasette):
