@@ -102,6 +102,8 @@ function appendToolResult(name, output) {
       newScript.textContent = oldScript.textContent;
       oldScript.replaceWith(newScript);
     });
+    // Scroll again after the browser has laid out the iframe
+    requestAnimationFrame(() => scrollToBottom());
   }
 
   const group = getOrCreateToolGroup();
@@ -140,6 +142,28 @@ async function sendMessage(conversationId, message) {
     const decoder = new TextDecoder();
     let buffer = "";
 
+    // Thinking indicator — shown while waiting for the LLM
+    const messages = document.getElementById("messages");
+    const thinkingEl = document.createElement("div");
+    thinkingEl.className = "agent-thinking";
+    thinkingEl.textContent = "Thinking\u2026";
+    messages.appendChild(thinkingEl);
+    scrollToBottom();
+    let streamDone = false;
+
+    function updateThinking() {
+      // Show thinking indicator if the stream is still active and
+      // we're not currently streaming text
+      if (streamDone || currentAssistant) {
+        if (thinkingEl.parentNode) thinkingEl.remove();
+      } else {
+        if (!thinkingEl.parentNode) {
+          messages.appendChild(thinkingEl);
+          scrollToBottom();
+        }
+      }
+    }
+
     while (true) {
       const {done, value} = await reader.read();
       if (done) break;
@@ -170,11 +194,13 @@ async function sendMessage(conversationId, message) {
           } else if (eventType === "tool_result") {
             appendToolResult(data.name, data.output);
           } else if (eventType === "done") {
+            streamDone = true;
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
             }
           } else if (eventType === "error") {
+            streamDone = true;
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -185,6 +211,9 @@ async function sendMessage(conversationId, message) {
           eventType = null;
         }
       }
+
+      // Update thinking indicator after processing all events in this chunk
+      updateThinking();
     }
 
     // Ensure parser is ended if stream closes without done event

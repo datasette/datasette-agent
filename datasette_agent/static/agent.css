@@ -136,6 +136,10 @@
   margin: 0.5em 0;
 }
 
+.agent-rich-result {
+  max-width: calc(100% - 2em);
+}
+
 .agent-rich-result iframe {
   max-height: 800px;
 }
@@ -178,6 +182,14 @@
 @keyframes pulse {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 1; }
+}
+
+.agent-thinking {
+  align-self: flex-start;
+  font-size: 0.85rem;
+  color: #888;
+  padding: 0.4rem 0;
+  animation: pulse 1s ease-in-out infinite;
 }
 
 .agent-tool-call pre,
