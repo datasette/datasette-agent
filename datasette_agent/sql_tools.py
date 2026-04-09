@@ -113,7 +113,7 @@ def get_default_tools():
         ),
         AgentTool(
             name="sql_query",
-            description="Execute a read-only SQL query against a database",
+            description="Execute a read-only SQL query against a database. Results are limited to the first 1,000 rows.",
             input_schema={
                 "type": "object",
                 "properties": {
