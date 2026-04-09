@@ -6,6 +6,7 @@ from datasette.utils.asgi import AsgiStream, Response
 from ulid import ULID
 
 from .agent import run_agent
+from .export_markdown import format_conversation_markdown
 from .schema import ensure_tables
 
 
@@ -98,6 +99,45 @@ async def agent_conversation(request, datasette):
             },
             request=request,
         )
+    )
+
+
+async def agent_conversation_markdown(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT * FROM datasette_agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.html("Conversation not found", status=404)
+    if row["actor_id"] != actor_id:
+        return Response.html("Forbidden", status=403)
+
+    messages = (
+        await db.execute(
+            "SELECT * FROM datasette_agent_messages WHERE conversation_id = ? ORDER BY id",
+            [conversation_id],
+        )
+    ).rows
+
+    title = row["title"] or "Chat"
+    markdown = format_conversation_markdown(title, [dict(m) for m in messages])
+
+    # Sanitize title for filename
+    safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[:60].strip()
+    filename = f"{safe_title}.md" if safe_title else "chat.md"
+
+    return Response(
+        body=markdown,
+        content_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

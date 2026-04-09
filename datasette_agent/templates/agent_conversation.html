@@ -11,6 +11,7 @@
   <div class="agent-header">
     <a href="/-/agent">&larr; Back</a>
     <h1>{{ conversation.title or "Chat" }}</h1>
+    <div class="chat-export-menu" data-markdown-url="/-/agent/{{ conversation_id }}/markdown" data-title="{{ conversation.title or 'chat' }}"></div>
   </div>
 
   <div class="agent-messages" id="messages">
@@ -68,6 +69,7 @@
 </div>
 
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
+<script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
 <script type="module">
 const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
 const pending = sessionStorage.getItem("agent_pending_message");

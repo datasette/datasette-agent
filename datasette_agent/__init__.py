@@ -49,6 +49,10 @@ def register_routes():
             views.agent_conversation,
         ),
         (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/markdown$",
+            views.agent_conversation_markdown,
+        ),
+        (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stream$",
             views.agent_stream,
         ),

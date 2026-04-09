@@ -283,6 +283,82 @@
   font-size: 0.85rem;
 }
 
+/* Export menu */
+.chat-export-menu {
+  position: relative;
+  margin-left: auto;
+}
+
+.export-tag {
+  background: #eef0ff;
+  color: #5b5fc7;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid #d4d7ff;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+
+.export-tag:hover {
+  background: #dde0ff;
+}
+
+.export-tag:active {
+  transform: scale(0.96);
+}
+
+.export-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 6px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10);
+  overflow: hidden;
+  min-width: 170px;
+  z-index: 10;
+}
+
+.export-menu.hidden {
+  display: none;
+}
+
+.export-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  font-family: inherit;
+  color: #333;
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+
+.export-menu-btn:hover {
+  background: #f3f4f6;
+}
+
+.export-menu-btn + .export-menu-btn {
+  border-top: 1px solid #f0f0f0;
+}
+
+.export-menu-btn svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
 .explorer-report-error {
   background: #fff5f5;
   border: 1px solid #d66;
