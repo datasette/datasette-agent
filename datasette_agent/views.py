@@ -138,7 +138,10 @@ async def agent_stream(request, datasette):
 
     return AsgiStream(
         stream_fn,
-        headers={"Cache-Control": "no-cache"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Encoding": "none",
+        },
         content_type="text/event-stream",
     )
 

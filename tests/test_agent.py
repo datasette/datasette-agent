@@ -142,6 +142,33 @@ async def test_stream_endpoint(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_stream_endpoint_headers(datasette_instance, cookies):
+    ds = datasette_instance
+
+    # Create conversation
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    # Send a message to the stream endpoint
+    response = await ds.client.post(
+        f"/-/agent/{conversation_id}/stream",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+    # Content-Encoding: none is needed for SSE streaming on Fly.io
+    assert response.headers.get("content-encoding") == "none"
+    assert response.headers.get("cache-control") == "no-cache"
+
+
+@pytest.mark.asyncio
 async def test_messages_persisted(datasette_instance, cookies):
     ds = datasette_instance
 
