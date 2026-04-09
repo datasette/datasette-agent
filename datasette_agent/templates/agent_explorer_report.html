@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Report: {{ report.database_name }}{% if report.table_name %} / {{ report.table_name }}{% endif %}{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+{% endblock %}
+
+{% block content %}
+<h1>
+  <span class="agent-status agent-status-{{ report.agent_status or 'pending' }}" id="report-status">
+    {{ report.agent_status or 'pending' }}
+  </span>
+  Exploration report: {{ report.database_name }}{% if report.table_name %} / {{ report.table_name }}{% endif %}
+</h1>
+
+{% if report.extra_prompt %}
+<p><em>Guidance: {{ report.extra_prompt }}</em></p>
+{% endif %}
+
+{% if report.agent_conversation_id %}
+<p><a href="/-/agent/{{ report.agent_conversation_id }}">View agent conversation</a></p>
+{% endif %}
+
+{% if report.agent_error %}
+<div class="explorer-report-error">
+  <strong>Error:</strong>
+  <pre>{{ report.agent_error }}</pre>
+</div>
+{% endif %}
+
+{% if report.agent_final_message %}
+<p class="explorer-report-message"><strong>Summary:</strong> {{ report.agent_final_message }}</p>
+{% endif %}
+
+<div id="report-content" class="explorer-report-rendered"></div>
+
+<script type="module">
+import * as smd from "/-/static-plugins/datasette-agent/smd.js";
+
+const reportId = {{ report.id|tojson }};
+const contentEl = document.getElementById("report-content");
+const statusEl = document.getElementById("report-status");
+let lastContent = "";
+let polling = true;
+
+function renderMarkdown(text) {
+  contentEl.textContent = "";
+  if (!text) {
+    contentEl.innerHTML = "<p><em>No findings recorded yet.</em></p>";
+    return;
+  }
+  const renderer = smd.default_renderer(contentEl);
+  const parser = smd.parser(renderer);
+  smd.parser_write(parser, text);
+  smd.parser_end(parser);
+}
+
+// Initial render
+renderMarkdown({{ report.content|tojson }});
+lastContent = {{ report.content|tojson }};
+
+// Determine if we should poll
+const initialStatus = {{ (report.agent_status or 'pending')|tojson }};
+if (initialStatus === "completed" || initialStatus === "error") {
+  polling = false;
+}
+
+async function pollForUpdates() {
+  if (!polling) return;
+  try {
+    const resp = await fetch(`/-/agent/api/explore/${reportId}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+
+    // Update content if changed
+    if (data.content !== lastContent) {
+      lastContent = data.content;
+      renderMarkdown(data.content);
+    }
+
+    // Update status badge
+    const agentStatus = data.agent_status || "pending";
+    statusEl.textContent = agentStatus;
+    statusEl.className = `agent-status agent-status-${agentStatus}`;
+
+    // Stop polling if done
+    if (agentStatus === "completed" || agentStatus === "error") {
+      polling = false;
+      // Do one final page reload to get server-rendered final_message/error
+      window.location.reload();
+      return;
+    }
+  } catch (err) {
+    // Silently ignore polling errors
+  }
+  if (polling) {
+    setTimeout(pollForUpdates, 2000);
+  }
+}
+
+if (polling) {
+  setTimeout(pollForUpdates, 2000);
+}
+</script>
+{% endblock %}

@@ -29,6 +29,12 @@
 {% endif %}
 
 <script>
+document.getElementById("new-message").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    document.getElementById("new-chat-form").requestSubmit();
+  }
+});
 document.getElementById("new-chat-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const message = document.getElementById("new-message").value.trim();

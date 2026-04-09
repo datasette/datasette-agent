@@ -40,8 +40,20 @@ function startAssistantMessage() {
   return { contentDiv, parser };
 }
 
-function appendToolCall(name, args) {
+function getOrCreateToolGroup() {
   const messages = document.getElementById("messages");
+  const last = messages.lastElementChild;
+  if (last && last.classList.contains("agent-tool-group")) {
+    return last;
+  }
+  const group = document.createElement("div");
+  group.className = "agent-tool-group";
+  messages.appendChild(group);
+  return group;
+}
+
+function appendToolCall(name, args) {
+  const group = getOrCreateToolGroup();
   const details = document.createElement("details");
   details.className = "agent-tool-call pending";
   details.dataset.toolName = name;
@@ -51,7 +63,7 @@ function appendToolCall(name, args) {
   const pre = document.createElement("pre");
   pre.textContent = JSON.stringify(args, null, 2);
   details.appendChild(pre);
-  messages.appendChild(details);
+  group.appendChild(details);
   scrollToBottom();
 }
 
@@ -79,6 +91,8 @@ function appendToolResult(name, output) {
     const container = document.createElement("div");
     container.className = "agent-rich-result";
     container.innerHTML = parsed._html;
+    // Append first so scripts can find sibling elements (e.g. iframes) in the DOM
+    messages.appendChild(container);
     // Re-create script elements so they execute (innerHTML doesn't run scripts)
     container.querySelectorAll("script").forEach(oldScript => {
       const newScript = document.createElement("script");
@@ -88,9 +102,9 @@ function appendToolResult(name, output) {
       newScript.textContent = oldScript.textContent;
       oldScript.replaceWith(newScript);
     });
-    messages.appendChild(container);
   }
 
+  const group = getOrCreateToolGroup();
   const details = document.createElement("details");
   details.className = "agent-tool-result";
   const summary = document.createElement("summary");
@@ -99,7 +113,7 @@ function appendToolResult(name, output) {
   const pre = document.createElement("pre");
   pre.textContent = prettyPrintJson(output);
   details.appendChild(pre);
-  messages.appendChild(details);
+  group.appendChild(details);
   scrollToBottom();
 }
 
@@ -217,6 +231,10 @@ document.getElementById("chat-form").addEventListener("submit", (e) => {
 document.getElementById("message-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
-    document.getElementById("chat-form").dispatchEvent(new Event("submit"));
+    const input = document.getElementById("message-input");
+    const message = input.value.trim();
+    if (!message) return;
+    const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
+    sendMessage(conversationId, message);
   }
 });

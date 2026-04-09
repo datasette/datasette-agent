@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from datasette_llm import LLM
 
+from .context import current_conversation_id
 from .schema import ensure_tables
 from .tools import get_agent_tools, make_llm_tools
 
@@ -12,8 +13,10 @@ async def _build_system_prompt(datasette, actor):
         "You are a helpful data analysis assistant. "
         "You have access to tools that let you explore and query databases. "
         "Use the tools to answer questions about the data. "
-        "Always start by listing databases and tables, then describe relevant tables "
-        "before writing queries.\n\n"
+        "The available databases and tables are listed below - do not call "
+        "list_databases_and_tables or describe_table if you already have the "
+        "information you need from this prompt or the conversation history. "
+        "Only describe a table when you need column details you haven't seen yet.\n\n"
         "Your output will be rendered as markdown. "
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
@@ -56,6 +59,17 @@ async def _build_conversation_history(db, conversation_id):
             parts.append(f"\n[Tool call: {msg['tool_name']}({msg['tool_arguments']})]")
         elif role == "tool_result":
             output = msg["tool_output"] or ""
+            # Strip keys the LLM shouldn't see (e.g. _html) before truncating
+            try:
+                parsed = json.loads(output)
+                if isinstance(parsed, dict):
+                    stripped = {
+                        k: v for k, v in parsed.items() if k not in ("_html", "sql")
+                    }
+                    if stripped != parsed:
+                        output = json.dumps(stripped)
+            except (json.JSONDecodeError, TypeError):
+                pass
             if len(output) > 500:
                 output = output[:500] + "..."
             parts.append(f"\n[Tool result: {output}]")
@@ -91,6 +105,27 @@ async def _send_sse(writer, event, data):
 async def run_agent(datasette, actor, conversation_id, user_message, writer):
     db = datasette.get_internal_database()
     await ensure_tables(db)
+
+    # Set context var so tools can access conversation_id
+    current_conversation_id.set(conversation_id)
+
+    # Check for pending notifications and prepend to user message
+    notifications = (
+        await db.execute(
+            "SELECT id, content FROM datasette_agent_pending_notifications "
+            "WHERE conversation_id = ? ORDER BY id",
+            [conversation_id],
+        )
+    ).rows
+    if notifications:
+        prefix_parts = [row["content"] for row in notifications]
+        notification_ids = [row["id"] for row in notifications]
+        for nid in notification_ids:
+            await db.execute_write(
+                "DELETE FROM datasette_agent_pending_notifications WHERE id = ?",
+                [nid],
+            )
+        user_message = "\n".join(prefix_parts) + "\n\n" + user_message
 
     # Save user message
     await _save_message(db, conversation_id, "user", content=user_message)

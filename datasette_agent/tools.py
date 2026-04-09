@@ -23,6 +23,16 @@ async def get_agent_tools(datasette):
     return tools
 
 
+async def get_agent_tools_by_plugin(datasette):
+    """Return dict mapping plugin name to list of AgentTool instances."""
+    grouped = {}
+    for impl in pm.hook.register_agent_tools.get_hookimpls():
+        result = await await_me_maybe(impl.function(datasette=datasette))
+        if result:
+            grouped[impl.plugin_name] = list(result)
+    return grouped
+
+
 def make_llm_tools(agent_tools, datasette, actor):
     """Convert AgentTool instances to llm.Tool instances with context bound."""
     llm_tools = []

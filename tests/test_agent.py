@@ -5,7 +5,7 @@ import pytest
 
 
 @pytest.fixture
-def datasette_instance():
+def datasette_instance(tmp_path):
     return Datasette(
         memory=True,
         metadata={
@@ -20,6 +20,7 @@ def datasette_instance():
                 "datasette-agent": {"id": "user"},
             }
         },
+        internal=str(tmp_path / "internal.db"),
     )
 
 
@@ -141,6 +142,33 @@ async def test_stream_endpoint(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_stream_endpoint_headers(datasette_instance, cookies):
+    ds = datasette_instance
+
+    # Create conversation
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    # Send a message to the stream endpoint
+    response = await ds.client.post(
+        f"/-/agent/{conversation_id}/stream",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+    # Content-Encoding: none is needed for SSE streaming on Fly.io
+    assert response.headers.get("content-encoding") == "none"
+    assert response.headers.get("cache-control") == "no-cache"
+
+
+@pytest.mark.asyncio
 async def test_messages_persisted(datasette_instance, cookies):
     ds = datasette_instance
 
@@ -240,6 +268,157 @@ async def test_default_tools_registered(datasette_instance):
     assert "list_databases_and_tables" in tool_names
     assert "describe_table" in tool_names
     assert "sql_query" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_describe_table_handles_foreign_keys(datasette_instance):
+    from datasette_agent.sql_tools import _describe_table
+
+    db = datasette_instance.add_memory_database("describe_fk_test_db")
+    await db.execute_write("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    await db.execute_write(
+        "CREATE TABLE repos (id INTEGER PRIMARY KEY, owner INTEGER REFERENCES users(id), name TEXT)"
+    )
+    await datasette_instance.client.get("/-/plugins.json")
+
+    result = json.loads(
+        await _describe_table(
+            datasette_instance,
+            {"id": "user"},
+            "describe_fk_test_db",
+            "repos",
+        )
+    )
+
+    assert result["foreign_keys"] == [
+        {"column": "owner", "other_table": "users", "other_column": "id"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_describe_table_tool(tmp_path):
+    import sqlite3
+
+    from datasette_agent.sql_tools import _describe_table
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER REFERENCES authors(id))"
+    )
+    conn.close()
+
+    ds = Datasette([db_path])
+    await ds.invoke_startup()
+    result = json.loads(await _describe_table(ds, {"id": "test"}, "test", "books"))
+    assert result["table"] == "books"
+    assert any(c["name"] == "title" for c in result["columns"])
+    assert len(result["foreign_keys"]) == 1
+    assert result["foreign_keys"][0]["column"] == "author_id"
+    assert result["foreign_keys"][0]["other_table"] == "authors"
+
+
+def test_agent_tools_command():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools"])
+    assert result.exit_code == 0
+    # Should list the default tools with descriptions
+    assert "list_databases_and_tables" in result.output
+    assert "describe_table" in result.output
+    assert "sql_query" in result.output
+    # Should show plugin grouping
+    assert "agent:" in result.output
+
+
+def test_agent_tools_command_descriptions():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools"])
+    assert result.exit_code == 0
+    # Should include tool descriptions
+    assert "Execute a read-only SQL query" in result.output
+
+
+def test_agent_tools_command_json():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "tools", "--json"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    tool_names = {t["name"] for t in data}
+    assert "list_databases_and_tables" in tool_names
+    assert "describe_table" in tool_names
+    assert "sql_query" in tool_names
+    # Each tool should have name, description, input_schema, plugin
+    for tool in data:
+        assert "name" in tool
+        assert "description" in tool
+        assert "input_schema" in tool
+        assert "plugin" in tool
+    # Check plugin name
+    assert all(t["plugin"] == "agent" for t in data)
+
+
+def test_chat_command_with_prompt(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    # Create a test database
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE dogs (name TEXT, age INTEGER)")
+    conn.execute("INSERT INTO dogs VALUES ('Cleo', 5)")
+    conn.close()
+
+    runner = CliRunner()
+    # -p sends one prompt, then we send empty input to exit the loop
+    result = runner.invoke(cli, ["agent", "chat", db_path, "-m", "echo", "-p", "hello"])
+    assert result.exit_code == 0
+    # echo model echoes back the prompt, so "hello" should appear in output
+    assert "hello" in result.output
+
+
+def test_chat_command_interactive(tmp_path):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    runner = CliRunner()
+    # Type a message then empty line to quit
+    result = runner.invoke(
+        cli, ["agent", "chat", ":memory:", "-m", "echo"], input="hi there\n\n"
+    )
+    assert result.exit_code == 0
+    # echo model echoes the input
+    assert "hi there" in result.output
+
+
+def test_chat_command_shows_tool_calls(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    db_path = str(tmp_path / "test.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE dogs (name TEXT)")
+    conn.close()
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["agent", "chat", db_path, "-m", "echo", "-p", "list tables"]
+    )
+    assert result.exit_code == 0
 
 
 def _parse_sse(text):

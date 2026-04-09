@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Background Agents{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+{% endblock %}
+
+{% block content %}
+<h1>Background Agents</h1>
+
+<form id="new-agent-form">
+  <div class="agent-new-chat">
+    <textarea id="agent-goal" placeholder="Describe a goal for the background agent..." rows="3"></textarea>
+    <button type="submit">Start agent</button>
+  </div>
+</form>
+
+{% if agents %}
+<h2>Agents</h2>
+<table class="agent-background-table">
+  <thead>
+    <tr>
+      <th>Goal</th>
+      <th>Status</th>
+      <th>Created</th>
+      <th>Result</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for agent in agents %}
+    <tr>
+      <td><a href="/-/agent/{{ agent.conversation_id }}">{{ agent.goal[:100] }}{% if agent.goal|length > 100 %}...{% endif %}</a></td>
+      <td><span class="agent-status agent-status-{{ agent.status }}">{{ agent.status }}</span></td>
+      <td class="agent-timestamp">{{ agent.created_at }}</td>
+      <td>{{ agent.final_message or agent.error or "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<script>
+document.getElementById("agent-goal").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    document.getElementById("new-agent-form").requestSubmit();
+  }
+});
+document.getElementById("new-agent-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const goal = document.getElementById("agent-goal").value.trim();
+  if (!goal) return;
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  btn.textContent = "Starting...";
+  try {
+    const resp = await fetch("/-/agent/api/background", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({goal}),
+    });
+    const data = await resp.json();
+    window.location.reload();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Start agent";
+    alert("Error: " + err.message);
+  }
+});
+</script>
+{% endblock %}
