@@ -97,7 +97,7 @@ async def start_explorer(
     await ensure_tables(db)
 
     report_id = str(ULID())
-    actor_id = actor.get("id") if actor else None
+    actor_id = str(actor["id"]) if actor and actor.get("id") is not None else None
     now = datetime.now(timezone.utc).isoformat()
 
     # Create report record

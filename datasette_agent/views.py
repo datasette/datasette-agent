@@ -11,7 +11,9 @@ from .schema import ensure_tables
 
 def _actor_id(request):
     if request.actor:
-        return request.actor.get("id")
+        actor_id = request.actor.get("id")
+        if actor_id is not None:
+            return str(actor_id)
     return None
 
 

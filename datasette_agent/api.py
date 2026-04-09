@@ -25,7 +25,7 @@ async def start_background_agent(
 
     agent_id = str(ULID())
     conversation_id = str(ULID())
-    actor_id = actor.get("id") if actor else None
+    actor_id = str(actor["id"]) if actor and actor.get("id") is not None else None
     now = datetime.now(timezone.utc).isoformat()
 
     # Create conversation record for message logging
