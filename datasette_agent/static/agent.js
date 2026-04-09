@@ -67,6 +67,33 @@ function appendToolCall(name, args) {
   scrollToBottom();
 }
 
+function getOrCreateTokenStream() {
+  const messages = document.getElementById("messages");
+  const existing = messages.querySelector(".agent-token-stream");
+  if (existing) return existing;
+  const box = document.createElement("div");
+  box.className = "agent-token-stream";
+  const pre = document.createElement("pre");
+  box.appendChild(pre);
+  messages.appendChild(box);
+  return box;
+}
+
+function appendToTokenStream(box, text) {
+  const pre = box.querySelector("pre");
+  pre.textContent += text;
+  // Keep only last ~3 lines worth of content
+  const lines = pre.textContent.split("\n");
+  if (lines.length > 3) {
+    pre.textContent = lines.slice(-3).join("\n");
+  }
+}
+
+function removeTokenStream() {
+  const el = document.querySelector(".agent-token-stream");
+  if (el) el.remove();
+}
+
 function prettyPrintJson(text) {
   try {
     return JSON.stringify(JSON.parse(text), null, 2);
@@ -185,7 +212,13 @@ async function sendMessage(conversationId, message) {
             }
             smd.parser_write(currentAssistant.parser, data.content);
             scrollToBottom();
+          } else if (eventType === "tool_call_args_chunk") {
+            if (thinkingEl.parentNode) thinkingEl.remove();
+            const tokenBox = getOrCreateTokenStream();
+            appendToTokenStream(tokenBox, data.content);
+            scrollToBottom();
           } else if (eventType === "tool_call") {
+            removeTokenStream();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;

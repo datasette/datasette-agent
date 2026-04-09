@@ -110,9 +110,22 @@ async def run_chat(datasette, initial_prompt=None):
         print()
         full_text_parts = []
         async for resp in response.responses():
-            async for chunk in resp:
-                print(chunk, end="", flush=True)
-                full_text_parts.append(chunk)
+            if hasattr(resp, "astream_events"):
+                async for event in resp.astream_events():
+                    if event.type == "text":
+                        print(event.chunk, end="", flush=True)
+                        full_text_parts.append(event.chunk)
+                    elif event.type == "tool_call_args":
+                        print(
+                            f"\033[2m{event.chunk}\033[0m",
+                            end="",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+            else:
+                async for chunk in resp:
+                    print(chunk, end="", flush=True)
+                    full_text_parts.append(chunk)
         print()
 
         full_text = "".join(full_text_parts)

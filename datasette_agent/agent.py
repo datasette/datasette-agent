@@ -212,9 +212,23 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
 
         async for response in chain_response.responses():
             chunks = []
-            async for chunk in response:
-                chunks.append(chunk)
-                await _send_sse(writer, "text_chunk", {"content": chunk})
+            if hasattr(response, "astream_events"):
+                async for event in response.astream_events():
+                    if event.type == "text":
+                        chunks.append(event.chunk)
+                        await _send_sse(
+                            writer, "text_chunk", {"content": event.chunk}
+                        )
+                    elif event.type == "tool_call_args":
+                        await _send_sse(
+                            writer,
+                            "tool_call_args_chunk",
+                            {"content": event.chunk},
+                        )
+            else:
+                async for chunk in response:
+                    chunks.append(chunk)
+                    await _send_sse(writer, "text_chunk", {"content": chunk})
 
             full_text = "".join(chunks)
             if full_text.strip():

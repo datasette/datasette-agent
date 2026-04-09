@@ -184,6 +184,26 @@
   50% { opacity: 1; }
 }
 
+.agent-token-stream {
+  align-self: flex-start;
+  max-width: 85%;
+  height: 3.6em;
+  overflow: hidden;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+}
+
+.agent-token-stream pre {
+  margin: 0;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #999;
+  line-height: 1.2em;
+  white-space: pre;
+}
+
 .agent-thinking {
   align-self: flex-start;
   font-size: 0.85rem;
