@@ -180,8 +180,9 @@ async function sendMessage(conversationId, message) {
 
     function updateThinking() {
       // Show thinking indicator if the stream is still active and
-      // we're not currently streaming text
-      if (streamDone || currentAssistant) {
+      // we're not currently streaming text or tool call args
+      const hasTokenStream = !!document.querySelector(".agent-token-stream");
+      if (streamDone || currentAssistant || hasTokenStream) {
         if (thinkingEl.parentNode) thinkingEl.remove();
       } else {
         if (!thinkingEl.parentNode) {
