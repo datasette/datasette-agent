@@ -1,9 +1,16 @@
 import json
 from datetime import datetime, timezone
 
+import llm
 from datasette_llm import LLM
 
-from .agent import _build_conversation_history, _build_system_prompt, _save_message
+from .agent import (
+    _build_conversation_messages,
+    _build_system_prompt,
+    _save_message,
+    _save_response_parts,
+    _strip_internal_keys,
+)
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
@@ -104,38 +111,35 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
         while not finished_state["called"] and iteration < MAX_ITERATIONS:
             iteration += 1
 
-            # Build system prompt with conversation history
+            # System prompt stays the agent's role + goal; prior turns flow
+            # through as structured messages= below.
             system_prompt = await _build_system_prompt(datasette, actor)
             system_prompt += (
                 f"\n\nYour goal: {goal}\n\n"
                 "You MUST call the mark_finished tool when you have completed your goal. "
                 "Do not stop working until you call mark_finished."
             )
-            history = await _build_conversation_history(db, conversation_id)
-            if history:
-                system_prompt += history
 
-            # Determine the prompt for this iteration
+            # On iterations after the first, save a "keep going" user turn
+            # before rebuilding the message history.
             if iteration == 1:
-                prompt_text = goal
+                current_user_text = goal
             else:
-                # Re-prompt: keep going
-                keep_going_msg = (
+                current_user_text = (
                     f"Keep going. Reminder: your goal is: {goal}. "
                     "You must call mark_finished() when done."
                 )
-                await _save_message(db, conversation_id, "user", content=keep_going_msg)
-                prompt_text = keep_going_msg
-
-            # Tool callbacks - DB only, no SSE
-            async def before_call(tool, tool_call):
                 await _save_message(
-                    db,
-                    conversation_id,
-                    "tool_call",
-                    tool_name=tool_call.name,
-                    tool_arguments=json.dumps(tool_call.arguments),
+                    db, conversation_id, "user", content=current_user_text
                 )
+
+            chain_messages = await _build_conversation_messages(db, conversation_id)
+
+            # Assistant-side rows persist from response.messages below;
+            # before_call is a no-op here. after_call still records
+            # tool_result rows (our own outputs, not in response.messages).
+            async def before_call(tool, tool_call):
+                return None
 
             async def after_call(tool, tool_call, tool_result):
                 output = tool_result.output if tool_result.output else ""
@@ -145,23 +149,15 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     "tool_result",
                     tool_name=tool_result.name,
                     tool_output=output,
+                    tool_call_id=tool_result.tool_call_id,
                 )
-                # Strip keys the LLM shouldn't see
-                try:
-                    parsed = json.loads(output)
-                    if isinstance(parsed, dict):
-                        stripped = {
-                            k: v for k, v in parsed.items() if k not in ("_html", "sql")
-                        }
-                        if stripped != parsed:
-                            tool_result.output = json.dumps(stripped)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                tool_result.output = _strip_internal_keys(output)
 
             llm_tools = make_llm_tools(tools, datasette, actor)
 
             chain_response = model.chain(
-                prompt_text,
+                current_user_text,
+                messages=chain_messages,
                 system=system_prompt,
                 tools=llm_tools,
                 stream=False,
@@ -170,15 +166,9 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             )
 
             async for response in chain_response.responses():
-                chunks = []
-                async for chunk in response:
-                    chunks.append(chunk)
-
-                full_text = "".join(chunks)
-                if full_text.strip():
-                    await _save_message(
-                        db, conversation_id, "assistant", content=full_text
-                    )
+                async for _chunk in response:
+                    pass
+                await _save_response_parts(db, conversation_id, response)
 
         # Determine final status
         if finished_state["called"]:

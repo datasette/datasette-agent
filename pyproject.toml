@@ -12,8 +12,12 @@ requires-python = ">=3.10"
 dependencies = [
     "datasette",
     "datasette-llm",
+    "llm",
     "python-ulid",
 ]
+
+[tool.uv.sources]
+llm = { path = "/Users/simon/dev/llm-refactor/llm", editable = true }
 
 [dependency-groups]
 dev = [

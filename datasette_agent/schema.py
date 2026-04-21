@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS datasette_agent_messages (
     tool_name TEXT,
     tool_arguments TEXT,
     tool_output TEXT,
+    tool_call_id TEXT,
+    provider_metadata TEXT,
+    reasoning_redacted INTEGER,
+    reasoning_token_count INTEGER,
     created_at TEXT NOT NULL
 );
 
@@ -55,3 +59,21 @@ CREATE TABLE IF NOT EXISTS datasette_agent_explorer_reports (
 
 async def ensure_tables(db):
     await db.execute_write_script(SCHEMA_SQL)
+    # Additive migrations for existing databases
+    columns = {
+        row["name"]
+        for row in (
+            await db.execute("PRAGMA table_info(datasette_agent_messages)")
+        ).rows
+    }
+    missing = [
+        ("tool_call_id", "TEXT"),
+        ("provider_metadata", "TEXT"),
+        ("reasoning_redacted", "INTEGER"),
+        ("reasoning_token_count", "INTEGER"),
+    ]
+    for name, type_ in missing:
+        if name not in columns:
+            await db.execute_write(
+                f"ALTER TABLE datasette_agent_messages ADD COLUMN {name} {type_}"
+            )
