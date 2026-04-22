@@ -318,6 +318,60 @@ async def test_describe_table_tool(tmp_path):
     assert result["foreign_keys"][0]["column"] == "author_id"
     assert result["foreign_keys"][0]["other_table"] == "authors"
 
+    bad_db = json.loads(
+        await _describe_table(ds, {"id": "test"}, "nope", "books")
+    )
+    assert bad_db == {
+        "error": "Database 'nope' not found",
+        "available_databases": ["test"],
+    }
+
+    bad_table = json.loads(
+        await _describe_table(ds, {"id": "test"}, "test", "nope")
+    )
+    assert bad_table["error"] == "Table 'nope' not found in database 'test'"
+    assert set(bad_table["available_tables"]) == {"authors", "books"}
+
+
+@pytest.mark.asyncio
+async def test_list_databases_and_tables_shape(tmp_path):
+    import sqlite3
+
+    from datasette_agent.sql_tools import _list_databases_and_tables
+
+    db_path = str(tmp_path / "alpha.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE one (id INTEGER PRIMARY KEY)")
+    conn.execute("CREATE TABLE two (id INTEGER PRIMARY KEY)")
+    conn.close()
+
+    ds = Datasette([db_path])
+    await ds.invoke_startup()
+    result = json.loads(await _list_databases_and_tables(ds, {"id": "test"}))
+    assert result == {
+        "databases": [
+            {"database_name": "alpha", "table_names": ["one", "two"]}
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_sql_query_unknown_database(tmp_path):
+    import sqlite3
+
+    from datasette_agent.sql_tools import _sql_query
+
+    db_path = str(tmp_path / "test.db")
+    sqlite3.connect(db_path).close()
+
+    ds = Datasette([db_path])
+    await ds.invoke_startup()
+    result = json.loads(await _sql_query(ds, {"id": "test"}, "nope", "select 1"))
+    assert result == {
+        "error": "Database 'nope' not found",
+        "available_databases": ["test"],
+    }
+
 
 def test_agent_tools_command():
     from click.testing import CliRunner

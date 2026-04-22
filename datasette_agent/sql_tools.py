@@ -13,7 +13,7 @@ def _get_value(item, key):
 
 
 async def _list_databases_and_tables(datasette, actor):
-    result = {}
+    databases = []
     for db_name, db in datasette.databases.items():
         if db_name.startswith("_"):
             continue
@@ -23,9 +23,10 @@ async def _list_databases_and_tables(datasette, actor):
             actor=actor,
         ):
             continue
-        tables = await db.table_names()
-        result[db_name] = tables
-    return json.dumps(result)
+        databases.append(
+            {"database_name": db_name, "table_names": await db.table_names()}
+        )
+    return json.dumps({"databases": databases})
 
 
 async def _describe_table(datasette, actor, database: str, table: str):
@@ -35,7 +36,27 @@ async def _describe_table(datasette, actor, database: str, table: str):
         actor=actor,
     ):
         return json.dumps({"error": "Permission denied"})
+    if database not in datasette.databases:
+        available = [
+            name
+            for name in datasette.databases
+            if not name.startswith("_")
+        ]
+        return json.dumps(
+            {
+                "error": f"Database '{database}' not found",
+                "available_databases": available,
+            }
+        )
     db = datasette.get_database(database)
+    table_names = await db.table_names()
+    if table not in table_names:
+        return json.dumps(
+            {
+                "error": f"Table '{table}' not found in database '{database}'",
+                "available_tables": table_names,
+            }
+        )
     columns = await db.table_column_details(table)
     foreign_keys = await db.foreign_keys_for_table(table)
     return json.dumps(
@@ -65,6 +86,16 @@ async def _sql_query(datasette, actor, database: str, sql: str):
         actor=actor,
     ):
         return json.dumps({"error": "Permission denied"})
+    if database not in datasette.databases:
+        available = [
+            name for name in datasette.databases if not name.startswith("_")
+        ]
+        return json.dumps(
+            {
+                "error": f"Database '{database}' not found",
+                "available_databases": available,
+            }
+        )
     db = datasette.get_database(database)
     try:
         result = await db.execute(sql, truncate=True)
