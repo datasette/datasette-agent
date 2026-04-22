@@ -26,6 +26,54 @@ function appendMessage(role, content) {
   return contentDiv;
 }
 
+// Reasoning preview: keep the summary to a single-line rolling tail of the
+// most recent reasoning text — strips newlines and collapses whitespace.
+const REASONING_PREVIEW_CHARS = 80;
+
+function reasoningPreview(text) {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= REASONING_PREVIEW_CHARS) return cleaned;
+  return "…" + cleaned.slice(-REASONING_PREVIEW_CHARS);
+}
+
+function startReasoningBlock() {
+  const messages = document.getElementById("messages");
+  const details = document.createElement("details");
+  details.className = "agent-reasoning streaming";
+  const summary = document.createElement("summary");
+  summary.textContent = "Thinking…";
+  details.appendChild(summary);
+  const contentDiv = document.createElement("div");
+  contentDiv.className = "agent-reasoning-content";
+  details.appendChild(contentDiv);
+  messages.appendChild(details);
+  const renderer = smd.default_renderer(contentDiv);
+  const parser = smd.parser(renderer);
+  return { details, summary, contentDiv, parser, rawText: "" };
+}
+
+function appendReasoningChunk(state, chunk) {
+  state.rawText += chunk;
+  smd.parser_write(state.parser, chunk);
+  // Only update the rolling preview while the details is collapsed —
+  // if the user has expanded it, they're reading the full content
+  // and shouldn't see the summary mutate under them.
+  if (!state.details.open) {
+    state.summary.textContent = "Thinking: " + reasoningPreview(state.rawText);
+  }
+}
+
+function endReasoningBlock(state) {
+  if (!state) return;
+  smd.parser_end(state.parser);
+  state.details.classList.remove("streaming");
+  // Final summary text once streaming stops
+  if (!state.details.open) {
+    state.summary.textContent =
+      "Thinking: " + reasoningPreview(state.rawText);
+  }
+}
+
 function startAssistantMessage() {
   const messages = document.getElementById("messages");
   const div = document.createElement("div");
@@ -130,6 +178,14 @@ async function sendMessage(conversationId, message) {
   input.value = "";
 
   let currentAssistant = null;
+  let currentReasoning = null;
+
+  function closeReasoning() {
+    if (currentReasoning) {
+      endReasoningBlock(currentReasoning);
+      currentReasoning = null;
+    }
+  }
 
   try {
     const response = await fetch("/-/agent/" + conversationId + "/stream", {
@@ -152,9 +208,12 @@ async function sendMessage(conversationId, message) {
     let streamDone = false;
 
     function updateThinking() {
-      // Show thinking indicator if the stream is still active and
-      // we're not currently streaming text
-      if (streamDone || currentAssistant) {
+      // Show the "Thinking…" placeholder only while we're waiting for
+      // the first signal — any text, reasoning, or tool activity from
+      // the model supersedes it.
+      const hasActivity =
+        streamDone || currentAssistant || currentReasoning;
+      if (hasActivity) {
         if (thinkingEl.parentNode) thinkingEl.remove();
       } else {
         if (!thinkingEl.parentNode) {
@@ -179,13 +238,21 @@ async function sendMessage(conversationId, message) {
         } else if (line.startsWith("data: ") && eventType) {
           const data = JSON.parse(line.slice(6));
 
-          if (eventType === "text_chunk") {
+          if (eventType === "reasoning_chunk") {
+            if (!currentReasoning) {
+              currentReasoning = startReasoningBlock();
+            }
+            appendReasoningChunk(currentReasoning, data.content);
+            scrollToBottom();
+          } else if (eventType === "text_chunk") {
+            closeReasoning();
             if (!currentAssistant) {
               currentAssistant = startAssistantMessage();
             }
             smd.parser_write(currentAssistant.parser, data.content);
             scrollToBottom();
           } else if (eventType === "tool_call") {
+            closeReasoning();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -195,12 +262,14 @@ async function sendMessage(conversationId, message) {
             appendToolResult(data.name, data.output);
           } else if (eventType === "done") {
             streamDone = true;
+            closeReasoning();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
             }
           } else if (eventType === "error") {
             streamDone = true;
+            closeReasoning();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -216,11 +285,13 @@ async function sendMessage(conversationId, message) {
       updateThinking();
     }
 
-    // Ensure parser is ended if stream closes without done event
+    // Ensure parsers are ended if stream closes without done event
+    closeReasoning();
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
     }
   } catch (err) {
+    closeReasoning();
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
     }
@@ -244,6 +315,23 @@ document.querySelectorAll(".agent-message-assistant .agent-message-content").for
   const parser = smd.parser(renderer);
   smd.parser_write(parser, raw);
   smd.parser_end(parser);
+});
+
+// Render existing reasoning blocks as markdown + set the rolling summary preview
+document.querySelectorAll(".agent-reasoning").forEach(details => {
+  const contentEl = details.querySelector(".agent-reasoning-content");
+  if (!contentEl) return;
+  const raw = contentEl.textContent;
+  if (!raw) return;
+  contentEl.textContent = "";
+  const renderer = smd.default_renderer(contentEl);
+  const parser = smd.parser(renderer);
+  smd.parser_write(parser, raw);
+  smd.parser_end(parser);
+  const summary = details.querySelector("summary");
+  if (summary) {
+    summary.textContent = "Thinking: " + reasoningPreview(raw);
+  }
 });
 
 // Wire up form

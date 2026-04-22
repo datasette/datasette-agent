@@ -1,6 +1,6 @@
 [project]
 name = "datasette-agent"
-version = "0.0.3"
+version = "0.0.4"
 description = "An LLM-powered agent assistant for Datasette"
 readme = "README.md"
 authors = [{name = "Simon Willison"}]
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-llm = { path = "/Users/simon/dev/llm-refactor/llm", editable = true }
+llm = { url = "https://static.simonwillison.net/static/2026/llm-0.31a0.dev0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

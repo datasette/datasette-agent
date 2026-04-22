@@ -350,8 +350,16 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         )
 
         async for response in chain_response.responses():
-            async for chunk in response:
-                await _send_sse(writer, "text_chunk", {"content": chunk})
+            async for event in response.astream_events():
+                if event.type == "text":
+                    await _send_sse(writer, "text_chunk", {"content": event.chunk})
+                elif event.type == "reasoning":
+                    await _send_sse(
+                        writer, "reasoning_chunk", {"content": event.chunk}
+                    )
+                # Other event types (tool_call_name, tool_call_args,
+                # tool_result) are surfaced via before_call / after_call
+                # once the chain framework invokes them.
             # response.messages is now populated with the assembled Parts
             # (text + reasoning + tool calls) including provider_metadata.
             # Persist them here so signatures round-trip on the next turn.

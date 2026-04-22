@@ -54,6 +54,11 @@
         <div class="agent-message agent-message-assistant">
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
+        {% elif msg.role == "reasoning" and msg.content %}
+        <details class="agent-reasoning">
+          <summary>Thinking</summary>
+          <div class="agent-reasoning-content">{{ msg.content }}</div>
+        </details>
         {% endif %}
       {% endif %}
     {% endfor %}

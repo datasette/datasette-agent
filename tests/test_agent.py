@@ -203,6 +203,57 @@ async def test_messages_persisted(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_reasoning_streams_and_persists(tmp_path):
+    """Reasoning tokens from the model should stream via SSE as
+    'reasoning_chunk' events and persist as role='reasoning' rows."""
+    ds = Datasette(
+        memory=True,
+        metadata={
+            "plugins": {"datasette-llm": {"default_model": "thinking-echo"}}
+        },
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hi"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    response = await ds.client.post(
+        f"/-/agent/{conversation_id}/stream",
+        content=json.dumps({"message": "Explain it"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+
+    events = _parse_sse(response.text)
+    reasoning = [e for e in events if e["event"] == "reasoning_chunk"]
+    assert reasoning, "expected at least one reasoning_chunk SSE event"
+    # The thinking-echo model emits two reasoning chunks + one text chunk
+    joined = "".join(e["data"]["content"] for e in reasoning)
+    assert "First I consider" in joined
+    assert "then I decide" in joined
+
+    db = ds.get_internal_database()
+    rows = (
+        await db.execute(
+            "SELECT role, content FROM datasette_agent_messages "
+            "WHERE conversation_id = ? ORDER BY id",
+            [conversation_id],
+        )
+    ).rows
+    reasoning_rows = [r for r in rows if r["role"] == "reasoning"]
+    assert reasoning_rows, "expected a role='reasoning' row to be persisted"
+    assert "First I consider" in reasoning_rows[0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_conversation_title_auto_set(datasette_instance, cookies):
     ds = datasette_instance
 

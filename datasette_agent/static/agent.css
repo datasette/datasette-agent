@@ -192,6 +192,75 @@
   animation: pulse 1s ease-in-out infinite;
 }
 
+.agent-reasoning {
+  align-self: flex-start;
+  max-width: 85%;
+  font-size: 0.85rem;
+  color: #666;
+  border-left: 2px solid #ddd;
+  padding: 0.1rem 0 0.1rem 0.6rem;
+}
+
+.agent-reasoning > summary {
+  cursor: pointer;
+  list-style: none;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.agent-reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-reasoning > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s;
+  font-size: 0.8em;
+  color: #aaa;
+}
+
+.agent-reasoning[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.agent-reasoning.streaming > summary {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.agent-reasoning-content {
+  font-size: 0.85rem;
+  color: #555;
+  margin-top: 0.35rem;
+  line-height: 1.45;
+}
+
+.agent-reasoning-content p {
+  margin: 0.35em 0;
+}
+
+.agent-reasoning-content p:first-child { margin-top: 0; }
+.agent-reasoning-content p:last-child { margin-bottom: 0; }
+
+.agent-reasoning-content pre {
+  background: #f5f5f5;
+  border-radius: 3px;
+  padding: 0.4rem;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  margin: 0.35em 0;
+}
+
+.agent-reasoning-content code {
+  background: #f0f0f0;
+  border-radius: 2px;
+  padding: 0.05em 0.25em;
+  font-size: 0.9em;
+}
+
 .agent-tool-call pre,
 .agent-tool-result pre {
   margin: 0.5rem 0 0;
