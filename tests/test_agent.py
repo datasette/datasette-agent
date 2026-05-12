@@ -58,6 +58,26 @@ async def test_system_prompt_documents_display_modes(datasette_instance):
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_warns_against_repeating_rendered_tables(
+    datasette_instance,
+):
+    """When a sql_query result is rendered to the user via `both` or
+    `user`, the model must not also paste the rows back as a markdown
+    table — that's redundant noise. The prompt has to call this out
+    explicitly, otherwise models default to summarizing what they just
+    showed."""
+    from datasette_agent.agent import _build_system_prompt
+
+    prompt = await _build_system_prompt(datasette_instance, {"id": "user"})
+    lowered = prompt.lower()
+    # We don't pin exact wording — just that the prompt contains both
+    # the "don't repeat" instruction and a reference to the rendered
+    # table so the model can connect the two.
+    assert "repeat" in lowered or "restate" in lowered or "duplicate" in lowered
+    assert "table" in lowered
+
+
+@pytest.mark.asyncio
 async def test_agent_permission_denied(datasette_instance):
     response = await datasette_instance.client.get("/-/agent")
     assert response.status_code == 403

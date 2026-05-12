@@ -43,7 +43,14 @@ async def _build_system_prompt(datasette, actor):
         "column names and row_count, not the rows themselves. Pick this "
         'for "show me…", "list the…", or "what are the top…" requests '
         "where the user wants to read the data and you don't need to "
-        "summarize the contents. This saves tokens on bulk fetches."
+        "summarize the contents. This saves tokens on bulk fetches.\n\n"
+        "When you use `both` or `user`, the rendered table IS your answer "
+        "for that data — do NOT then repeat the same rows as a markdown "
+        "table or bullet list in your text. The user already sees the "
+        "table inline. Your text response should add value the table "
+        "doesn't: a one-line takeaway, a caveat, a follow-up suggestion, "
+        "or just a brief framing sentence. If there's nothing to add, "
+        "say nothing."
     ]
     db_info = {}
     for db_name, db in datasette.databases.items():
