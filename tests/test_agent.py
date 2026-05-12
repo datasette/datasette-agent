@@ -39,6 +39,25 @@ async def test_plugin_is_installed():
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_documents_display_modes(datasette_instance):
+    """The system prompt must steer the model toward the right `display`
+    mode on sql_query — otherwise it'll default to `model` everywhere and
+    the user never sees rendered tables."""
+    from datasette_agent.agent import _build_system_prompt
+
+    prompt = await _build_system_prompt(datasette_instance, {"id": "user"})
+    lowered = prompt.lower()
+    # All three modes must be named so the model knows the menu.
+    assert "display" in lowered
+    assert '"model"' in lowered or "`model`" in lowered
+    assert '"both"' in lowered or "`both`" in lowered
+    assert '"user"' in lowered or "`user`" in lowered
+    # And the prompt should mention show-me / table rendering as the
+    # trigger for picking a non-default mode.
+    assert "show" in lowered or "render" in lowered or "table" in lowered
+
+
+@pytest.mark.asyncio
 async def test_agent_permission_denied(datasette_instance):
     response = await datasette_instance.client.get("/-/agent")
     assert response.status_code == 403

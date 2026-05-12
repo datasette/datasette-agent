@@ -30,7 +30,20 @@ async def _build_system_prompt(datasette, actor):
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
         "them from being interpreted as italic markers. "
-        "This is not necessary inside backtick code spans like `table_name`."
+        "This is not necessary inside backtick code spans like `table_name`.\n\n"
+        "When you call sql_query, pick a `display` mode for the result:\n"
+        "- `model` (default): rows come back to you only. Pick this when "
+        "you need to reason over the numbers but won't be quoting them "
+        "back to the user verbatim (e.g. counting rows before a join, "
+        "checking a value to decide what to query next).\n"
+        '- `both`: rows come back to you AND a rendered table is shown to '
+        "the user. Pick this whenever your answer will reference specific "
+        "data — the user gets the table inline, you get to comment on it.\n"
+        "- `user`: a rendered table is shown to the user; you only see "
+        "column names and row_count, not the rows themselves. Pick this "
+        'for "show me…", "list the…", or "what are the top…" requests '
+        "where the user wants to read the data and you don't need to "
+        "summarize the contents. This saves tokens on bulk fetches."
     ]
     db_info = {}
     for db_name, db in datasette.databases.items():
