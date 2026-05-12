@@ -17,7 +17,17 @@ datasette install datasette-agent
 
 Visit `/-/agent` to start a conversation with the chat assistant.
 
+The agent uses [datasette-llm](https://github.com/datasette/datasette-llm) to call language models. Configure a default model for it before visiting `/-/agent`, for example in `datasette.yml`:
+
+```yaml
+plugins:
+  datasette-llm:
+    default_model: gpt-5.4-mini
+```
+
 The "Explore with AI agent" entries that appear in the database and table action menus launch a background agent that explores the selected database or table and writes a report. Reports live under `/-/agent/explore/`.
+
+Visit `/-/agent/background` to launch background agents directly. Each one is given a goal and runs toward it without further input. The listing includes a Stop button for cancelling agents that are still running.
 
 ### Permissions
 
@@ -82,7 +92,7 @@ async def my_tool_handler(datasette, actor, query, style=None):
     })
 ```
 
-To render rich HTML inline in the chat UI, include an `_html` key in the returned JSON. The HTML will be displayed to the user, while the remaining keys are passed to the LLM as the tool result (the `_html` key is stripped before the LLM sees it):
+To render rich HTML inline in the chat UI, include an `_html` key in the returned JSON. Any top-level key whose name starts with `_` is removed before the tool result is sent to the LLM, so the HTML is shown to the user but not passed back to the model:
 
 ```python
 return json.dumps({
@@ -93,7 +103,7 @@ return json.dumps({
 
 ## Rendering custom HTML from tools
 
-Tool plugins can render rich HTML inline in the chat UI by returning a JSON object with an `_html` key. The HTML will be rendered directly in the conversation, while the remaining keys are passed back to the LLM as the tool result (the `_html` and `sql` keys are stripped before the LLM sees them, so it won't parrot back raw HTML or SQL).
+Tool plugins can render rich HTML inline in the chat UI by returning a JSON object with an `_html` key. The HTML is rendered directly in the conversation. The remaining keys are returned to the LLM as the tool result, with any key whose name starts with `_` removed first.
 
 Example tool implementation:
 
@@ -115,7 +125,7 @@ async def _render_widget(datasette, actor, database, sql):
     })
 ```
 
-The `_html` value is inserted into the chat as raw HTML, so it can include custom elements, scripts, and styles. The remaining keys (`summary` in this example) are what the LLM receives as the tool result to inform its next response.
+The `_html` value is inserted into the chat as raw HTML, so it can include custom elements, scripts, and styles. The other keys (`database`, `sql`, and `summary` in this example) are what the LLM receives as the tool result.
 
 ### Example plugins
 
