@@ -162,16 +162,18 @@ datasette agent tools --json
 
 ## Development
 
-To set up this plugin locally, first checkout the code. You can confirm it is available like this:
+To set up this plugin locally, first checkout the code. Run the tests like this:
 ```bash
 cd datasette-agent
-# Confirm the plugin is visible
-uv run datasette plugins
-```
-To run the tests:
-```bash
 uv run pytest
 ```
+To run the development server with a persistent internal database and GPT-5.5 as the model:
+```bash
+uv run datasette --internal internal.db \
+  --root --secret 1 \
+  -s plugins.datasette-llm.default_model gpt-5.5
+```
+Add extra database files to that command to enable the agent to query them.
 
 ## Credits
 
