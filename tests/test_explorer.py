@@ -568,3 +568,101 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
     assert f"/-/agent/explore/report/{tbl_report_id}" in response.text
     # Table-scoped report should show table name
     assert "users" in response.text
+
+
+# --- Live refresh of the explorer listing page ---
+
+
+async def _insert_report(db, conversation_id, agent_id, report_id, status, *,
+                          final_message=None, error=None, content=""):
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Background: x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, final_message, error, "
+        "created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, "user", "Explore test_db", status,
+         final_message, error, now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_explorer_reports "
+        "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [report_id, agent_id, "user", "test_db", content, now, now],
+    )
+
+
+@pytest.mark.asyncio
+async def test_explorer_listing_marks_running_rows_for_polling(
+    datasette_instance, cookies
+):
+    """A running report on the listing page must be tagged so the page can
+    target it for live refresh."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    await _insert_report(
+        db,
+        "01ARZ3NDEKTSV4RRFFQ69POLL1",
+        "01ARZ3NDEKTSV4RRFFQ69POLL2",
+        "01ARZ3NDEKTSV4RRFFQ69POLL3",
+        "running",
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # The running row's <div> carries a data attribute reflecting its live
+    # status so JS can locate it without re-templating.
+    assert '<div class="explorer-report"' in response.text
+    assert 'data-agent-status="running"' in response.text
+    # The page polls the per-report status endpoint
+    assert "/-/agent/api/explore/" in response.text
+
+
+@pytest.mark.asyncio
+async def test_explorer_listing_does_not_poll_terminal_rows(
+    datasette_instance, cookies
+):
+    """Completed and errored reports should not be marked for polling; the
+    listing JS should only target running/pending."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    await _insert_report(
+        db,
+        "01ARZ3NDEKTSV4RRFFQ69DONE01",
+        "01ARZ3NDEKTSV4RRFFQ69DONE02",
+        "01ARZ3NDEKTSV4RRFFQ69DONE03",
+        "completed",
+        final_message="all good",
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # The actual report <div> must reflect the terminal status; no row
+    # marked running/pending means the polling loop has nothing to do.
+    import re
+
+    div_attrs = re.findall(
+        r'<div class="explorer-report"[^>]*>', response.text
+    )
+    assert div_attrs
+    for attrs in div_attrs:
+        assert 'data-agent-status="completed"' in attrs
+        assert 'data-agent-status="running"' not in attrs
+        assert 'data-agent-status="pending"' not in attrs

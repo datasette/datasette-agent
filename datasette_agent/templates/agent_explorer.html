@@ -19,7 +19,7 @@
 {% if reports %}
 <h2>Reports</h2>
 {% for report in reports %}
-<div class="explorer-report" data-report-id="{{ report.id }}">
+<div class="explorer-report" data-report-id="{{ report.id }}" data-agent-status="{{ report.agent_status or 'pending' }}">
   <h3>
     <span class="agent-status agent-status-{{ report.agent_status or 'pending' }}">
       {{ report.agent_status or 'pending' }}
@@ -28,11 +28,13 @@
     {% if report.table_name and not table_name %}<span class="explorer-report-table">table: {{ report.table_name }}</span>{% endif %}
     {% if report.extra_prompt %}<em> &mdash; {{ report.extra_prompt }}</em>{% endif %}
   </h3>
-  {% if report.agent_error %}
-  <p class="explorer-report-error"><strong>Error:</strong> {{ report.agent_error }}</p>
-  {% elif report.agent_final_message %}
-  <p class="explorer-report-message">{{ report.agent_final_message }}</p>
-  {% endif %}
+  <div class="explorer-report-result">
+    {% if report.agent_error %}
+    <p class="explorer-report-error"><strong>Error:</strong> {{ report.agent_error }}</p>
+    {% elif report.agent_final_message %}
+    <p class="explorer-report-message">{{ report.agent_final_message }}</p>
+    {% endif %}
+  </div>
 </div>
 {% endfor %}
 {% endif %}
@@ -67,5 +69,53 @@ document.getElementById("explore-form").addEventListener("submit", async (e) => 
     alert("Error: " + err.message);
   }
 });
+
+// Live-refresh any report rows still pending/running so the user sees the
+// agent finish without manually reloading. On terminal transition we do
+// one full page reload to pick up server-rendered final_message / error.
+function activeReportRows() {
+  return document.querySelectorAll(
+    '.explorer-report[data-agent-status="running"], ' +
+    '.explorer-report[data-agent-status="pending"]'
+  );
+}
+
+async function pollExplorerListing() {
+  const active = activeReportRows();
+  if (active.length === 0) return;
+  let sawTerminal = false;
+  await Promise.all(Array.from(active).map(async (row) => {
+    const reportId = row.dataset.reportId;
+    try {
+      const resp = await fetch(`/-/agent/api/explore/${reportId}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const status = data.agent_status || "pending";
+      if (status === row.dataset.agentStatus) return;
+      row.dataset.agentStatus = status;
+      const badge = row.querySelector(".agent-status");
+      if (badge) {
+        badge.textContent = status;
+        badge.className = `agent-status agent-status-${status}`;
+      }
+      if (status === "completed" || status === "error") {
+        sawTerminal = true;
+      }
+    } catch (err) {
+      // Transient network errors are ignored; the next tick will retry.
+    }
+  }));
+  if (sawTerminal) {
+    window.location.reload();
+    return;
+  }
+  if (activeReportRows().length > 0) {
+    setTimeout(pollExplorerListing, 2000);
+  }
+}
+
+if (activeReportRows().length > 0) {
+  setTimeout(pollExplorerListing, 2000);
+}
 </script>
 {% endblock %}
