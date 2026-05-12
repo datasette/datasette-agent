@@ -138,10 +138,65 @@
 
 .agent-rich-result {
   max-width: calc(100% - 2em);
+  overflow-x: auto;
 }
 
 .agent-rich-result iframe {
   max-height: 800px;
+}
+
+.agent-sql-result {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.agent-sql-result thead th {
+  background: #f3f4f6;
+  color: #24292f;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid #d0d7de;
+  white-space: nowrap;
+}
+
+.agent-sql-result tbody td {
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid #eaecef;
+  vertical-align: top;
+  max-width: 28em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-sql-result tbody tr:nth-child(even) td {
+  background: #f9fafb;
+}
+
+.agent-sql-result tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.agent-sql-result tbody td:hover {
+  white-space: normal;
+  word-break: break-word;
+  background: #fffbea;
+}
+
+.agent-sql-result tfoot td {
+  padding: 0.3rem 0.6rem;
+  font-style: italic;
+  color: #666;
+  background: #f3f4f6;
+  border-top: 1px solid #d0d7de;
 }
 
 .agent-tool-group {
