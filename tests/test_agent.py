@@ -144,6 +144,168 @@ async def test_conversation_page_hides_chat_form_for_background_agent(
     assert 'id="send-btn"' not in response.text
 
 
+async def _insert_background_conversation(
+    datasette_instance,
+    conversation_id,
+    agent_id,
+    status="running",
+    actor_id="user",
+    n_messages=0,
+):
+    from datasette_agent.schema import ensure_tables
+    from datetime import datetime, timezone
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    # Trigger Datasette startup (and our reconcile hook) first so the row
+    # we're about to insert doesn't get flipped to error.
+    await datasette_instance.invoke_startup()
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, actor_id, "Background: x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, actor_id, "g", status, now, now],
+    )
+    for i in range(n_messages):
+        await db.execute_write(
+            "INSERT INTO agent_messages "
+            "(conversation_id, role, message_json, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            [
+                conversation_id,
+                "user" if i == 0 else "assistant",
+                json.dumps(
+                    {
+                        "role": "user" if i == 0 else "assistant",
+                        "parts": [{"type": "text", "text": f"m{i}"}],
+                    }
+                ),
+                now,
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_conversation_poll_returns_status_and_count(
+    datasette_instance, cookies
+):
+    """The poll endpoint is the heartbeat the conversation page uses to
+    decide when to reload — it must report current background-agent
+    status and message count."""
+    await _insert_background_conversation(
+        datasette_instance,
+        "01POLLCONVAAAAAAAAAAAAAAAA",
+        "01POLLAGENTAAAAAAAAAAAAAAA",
+        status="running",
+        n_messages=3,
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/01POLLCONVAAAAAAAAAAAAAAAA/poll",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_status"] == "running"
+    assert data["message_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_conversation_poll_user_chat_has_null_agent_status(
+    datasette_instance, cookies
+):
+    """For a normal user chat (no linked background agent), agent_status
+    is null so the client knows there's nothing to poll for."""
+    resp = await datasette_instance.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}/poll",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agent_status"] is None
+    assert data["message_count"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_conversation_poll_requires_permission(datasette_instance):
+    await _insert_background_conversation(
+        datasette_instance,
+        "01POLLAUTHCONVAAAAAAAAAAAA",
+        "01POLLAUTHAGENTAAAAAAAAAAA",
+    )
+    response = await datasette_instance.client.get(
+        "/-/agent/01POLLAUTHCONVAAAAAAAAAAAA/poll"
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_conversation_poll_not_found(datasette_instance, cookies):
+    response = await datasette_instance.client.get(
+        "/-/agent/01POLLNOPECONVAAAAAAAAAAAA/poll",
+        cookies=cookies,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_background_conversation_page_includes_poll_url(
+    datasette_instance, cookies
+):
+    """The conversation page for a background agent must expose the poll
+    URL as a data attribute so the client knows to live-refresh."""
+    await _insert_background_conversation(
+        datasette_instance,
+        "01POLLPAGECONVAAAAAAAAAAAA",
+        "01POLLPAGEAGENTAAAAAAAAAAA",
+        status="running",
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/01POLLPAGECONVAAAAAAAAAAAA",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    assert "/-/agent/01POLLPAGECONVAAAAAAAAAAAA/poll" in response.text
+    assert 'data-poll-url=' in response.text
+
+
+@pytest.mark.asyncio
+async def test_user_conversation_page_does_not_include_poll_url(
+    datasette_instance, cookies
+):
+    """User-chat conversation pages stream via SSE on send — they should
+    NOT advertise a poll URL since there is no autonomous loop to track."""
+    resp = await datasette_instance.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    assert 'data-poll-url=' not in response.text
+
+
 @pytest.mark.asyncio
 async def test_conversation_not_found(datasette_instance, cookies):
     response = await datasette_instance.client.get(

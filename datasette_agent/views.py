@@ -111,6 +111,52 @@ async def agent_conversation(request, datasette):
     )
 
 
+async def agent_conversation_poll(request, datasette):
+    """Lightweight heartbeat for the conversation page.
+
+    Returns the live status of the linked background agent (null for user
+    chats) plus the current message count, so the client can decide
+    when new content has arrived and reload.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    background_agent = (
+        await db.execute(
+            "SELECT status FROM agent_background_agents WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).first()
+    count_row = (
+        await db.execute(
+            "SELECT count(*) as c FROM agent_messages WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).first()
+
+    return Response.json(
+        {
+            "agent_status": background_agent["status"] if background_agent else None,
+            "message_count": count_row["c"] if count_row else 0,
+        }
+    )
+
+
 async def agent_conversation_markdown(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
