@@ -424,3 +424,100 @@ async def test_notification_prepended_to_user_message(datasette_instance, cookie
     first = json.loads(messages[0]["message_json"])
     user_text = "".join(p["text"] for p in first["parts"] if p.get("type") == "text")
     assert "[Background agent ABC completed]" in user_text
+
+
+# --- Reconcile orphaned running rows on startup ---
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_running_rows_as_error(datasette_instance):
+    """Rows left in pending/running by a previous process must be marked
+    error on startup — otherwise the row sits as `running` forever and the
+    explorer report page spins indefinitely."""
+    from datasette_agent.api import reconcile_running_agents
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    rows = [
+        ("01ORPHAN_RUNNING_AAAAAAAAA0", "running"),
+        ("01ORPHAN_PENDING_AAAAAAAAA0", "pending"),
+        ("01DONE_COMPLETED_AAAAAAAAA0", "completed"),
+        ("01DONE_ERROR_AAAAAAAAAAAAA0", "error"),
+    ]
+    for agent_id, status in rows:
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [f"conv_{agent_id}", "user", "x", now, now],
+        )
+        await db.execute_write(
+            "INSERT INTO agent_background_agents "
+            "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [agent_id, f"conv_{agent_id}", "user", "g", status, now, now],
+        )
+
+    await reconcile_running_agents(datasette_instance)
+
+    statuses = {
+        row["id"]: (row["status"], row["error"])
+        for row in (
+            await db.execute("SELECT id, status, error FROM agent_background_agents")
+        ).rows
+    }
+    assert statuses["01ORPHAN_RUNNING_AAAAAAAAA0"][0] == "error"
+    assert "restart" in (statuses["01ORPHAN_RUNNING_AAAAAAAAA0"][1] or "").lower()
+    assert statuses["01ORPHAN_PENDING_AAAAAAAAA0"][0] == "error"
+    assert "restart" in (statuses["01ORPHAN_PENDING_AAAAAAAAA0"][1] or "").lower()
+    # Already-terminal rows are untouched
+    assert statuses["01DONE_COMPLETED_AAAAAAAAA0"] == ("completed", None)
+    assert statuses["01DONE_ERROR_AAAAAAAAAAAAA0"][0] == "error"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_runs_on_datasette_startup(datasette_instance, cookies):
+    """The reconcile pass must be wired into Datasette's startup hook so a
+    process restart automatically cleans up orphans without the caller
+    having to remember."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ["conv_startup_orphan", "user", "x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            "01STARTUP_ORPHAN_AAAAAAAAA0",
+            "conv_startup_orphan",
+            "user",
+            "g",
+            "running",
+            now,
+            now,
+        ],
+    )
+
+    # Hitting any URL triggers Datasette.invoke_startup() once.
+    await datasette_instance.client.get("/-/agent/background", cookies=cookies)
+
+    row = (
+        await db.execute(
+            "SELECT status, error FROM agent_background_agents WHERE id = ?",
+            ["01STARTUP_ORPHAN_AAAAAAAAA0"],
+        )
+    ).first()
+    assert row["status"] == "error"
+    assert "restart" in (row["error"] or "").lower()

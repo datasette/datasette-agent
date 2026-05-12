@@ -74,6 +74,25 @@ async def start_background_agent(
     return agent_id
 
 
+async def reconcile_running_agents(datasette):
+    """Mark any agent rows left in pending/running as error.
+
+    Background agent tasks live only in process memory (in
+    datasette._background_agent_tasks), so a Datasette restart abandons
+    every in-flight run. Without this pass, those rows stay marked
+    running forever and the explorer report page spins indefinitely.
+    """
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "UPDATE agent_background_agents "
+        "SET status = 'error', error = ?, updated_at = ? "
+        "WHERE status IN ('pending', 'running')",
+        ["Interrupted by Datasette restart", now],
+    )
+
+
 async def get_background_agent_status(datasette, agent_id):
     """Get the status of a background agent.
 

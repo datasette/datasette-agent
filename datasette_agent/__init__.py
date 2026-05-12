@@ -65,6 +65,16 @@ def skip_csrf(scope):
 
 
 @hookimpl
+def startup(datasette):
+    from .api import reconcile_running_agents
+
+    async def inner():
+        await reconcile_running_agents(datasette)
+
+    return inner
+
+
+@hookimpl
 def register_llm_purposes(datasette):
     from datasette_llm import Purpose
 
