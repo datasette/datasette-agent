@@ -181,10 +181,12 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             status = "error"
 
         now = datetime.now(timezone.utc).isoformat()
+        # Guard with status='running' so a natural-completion write loses
+        # to a cancel write that already flipped the row to 'error'.
         await db.execute_write(
             "UPDATE agent_background_agents "
             "SET status = ?, final_message = ?, error = ?, updated_at = ? "
-            "WHERE id = ?",
+            "WHERE id = ? AND status = 'running'",
             [status, final_message, error, now, agent_id],
         )
 

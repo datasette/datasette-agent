@@ -521,3 +521,236 @@ async def test_reconcile_runs_on_datasette_startup(datasette_instance, cookies):
     ).first()
     assert row["status"] == "error"
     assert "restart" in (row["error"] or "").lower()
+
+
+# --- Cancel / stop a running background agent ---
+
+
+async def _prime_startup(datasette):
+    """Trigger Datasette's startup hook (and our reconcile pass) so it
+    doesn't fire later and clobber rows the test just inserted."""
+    await datasette.invoke_startup()
+
+
+async def _insert_running_agent(db, agent_id, actor_id="user"):
+    """Insert a running agent_background_agents row + its conversation."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = f"conv_{agent_id}"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, actor_id, "Background: x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, actor_id, "g", "running", now, now],
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_marks_row_as_error(datasette_instance, cookies):
+    """Posting to the cancel endpoint flips the row to status=error with a
+    'Cancelled by user' marker so the listing page reflects the cancel
+    even when no in-process task exists (e.g. after a restart)."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    await _prime_startup(datasette_instance)
+    agent_id = "01CANCELDBAAAAAAAAAAAAAAAA"
+    await _insert_running_agent(db, agent_id)
+
+    response = await datasette_instance.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+
+    row = (
+        await db.execute(
+            "SELECT status, error FROM agent_background_agents WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    assert row["status"] == "error"
+    assert "cancel" in (row["error"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_requires_permission(datasette_instance):
+    """Without datasette-agent permission the cancel endpoint must reject."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    await _prime_startup(datasette_instance)
+    agent_id = "01CANCELAUTHAAAAAAAAAAAAAA"
+    await _insert_running_agent(db, agent_id)
+
+    response = await datasette_instance.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel"
+    )
+    assert response.status_code == 403
+
+    row = (
+        await db.execute(
+            "SELECT status FROM agent_background_agents WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    assert row["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_unknown_agent(datasette_instance, cookies):
+    response = await datasette_instance.client.post(
+        "/-/agent/api/background/01NOSUCHAGENTAAAAAAAAAAAAA/cancel",
+        cookies=cookies,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_other_actor_forbidden(datasette_instance):
+    """An actor cannot cancel another actor's background agent."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    await _prime_startup(datasette_instance)
+    agent_id = "01CANCELOTHERAAAAAAAAAAAAA"
+    await _insert_running_agent(db, agent_id, actor_id="alice")
+
+    cookies = {"ds_actor": datasette_instance.client.actor_cookie({"id": "user"})}
+    response = await datasette_instance.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel",
+        cookies=cookies,
+    )
+    assert response.status_code == 403
+
+    row = (
+        await db.execute(
+            "SELECT status FROM agent_background_agents WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    assert row["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_no_op_on_completed(datasette_instance, cookies):
+    """Cancelling an already-completed agent does not overwrite its result."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    agent_id = "01CANCELDONEAAAAAAAAAAAAAA"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [f"conv_{agent_id}", "user", "x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, final_message, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, f"conv_{agent_id}", "user", "g", "completed", "done", now, now],
+    )
+
+    response = await datasette_instance.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel",
+        cookies=cookies,
+    )
+    # Endpoint should accept the request but treat it as a no-op
+    assert response.status_code in (200, 409)
+
+    row = (
+        await db.execute(
+            "SELECT status, final_message, error FROM agent_background_agents "
+            "WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    assert row["status"] == "completed"
+    assert row["final_message"] == "done"
+    assert row["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_background_index_shows_stop_button_for_active_agents(
+    datasette_instance, cookies
+):
+    """Running/pending agents render a Stop button wired to the cancel
+    endpoint; terminal agents do not."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    await _prime_startup(datasette_instance)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    running_id = "01CANCELUIRUNAAAAAAAAAAAAA"
+    done_id = "01CANCELUIDONEAAAAAAAAAAAA"
+    for agent_id, status in [(running_id, "running"), (done_id, "completed")]:
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [f"conv_{agent_id}", "user", "x", now, now],
+        )
+        await db.execute_write(
+            "INSERT INTO agent_background_agents "
+            "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [agent_id, f"conv_{agent_id}", "user", "g", status, now, now],
+        )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/background",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    assert f'data-cancel-id="{running_id}"' in response.text
+    assert f'data-cancel-id="{done_id}"' not in response.text
+
+
+@pytest.mark.asyncio
+async def test_cancel_endpoint_cancels_in_flight_task(datasette_instance, cookies):
+    """If there is a live asyncio task on datasette._background_agent_tasks
+    for the agent, cancel() must be invoked on it so the task actually
+    stops, not just the DB row."""
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    await _prime_startup(datasette_instance)
+    agent_id = "01CANCELTASKAAAAAAAAAAAAAA"
+    await _insert_running_agent(db, agent_id)
+
+    # Stub a long-running task on the datasette instance so we can verify
+    # the cancel endpoint reaches into _background_agent_tasks.
+    async def _never_finish():
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
+
+    task = asyncio.get_event_loop().create_task(_never_finish())
+    datasette_instance._background_agent_tasks = {agent_id: task}
+
+    response = await datasette_instance.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+
+    for _ in range(40):
+        if task.done():
+            break
+        await asyncio.sleep(0.02)
+    assert task.cancelled()
+
+    row = (
+        await db.execute(
+            "SELECT status, error FROM agent_background_agents WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    assert row["status"] == "error"
+    assert "cancel" in (row["error"] or "").lower()

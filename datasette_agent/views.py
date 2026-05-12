@@ -269,6 +269,55 @@ async def api_background_agent_status(request, datasette):
     return Response.json(dict(row))
 
 
+async def api_cancel_background_agent(request, datasette):
+    """Cancel a pending/running background agent.
+
+    Idempotent for already-terminal rows: returns 200 with cancelled=false
+    so the caller can refresh and see the existing result.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    agent_id = request.url_vars["agent_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT actor_id, status FROM agent_background_agents WHERE id = ?",
+            [agent_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    if row["status"] in ("completed", "error"):
+        return Response.json(
+            {"agent_id": agent_id, "status": row["status"], "cancelled": False}
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "UPDATE agent_background_agents "
+        "SET status = 'error', error = ?, updated_at = ? "
+        "WHERE id = ? AND status IN ('pending', 'running')",
+        ["Cancelled by user", now, agent_id],
+    )
+
+    task = getattr(datasette, "_background_agent_tasks", {}).get(agent_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    return Response.json(
+        {"agent_id": agent_id, "status": "error", "cancelled": True}
+    )
+
+
 async def explorer_page(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()

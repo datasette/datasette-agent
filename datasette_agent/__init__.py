@@ -31,6 +31,10 @@ def register_routes():
             views.api_background_agent_status,
         ),
         (
+            r"^/-/agent/api/background/(?P<agent_id>[A-Za-z0-9]{26})/cancel$",
+            views.api_cancel_background_agent,
+        ),
+        (
             r"^/-/agent/explore/report/(?P<report_id>[A-Za-z0-9]{26})$",
             views.explorer_report_page,
         ),

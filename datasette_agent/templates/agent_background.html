@@ -25,15 +25,21 @@
       <th>Status</th>
       <th>Created</th>
       <th>Result</th>
+      <th></th>
     </tr>
   </thead>
   <tbody>
     {% for agent in agents %}
-    <tr>
+    <tr data-agent-id="{{ agent.id }}" data-agent-status="{{ agent.status }}">
       <td><a href="/-/agent/{{ agent.conversation_id }}">{{ agent.goal[:100] }}{% if agent.goal|length > 100 %}...{% endif %}</a></td>
       <td><span class="agent-status agent-status-{{ agent.status }}">{{ agent.status }}</span></td>
       <td class="agent-timestamp">{{ agent.created_at }}</td>
       <td>{{ agent.final_message or agent.error or "" }}</td>
+      <td>
+        {% if agent.status in ("pending", "running") %}
+        <button type="button" class="agent-cancel-btn" data-cancel-id="{{ agent.id }}">Stop</button>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>
@@ -67,6 +73,26 @@ document.getElementById("new-agent-form").addEventListener("submit", async (e) =
     btn.textContent = "Start agent";
     alert("Error: " + err.message);
   }
+});
+
+document.querySelectorAll(".agent-cancel-btn").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const agentId = btn.dataset.cancelId;
+    if (!confirm("Stop this background agent?")) return;
+    btn.disabled = true;
+    btn.textContent = "Stopping...";
+    try {
+      const resp = await fetch(`/-/agent/api/background/${agentId}/cancel`, {
+        method: "POST",
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      window.location.reload();
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = "Stop";
+      alert("Could not stop agent: " + err.message);
+    }
+  });
 });
 </script>
 {% endblock %}
