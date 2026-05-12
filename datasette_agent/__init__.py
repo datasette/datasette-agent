@@ -14,6 +14,10 @@ def register_actions():
             name="datasette-agent",
             description="Access the agent chat assistant",
         ),
+        Action(
+            name="datasette-agent-explore",
+            description="Launch and view AI explorer reports on databases and tables",
+        ),
     ]
 
 
@@ -123,7 +127,7 @@ def database_actions(datasette, actor, database, request):
     from datasette.utils import tilde_encode
 
     async def inner():
-        if not await datasette.allowed(action="datasette-agent", actor=actor):
+        if not await datasette.allowed(action="datasette-agent-explore", actor=actor):
             return []
         return [
             {
@@ -143,7 +147,7 @@ def table_actions(datasette, actor, database, table, request):
     from datasette.utils import tilde_encode
 
     async def inner():
-        if not await datasette.allowed(action="datasette-agent", actor=actor):
+        if not await datasette.allowed(action="datasette-agent-explore", actor=actor):
             return []
         return [
             {

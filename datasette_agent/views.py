@@ -104,7 +104,9 @@ async def agent_conversation(request, datasette):
                 "conversation": dict(row),
                 "messages": flatten_for_render(messages),
                 "conversation_id": conversation_id,
-                "background_agent": dict(background_agent) if background_agent else None,
+                "background_agent": (
+                    dict(background_agent) if background_agent else None
+                ),
             },
             request=request,
         )
@@ -186,7 +188,9 @@ async def agent_conversation_markdown(request, datasette):
     markdown = format_conversation_markdown(title, flatten_for_render(messages))
 
     # Sanitize title for filename
-    safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[:60].strip()
+    safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[
+        :60
+    ].strip()
     filename = f"{safe_title}.md" if safe_title else "chat.md"
 
     return Response(
@@ -367,13 +371,13 @@ async def api_cancel_background_agent(request, datasette):
     if task is not None and not task.done():
         task.cancel()
 
-    return Response.json(
-        {"agent_id": agent_id, "status": "error", "cancelled": True}
-    )
+    return Response.json({"agent_id": agent_id, "status": "error", "cancelled": True})
 
 
 async def explorer_page(request, datasette):
-    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-explore", actor=request.actor
+    )
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
@@ -441,7 +445,9 @@ async def explorer_page(request, datasette):
 
 
 async def explorer_report_page(request, datasette):
-    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-explore", actor=request.actor
+    )
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
@@ -473,7 +479,9 @@ async def explorer_report_page(request, datasette):
 
 
 async def api_start_explorer(request, datasette):
-    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-explore", actor=request.actor
+    )
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
 
@@ -499,7 +507,9 @@ async def api_start_explorer(request, datasette):
 
 
 async def api_explorer_report(request, datasette):
-    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-explore", actor=request.actor
+    )
     db = datasette.get_internal_database()
     await ensure_tables(db)
 

@@ -15,7 +15,18 @@ datasette install datasette-agent
 ```
 ## Usage
 
-Visit `/-/agent` to start a conversation. Users must have the `datasette-agent` permission (or be `--root`) to interact with the agent.
+Visit `/-/agent` to start a conversation with the chat assistant.
+
+The "Explore with AI agent" entries that appear in the database and table action menus launch a background agent that explores the selected database or table and writes a report. Reports live under `/-/agent/explore/`.
+
+### Permissions
+
+This plugin registers two independent permissions:
+
+- `datasette-agent` — required to use the chat assistant under `/-/agent`.
+- `datasette-agent-explore` — required to see the "Explore with AI agent" entries in the database/table action menus and to use the explorer routes under `/-/agent/explore/`.
+
+The two permissions are independent: an actor may hold one without the other. The `--root` user has both.
 
 ## Registering additional tools from plugins
 

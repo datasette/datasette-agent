@@ -1,4 +1,3 @@
-import asyncio
 import json
 
 from datasette.app import Datasette
@@ -38,6 +37,7 @@ def datasette_instance(tmp_path):
         config={
             "permissions": {
                 "datasette-agent": {"id": "user"},
+                "datasette-agent-explore": {"id": "user"},
             }
         },
         internal=str(tmp_path / "internal.db"),
@@ -573,8 +573,17 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
 # --- Live refresh of the explorer listing page ---
 
 
-async def _insert_report(db, conversation_id, agent_id, report_id, status, *,
-                          final_message=None, error=None, content=""):
+async def _insert_report(
+    db,
+    conversation_id,
+    agent_id,
+    report_id,
+    status,
+    *,
+    final_message=None,
+    error=None,
+    content="",
+):
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc).isoformat()
@@ -588,8 +597,17 @@ async def _insert_report(db, conversation_id, agent_id, report_id, status, *,
         "(id, conversation_id, actor_id, goal, status, final_message, error, "
         "created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [agent_id, conversation_id, "user", "Explore test_db", status,
-         final_message, error, now, now],
+        [
+            agent_id,
+            conversation_id,
+            "user",
+            "Explore test_db",
+            status,
+            final_message,
+            error,
+            now,
+            now,
+        ],
     )
     await db.execute_write(
         "INSERT INTO agent_explorer_reports "
@@ -658,11 +676,130 @@ async def test_explorer_listing_does_not_poll_terminal_rows(
     # marked running/pending means the polling loop has nothing to do.
     import re
 
-    div_attrs = re.findall(
-        r'<div class="explorer-report"[^>]*>', response.text
-    )
+    div_attrs = re.findall(r'<div class="explorer-report"[^>]*>', response.text)
     assert div_attrs
     for attrs in div_attrs:
         assert 'data-agent-status="completed"' in attrs
         assert 'data-agent-status="running"' not in attrs
         assert 'data-agent-status="pending"' not in attrs
+
+
+# --- Independent permission for explorer ---
+
+
+def _chat_only(tmp_path):
+    """Datasette where the actor has datasette-agent but NOT
+    datasette-agent-explore. Used to check the explorer routes are now
+    independently gated."""
+    return Datasette(
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                # Note: no datasette-agent-explore grant.
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+
+
+def _explore_only(tmp_path):
+    """Inverse: has explorer permission but not chat."""
+    return Datasette(
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {
+                "datasette-agent-explore": {"id": "user"},
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_explorer_routes_require_explore_permission(tmp_path):
+    """A user with only datasette-agent (no -explore) must get 403 from
+    every explorer route — listing page, report detail, start API,
+    status API."""
+    ds = _chat_only(tmp_path)
+    await _setup_test_db(ds)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    r1 = await ds.client.get("/-/agent/explore/test_db", cookies=cookies)
+    assert r1.status_code == 403
+
+    r2 = await ds.client.get(
+        "/-/agent/explore/report/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        cookies=cookies,
+    )
+    assert r2.status_code == 403
+
+    r3 = await ds.client.post(
+        "/-/agent/api/explore",
+        content=json.dumps({"database": "test_db"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert r3.status_code == 403
+
+    r4 = await ds.client.get(
+        "/-/agent/api/explore/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        cookies=cookies,
+    )
+    assert r4.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_database_actions_hidden_without_explore_permission(tmp_path):
+    """The 'Explore with AI agent' database action menu item must only
+    appear when the actor holds datasette-agent-explore."""
+    ds = _chat_only(tmp_path)
+    await _setup_test_db(ds)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    response = await ds.client.get("/test_db", cookies=cookies)
+    assert response.status_code == 200
+    assert "Explore with AI agent" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_table_actions_hidden_without_explore_permission(tmp_path):
+    """Same for the per-table action menu — only datasette-agent-explore
+    surfaces the Explore link."""
+    ds = _chat_only(tmp_path)
+    await _setup_test_db(ds)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    response = await ds.client.get("/test_db/users", cookies=cookies)
+    assert response.status_code == 200
+    assert "Explore with AI agent" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_chat_only_user_can_still_use_chat(tmp_path):
+    """The two permissions are independent: a user with chat-only access
+    keeps full access to /-/agent even though explorer routes are now
+    locked down."""
+    ds = _chat_only(tmp_path)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    chat = await ds.client.get("/-/agent", cookies=cookies)
+    assert chat.status_code == 200
+
+    explore = await ds.client.get("/-/agent/explore/test_db", cookies=cookies)
+    assert explore.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_explore_only_user_can_use_explorer(tmp_path):
+    """Inverse of the above: a user with only datasette-agent-explore can
+    hit the explorer routes but is locked out of /-/agent."""
+    ds = _explore_only(tmp_path)
+    await _setup_test_db(ds)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    explore = await ds.client.get("/-/agent/explore/test_db", cookies=cookies)
+    assert explore.status_code == 200
+
+    chat = await ds.client.get("/-/agent", cookies=cookies)
+    assert chat.status_code == 403
