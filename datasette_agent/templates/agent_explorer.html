@@ -24,7 +24,7 @@
     <span class="agent-status agent-status-{{ report.agent_status or 'pending' }}">
       {{ report.agent_status or 'pending' }}
     </span>
-    <a href="/-/agent/explore/report/{{ report.id }}">Report from {{ report.created_at | format_datetime }}</a>
+    <a href="/-/agent/explore/report/{{ report.id }}">Report from {{ report.created_at | agent_format_datetime }}</a>
     {% if report.table_name and not table_name %}<span class="explorer-report-table">table: {{ report.table_name }}</span>{% endif %}
     {% if report.extra_prompt %}<em> &mdash; {{ report.extra_prompt }}</em>{% endif %}
   </h3>

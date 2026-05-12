@@ -108,7 +108,7 @@ def prepare_jinja2_environment(env, datasette):
         except (json.JSONDecodeError, TypeError):
             return value
 
-    env.filters["pretty_json"] = pretty_json
+    env.filters["agent_pretty_json"] = pretty_json
 
     def extract_html(value):
         try:
@@ -119,7 +119,7 @@ def prepare_jinja2_environment(env, datasette):
             pass
         return ""
 
-    env.filters["extract_html"] = extract_html
+    env.filters["agent_extract_html"] = extract_html
 
     def format_datetime(value):
         """Render persisted ISO 8601 timestamps as 'YYYY-MM-DD HH:MM:SS' —
@@ -136,7 +136,7 @@ def prepare_jinja2_environment(env, datasette):
             return value
         return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
-    env.filters["format_datetime"] = format_datetime
+    env.filters["agent_format_datetime"] = format_datetime
 
 
 @hookimpl
