@@ -7,6 +7,7 @@ from ulid import ULID
 
 from .agent import run_agent
 from .export_markdown import format_conversation_markdown
+from .messages import flatten_for_render
 from .schema import ensure_tables
 
 
@@ -26,7 +27,7 @@ async def agent_index(request, datasette):
     if actor_id:
         conversations = (
             await db.execute(
-                "SELECT id, title, created_at, updated_at FROM datasette_agent_conversations "
+                "SELECT id, title, created_at, updated_at FROM agent_conversations "
                 "WHERE actor_id = ? ORDER BY updated_at DESC",
                 [actor_id],
             )
@@ -34,7 +35,7 @@ async def agent_index(request, datasette):
     else:
         conversations = (
             await db.execute(
-                "SELECT id, title, created_at, updated_at FROM datasette_agent_conversations "
+                "SELECT id, title, created_at, updated_at FROM agent_conversations "
                 "WHERE actor_id IS NULL ORDER BY updated_at DESC",
             )
         ).rows
@@ -56,7 +57,7 @@ async def api_create_conversation(request, datasette):
     conversation_id = str(ULID())
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?)",
         [conversation_id, _actor_id(request), None, now, now],
     )
@@ -73,7 +74,7 @@ async def agent_conversation(request, datasette):
     # Verify ownership
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_conversations WHERE id = ?",
+            "SELECT * FROM agent_conversations WHERE id = ?",
             [conversation_id],
         )
     ).first()
@@ -84,7 +85,7 @@ async def agent_conversation(request, datasette):
 
     messages = (
         await db.execute(
-            "SELECT * FROM datasette_agent_messages WHERE conversation_id = ? ORDER BY id",
+            "SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows
@@ -94,7 +95,7 @@ async def agent_conversation(request, datasette):
             "agent_conversation.html",
             {
                 "conversation": dict(row),
-                "messages": [dict(m) for m in messages],
+                "messages": flatten_for_render(messages),
                 "conversation_id": conversation_id,
             },
             request=request,
@@ -111,7 +112,7 @@ async def agent_conversation_markdown(request, datasette):
 
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_conversations WHERE id = ?",
+            "SELECT * FROM agent_conversations WHERE id = ?",
             [conversation_id],
         )
     ).first()
@@ -122,13 +123,13 @@ async def agent_conversation_markdown(request, datasette):
 
     messages = (
         await db.execute(
-            "SELECT * FROM datasette_agent_messages WHERE conversation_id = ? ORDER BY id",
+            "SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows
 
     title = row["title"] or "Chat"
-    markdown = format_conversation_markdown(title, [dict(m) for m in messages])
+    markdown = format_conversation_markdown(title, flatten_for_render(messages))
 
     # Sanitize title for filename
     safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[:60].strip()
@@ -154,7 +155,7 @@ async def agent_stream(request, datasette):
     # Verify ownership
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_conversations WHERE id = ?",
+            "SELECT * FROM agent_conversations WHERE id = ?",
             [conversation_id],
         )
     ).first()
@@ -195,7 +196,7 @@ async def agent_background_index(request, datasette):
     if actor_id:
         agents = (
             await db.execute(
-                "SELECT * FROM datasette_agent_background_agents "
+                "SELECT * FROM agent_background_agents "
                 "WHERE actor_id = ? ORDER BY created_at DESC",
                 [actor_id],
             )
@@ -203,7 +204,7 @@ async def agent_background_index(request, datasette):
     else:
         agents = (
             await db.execute(
-                "SELECT * FROM datasette_agent_background_agents "
+                "SELECT * FROM agent_background_agents "
                 "WHERE actor_id IS NULL ORDER BY created_at DESC",
             )
         ).rows
@@ -256,7 +257,7 @@ async def api_background_agent_status(request, datasette):
 
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_background_agents WHERE id = ?",
+            "SELECT * FROM agent_background_agents WHERE id = ?",
             [agent_id],
         )
     ).first()
@@ -299,8 +300,8 @@ async def explorer_page(request, datasette):
                 "a.final_message as agent_final_message, "
                 "a.error as agent_error, "
                 "a.conversation_id as agent_conversation_id "
-                "FROM datasette_agent_explorer_reports r "
-                "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+                "FROM agent_explorer_reports r "
+                "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
                 "WHERE r.database_name = ? AND r.table_name = ? AND r.actor_id = ? "
                 "ORDER BY r.created_at DESC",
                 [database_name, table_name, actor_id],
@@ -315,8 +316,8 @@ async def explorer_page(request, datasette):
                 "a.final_message as agent_final_message, "
                 "a.error as agent_error, "
                 "a.conversation_id as agent_conversation_id "
-                "FROM datasette_agent_explorer_reports r "
-                "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+                "FROM agent_explorer_reports r "
+                "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
                 "WHERE r.database_name = ? AND r.actor_id = ? "
                 "ORDER BY r.created_at DESC",
                 [database_name, actor_id],
@@ -348,8 +349,8 @@ async def explorer_report_page(request, datasette):
         await db.execute(
             "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
             "a.error as agent_error, a.conversation_id as agent_conversation_id "
-            "FROM datasette_agent_explorer_reports r "
-            "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+            "FROM agent_explorer_reports r "
+            "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
             "WHERE r.id = ?",
             [report_id],
         )
@@ -406,8 +407,8 @@ async def api_explorer_report(request, datasette):
         await db.execute(
             "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
             "a.error as agent_error, a.conversation_id as agent_conversation_id "
-            "FROM datasette_agent_explorer_reports r "
-            "LEFT JOIN datasette_agent_background_agents a ON r.agent_id = a.id "
+            "FROM agent_explorer_reports r "
+            "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
             "WHERE r.id = ?",
             [report_id],
         )

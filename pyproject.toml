@@ -10,27 +10,23 @@ classifiers=[
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "datasette",
-    "datasette-llm",
-    "llm",
+    "datasette>=1.0a28",
+    "datasette-llm>=0.1a7",
+    "llm>=0.32a2",
     "python-ulid",
 ]
-
-[tool.uv.sources]
-llm = { url = "https://static.simonwillison.net/static/2026/llm-0.31a0.dev0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [
     "pytest",
     "pytest-asyncio",
-    "llm-echo>=0.3",
+    "llm-echo>=0.5a0",
     "inline-snapshot",
 ]
 
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
-
 
 [project.urls]
 Homepage = "https://github.com/datasette/datasette-agent"

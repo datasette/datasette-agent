@@ -30,14 +30,14 @@ async def start_background_agent(
 
     # Create conversation record for message logging
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?)",
         [conversation_id, actor_id, f"Background: {goal[:100]}", now, now],
     )
 
     # Create background agent record
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents "
+        "INSERT INTO agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, spawned_by_conversation_id, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
         [
@@ -84,7 +84,7 @@ async def get_background_agent_status(datasette, agent_id):
 
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_background_agents WHERE id = ?",
+            "SELECT * FROM agent_background_agents WHERE id = ?",
             [agent_id],
         )
     ).first()

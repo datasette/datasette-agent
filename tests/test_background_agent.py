@@ -22,6 +22,25 @@ GOAL_THAT_FINISHES = json.dumps(
 
 SIMPLE_GOAL = "List all tables in the database"
 
+# Echo emits a list_databases_and_tables tool call AND mark_finished in the
+# same response. The chain framework runs both tools; mark_finished sets the
+# done flag so the outer loop exits. This exercises the case where an
+# assistant message with tool_calls must be followed in the agent_messages
+# table by the matching tool_result rows BEFORE any later assistant rows —
+# otherwise the next turn rebuilds messages= in an order OpenAI rejects.
+GOAL_TOOL_THEN_FINISH = json.dumps(
+    {
+        "prompt": "Test goal",
+        "tool_calls": [
+            {"name": "list_databases_and_tables", "arguments": {}},
+            {
+                "name": "mark_finished",
+                "arguments": {"final_message": "done", "error": None},
+            },
+        ],
+    }
+)
+
 
 @pytest.fixture
 def datasette_instance(tmp_path):
@@ -56,8 +75,8 @@ async def test_background_agents_table_created(datasette_instance):
     db = datasette_instance.get_internal_database()
     await ensure_tables(db)
     tables = await db.table_names()
-    assert "datasette_agent_background_agents" in tables
-    assert "datasette_agent_pending_notifications" in tables
+    assert "agent_background_agents" in tables
+    assert "agent_pending_notifications" in tables
 
 
 # --- Python API tests ---
@@ -111,7 +130,7 @@ async def test_background_agent_creates_conversation(datasette_instance):
     db = datasette_instance.get_internal_database()
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_conversations WHERE id = ?",
+            "SELECT * FROM agent_conversations WHERE id = ?",
             [status["conversation_id"]],
         )
     ).first()
@@ -142,12 +161,75 @@ async def test_background_agent_writes_messages_to_db(datasette_instance):
     db = datasette_instance.get_internal_database()
     messages = (
         await db.execute(
-            "SELECT role FROM datasette_agent_messages WHERE conversation_id = ? ORDER BY id",
+            "SELECT role FROM agent_messages WHERE conversation_id = ? ORDER BY id",
             [status["conversation_id"]],
         )
     ).rows
     # Should have at least one message (the initial user/system goal message)
     assert len(messages) >= 1
+
+
+@pytest.mark.asyncio
+async def test_tool_results_inserted_before_next_assistant(datasette_instance):
+    """An assistant message with tool_calls must be followed by the matching
+    tool_result message(s) in agent_messages BEFORE any subsequent assistant
+    message. If they land out of order, OpenAI rejects the next turn with
+    'tool_calls must be followed by tool messages'."""
+    from datasette_agent.api import (
+        get_background_agent_status,
+        start_background_agent,
+    )
+
+    agent_id = await start_background_agent(
+        datasette=datasette_instance,
+        actor={"id": "user"},
+        goal=GOAL_TOOL_THEN_FINISH,
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(datasette_instance, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+
+    db = datasette_instance.get_internal_database()
+    rows = (
+        await db.execute(
+            "SELECT id, role, message_json FROM agent_messages "
+            "WHERE conversation_id = ? ORDER BY id",
+            [status["conversation_id"]],
+        )
+    ).rows
+
+    def parts(row):
+        return json.loads(row["message_json"]).get("parts", [])
+
+    def n_tool_calls(row):
+        return sum(1 for p in parts(row) if p.get("type") == "tool_call")
+
+    def n_tool_results(row):
+        return sum(1 for p in parts(row) if p.get("type") == "tool_result")
+
+    # Walk the rows. For every assistant row with N tool_calls, the very
+    # next rows must be tool messages whose total tool_result count == N,
+    # before any further assistant row.
+    for i, row in enumerate(rows):
+        if row["role"] != "assistant":
+            continue
+        n_calls = n_tool_calls(row)
+        if n_calls == 0:
+            continue
+        results_seen = 0
+        for follow in rows[i + 1 :]:
+            if follow["role"] == "tool":
+                results_seen += n_tool_results(follow)
+            else:
+                break
+        assert results_seen == n_calls, (
+            f"Assistant row id={row['id']} emitted {n_calls} tool_call(s); "
+            f"expected {n_calls} tool_result(s) in immediately following rows "
+            f"but found {results_seen}. Row order: "
+            f"{[(r['id'], r['role']) for r in rows]}"
+        )
 
 
 @pytest.mark.asyncio
@@ -225,7 +307,7 @@ async def test_pending_notification_created_on_completion(datasette_instance):
 
     notifications = (
         await db.execute(
-            "SELECT * FROM datasette_agent_pending_notifications WHERE conversation_id = ?",
+            "SELECT * FROM agent_pending_notifications WHERE conversation_id = ?",
             ["FAKE_CONVERSATION_ID_12345"],
         )
     ).rows
@@ -309,7 +391,7 @@ async def test_notification_prepended_to_user_message(datasette_instance, cookie
 
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
-        "INSERT INTO datasette_agent_pending_notifications (conversation_id, content, created_at) "
+        "INSERT INTO agent_pending_notifications (conversation_id, content, created_at) "
         "VALUES (?, ?, ?)",
         [conversation_id, "[Background agent ABC completed] Result: done", now],
     )
@@ -325,7 +407,7 @@ async def test_notification_prepended_to_user_message(datasette_instance, cookie
     # Notification should be deleted
     remaining = (
         await db.execute(
-            "SELECT * FROM datasette_agent_pending_notifications WHERE conversation_id = ?",
+            "SELECT * FROM agent_pending_notifications WHERE conversation_id = ?",
             [conversation_id],
         )
     ).rows
@@ -334,10 +416,11 @@ async def test_notification_prepended_to_user_message(datasette_instance, cookie
     # The first user message saved should contain the notification prefix
     messages = (
         await db.execute(
-            "SELECT content FROM datasette_agent_messages "
+            "SELECT message_json FROM agent_messages "
             "WHERE conversation_id = ? AND role = 'user' ORDER BY id",
             [conversation_id],
         )
     ).rows
-    # The message should have the notification prepended
-    assert "[Background agent ABC completed]" in messages[0]["content"]
+    first = json.loads(messages[0]["message_json"])
+    user_text = "".join(p["text"] for p in first["parts"] if p.get("type") == "text")
+    assert "[Background agent ABC completed]" in user_text

@@ -189,17 +189,19 @@ async def test_messages_persisted(datasette_instance, cookies):
         cookies=cookies,
     )
 
-    # Check messages were saved
+    # Check messages were saved (one row per MessageDict)
     db = ds.get_internal_database()
     messages = (
         await db.execute(
-            "SELECT role, content FROM datasette_agent_messages WHERE conversation_id = ? ORDER BY id",
+            "SELECT role, message_json FROM agent_messages WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows
     assert len(messages) >= 2  # At least user + assistant
     assert messages[0]["role"] == "user"
-    assert messages[0]["content"] == "Hi there"
+    first = json.loads(messages[0]["message_json"])
+    user_text = "".join(p["text"] for p in first["parts"] if p.get("type") == "text")
+    assert user_text == "Hi there"
 
 
 @pytest.mark.asyncio
@@ -209,7 +211,14 @@ async def test_reasoning_streams_and_persists(tmp_path):
     ds = Datasette(
         memory=True,
         metadata={
-            "plugins": {"datasette-llm": {"default_model": "thinking-echo"}}
+            "plugins": {
+                "datasette-llm": {
+                    "default_model": {
+                        "model": "echo",
+                        "options": {"thinking": True},
+                    }
+                }
+            }
         },
         config={"permissions": {"datasette-agent": {"id": "user"}}},
         internal=str(tmp_path / "internal.db"),
@@ -235,7 +244,7 @@ async def test_reasoning_streams_and_persists(tmp_path):
     events = _parse_sse(response.text)
     reasoning = [e for e in events if e["event"] == "reasoning_chunk"]
     assert reasoning, "expected at least one reasoning_chunk SSE event"
-    # The thinking-echo model emits two reasoning chunks + one text chunk
+    # echo with thinking=True emits two reasoning chunks + one text chunk
     joined = "".join(e["data"]["content"] for e in reasoning)
     assert "First I consider" in joined
     assert "then I decide" in joined
@@ -243,14 +252,22 @@ async def test_reasoning_streams_and_persists(tmp_path):
     db = ds.get_internal_database()
     rows = (
         await db.execute(
-            "SELECT role, content FROM datasette_agent_messages "
+            "SELECT role, message_json FROM agent_messages "
             "WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows
-    reasoning_rows = [r for r in rows if r["role"] == "reasoning"]
-    assert reasoning_rows, "expected a role='reasoning' row to be persisted"
-    assert "First I consider" in reasoning_rows[0]["content"]
+    # Reasoning lives as a ReasoningPart inside an assistant MessageDict
+    reasoning_text = ""
+    for row in rows:
+        if row["role"] != "assistant":
+            continue
+        msg = json.loads(row["message_json"])
+        for part in msg.get("parts", []):
+            if part.get("type") == "reasoning":
+                reasoning_text += part.get("text", "")
+    assert "First I consider" in reasoning_text
+    assert "then I decide" in reasoning_text
 
 
 @pytest.mark.asyncio
@@ -278,7 +295,7 @@ async def test_conversation_title_auto_set(datasette_instance, cookies):
     db = ds.get_internal_database()
     row = (
         await db.execute(
-            "SELECT title FROM datasette_agent_conversations WHERE id = ?",
+            "SELECT title FROM agent_conversations WHERE id = ?",
             [conversation_id],
         )
     ).first()

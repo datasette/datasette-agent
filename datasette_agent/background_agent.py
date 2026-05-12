@@ -1,15 +1,16 @@
 import json
 from datetime import datetime, timezone
 
-import llm
 from datasette_llm import LLM
 
-from .agent import (
-    _build_conversation_messages,
-    _build_system_prompt,
-    _save_message,
-    _save_response_parts,
-    _strip_internal_keys,
+from .agent import _build_system_prompt
+from .messages import (
+    insert_message,
+    insert_response,
+    load_messages,
+    make_tool_message_dict,
+    make_user_message_dict,
+    strip_internal_keys,
 )
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
@@ -56,10 +57,9 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
-    # Load agent record
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_background_agents WHERE id = ?",
+            "SELECT * FROM agent_background_agents WHERE id = ?",
             [agent_id],
         )
     ).first()
@@ -70,40 +70,36 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     conversation_id = row["conversation_id"]
     spawned_by_conversation_id = row["spawned_by_conversation_id"]
 
-    # Set status to running
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
-        "UPDATE datasette_agent_background_agents SET status = 'running', updated_at = ? WHERE id = ?",
+        "UPDATE agent_background_agents SET status = 'running', updated_at = ? WHERE id = ?",
         [now, agent_id],
     )
 
-    # Build tools list
     if tools is None:
         tools = await get_agent_tools(datasette)
-    # Filter out spawn/check tools to prevent recursion
     tools = [
         t
         for t in tools
         if t.name not in ("spawn_background_agent", "check_background_agent")
     ]
 
-    # Add mark_finished tool
     finished_state = {"called": False, "message": None, "error": None}
     mark_finished_tool = _make_mark_finished_tool(finished_state)
     tools.append(mark_finished_tool)
 
     try:
-        # Save initial goal as user message
-        await _save_message(db, conversation_id, "user", content=goal)
+        # Save initial goal as the opening user message.
+        await insert_message(
+            db, conversation_id, make_user_message_dict(goal)
+        )
 
-        # Get model
         llm_instance = LLM(datasette)
         model = await llm_instance.model(purpose="agent", actor=actor)
 
-        # Update conversation model_id
         now = datetime.now(timezone.utc).isoformat()
         await db.execute_write(
-            "UPDATE datasette_agent_conversations SET model_id = ?, updated_at = ? WHERE id = ?",
+            "UPDATE agent_conversations SET model_id = ?, updated_at = ? WHERE id = ?",
             [model.model_id, now, conversation_id],
         )
 
@@ -111,8 +107,6 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
         while not finished_state["called"] and iteration < MAX_ITERATIONS:
             iteration += 1
 
-            # System prompt stays the agent's role + goal; prior turns flow
-            # through as structured messages= below.
             system_prompt = await _build_system_prompt(datasette, actor)
             system_prompt += (
                 f"\n\nYour goal: {goal}\n\n"
@@ -120,8 +114,6 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                 "Do not stop working until you call mark_finished."
             )
 
-            # On iterations after the first, save a "keep going" user turn
-            # before rebuilding the message history.
             if iteration == 1:
                 current_user_text = goal
             else:
@@ -129,29 +121,27 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     f"Keep going. Reminder: your goal is: {goal}. "
                     "You must call mark_finished() when done."
                 )
-                await _save_message(
-                    db, conversation_id, "user", content=current_user_text
+                await insert_message(
+                    db,
+                    conversation_id,
+                    make_user_message_dict(current_user_text),
                 )
 
-            chain_messages = await _build_conversation_messages(db, conversation_id)
+            chain_messages = await load_messages(db, conversation_id)
 
-            # Assistant-side rows persist from response.messages below;
-            # before_call is a no-op here. after_call still records
-            # tool_result rows (our own outputs, not in response.messages).
+            pending_tool_messages = []
+
             async def before_call(tool, tool_call):
                 return None
 
             async def after_call(tool, tool_call, tool_result):
-                output = tool_result.output if tool_result.output else ""
-                await _save_message(
-                    db,
-                    conversation_id,
-                    "tool_result",
-                    tool_name=tool_result.name,
-                    tool_output=output,
-                    tool_call_id=tool_result.tool_call_id,
+                output = tool_result.output or ""
+                pending_tool_messages.append(
+                    make_tool_message_dict(
+                        tool_result.name, output, tool_result.tool_call_id
+                    )
                 )
-                tool_result.output = _strip_internal_keys(output)
+                tool_result.output = strip_internal_keys(output)
 
             llm_tools = make_llm_tools(tools, datasette, actor)
 
@@ -166,30 +156,38 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             )
 
             async for response in chain_response.responses():
+                # Flush tool results from the PRIOR response before
+                # persisting this one (after_call fires between yields).
+                for tool_msg in pending_tool_messages:
+                    await insert_message(db, conversation_id, tool_msg)
+                pending_tool_messages.clear()
+
                 async for _chunk in response:
                     pass
-                await _save_response_parts(db, conversation_id, response)
+                await insert_response(db, conversation_id, response)
 
-        # Determine final status
+            # Final flush: catch tool results from the last response.
+            for tool_msg in pending_tool_messages:
+                await insert_message(db, conversation_id, tool_msg)
+            pending_tool_messages.clear()
+
         if finished_state["called"]:
             final_message = finished_state["message"]
             error = finished_state["error"]
             status = "error" if error else "completed"
         else:
-            # Hit max iterations
             final_message = None
             error = f"Agent hit maximum iteration limit ({MAX_ITERATIONS})"
             status = "error"
 
         now = datetime.now(timezone.utc).isoformat()
         await db.execute_write(
-            "UPDATE datasette_agent_background_agents "
+            "UPDATE agent_background_agents "
             "SET status = ?, final_message = ?, error = ?, updated_at = ? "
             "WHERE id = ?",
             [status, final_message, error, now, agent_id],
         )
 
-        # Create notification for spawning conversation
         if spawned_by_conversation_id:
             notification_content = (
                 f"[Background agent {agent_id} {status}] "
@@ -197,7 +195,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                 f"Result: {final_message or error or 'No message'}"
             )
             await db.execute_write(
-                "INSERT INTO datasette_agent_pending_notifications "
+                "INSERT INTO agent_pending_notifications "
                 "(conversation_id, content, created_at) VALUES (?, ?, ?)",
                 [spawned_by_conversation_id, notification_content, now],
             )
@@ -205,7 +203,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     except Exception as e:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute_write(
-            "UPDATE datasette_agent_background_agents "
+            "UPDATE agent_background_agents "
             "SET status = 'error', error = ?, updated_at = ? WHERE id = ?",
             [str(e), now, agent_id],
         )

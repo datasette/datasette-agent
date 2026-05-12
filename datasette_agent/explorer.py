@@ -16,7 +16,7 @@ def _make_append_to_report_tool(datasette, report_id):
         db = datasette.get_internal_database()
         now = datetime.now(timezone.utc).isoformat()
         await db.execute_write(
-            "UPDATE datasette_agent_explorer_reports "
+            "UPDATE agent_explorer_reports "
             "SET content = content || ?, updated_at = ? WHERE id = ?",
             [markdown_content + "\n\n", now, report_id],
         )
@@ -102,7 +102,7 @@ async def start_explorer(
 
     # Create report record
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports "
+        "INSERT INTO agent_explorer_reports "
         "(id, agent_id, actor_id, database_name, table_name, extra_prompt, content, created_at, updated_at) "
         "VALUES (?, NULL, ?, ?, ?, ?, '', ?, ?)",
         [report_id, actor_id, database_name, table_name, extra_prompt, now, now],
@@ -125,7 +125,7 @@ async def start_explorer(
 
     # Link agent to report
     await db.execute_write(
-        "UPDATE datasette_agent_explorer_reports SET agent_id = ? WHERE id = ?",
+        "UPDATE agent_explorer_reports SET agent_id = ? WHERE id = ?",
         [agent_id, report_id],
     )
 
