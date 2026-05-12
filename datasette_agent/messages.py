@@ -40,7 +40,14 @@ def message_dict_text(msg_dict):
 
 
 def strip_internal_keys(output):
-    """Remove _html / sql keys before sending tool output back to the model."""
+    """Remove any top-level _-prefixed keys before sending tool output back
+    to the model.
+
+    Keys starting with _ are a side channel for user-only rendering and
+    export (e.g. _html for inline HTML, _rows for the full rowset behind
+    a summary). Tools opt in by prefixing the key; this function is the
+    one place that decides what reaches the LLM.
+    """
     if not output:
         return output
     try:
@@ -49,7 +56,7 @@ def strip_internal_keys(output):
         return output
     if not isinstance(parsed, dict):
         return output
-    stripped = {k: v for k, v in parsed.items() if k not in ("_html", "sql")}
+    stripped = {k: v for k, v in parsed.items() if not k.startswith("_")}
     if stripped == parsed:
         return output
     return json.dumps(stripped)
