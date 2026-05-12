@@ -22,7 +22,7 @@
   {% for conv in conversations %}
   <li>
     <a href="/-/agent/{{ conv.id }}">{{ conv.title or "Untitled conversation" }}</a>
-    <span class="agent-timestamp">{{ conv.updated_at }}</span>
+    <span class="agent-timestamp">{{ conv.updated_at | format_datetime }}</span>
   </li>
   {% endfor %}
 </ul>

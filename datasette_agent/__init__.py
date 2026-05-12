@@ -121,6 +121,23 @@ def prepare_jinja2_environment(env, datasette):
 
     env.filters["extract_html"] = extract_html
 
+    def format_datetime(value):
+        """Render persisted ISO 8601 timestamps as 'YYYY-MM-DD HH:MM:SS' —
+        drop microseconds and the tz suffix for compact tabular display.
+        Falls back to the original value when parsing fails so legacy or
+        malformed entries still render something."""
+        if not value:
+            return ""
+        from datetime import datetime
+
+        try:
+            parsed = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return value
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+    env.filters["format_datetime"] = format_datetime
+
 
 @hookimpl
 def database_actions(datasette, actor, database, request):

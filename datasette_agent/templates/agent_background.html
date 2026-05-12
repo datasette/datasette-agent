@@ -33,7 +33,7 @@
     <tr data-agent-id="{{ agent.id }}" data-agent-status="{{ agent.status }}">
       <td><a href="/-/agent/{{ agent.conversation_id }}">{{ agent.goal[:100] }}{% if agent.goal|length > 100 %}...{% endif %}</a></td>
       <td><span class="agent-status agent-status-{{ agent.status }}">{{ agent.status }}</span></td>
-      <td class="agent-timestamp">{{ agent.created_at }}</td>
+      <td class="agent-timestamp">{{ agent.created_at | format_datetime }}</td>
       <td>{{ agent.final_message or agent.error or "" }}</td>
       <td>
         {% if agent.status in ("pending", "running") %}
