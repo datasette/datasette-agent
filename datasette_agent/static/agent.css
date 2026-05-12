@@ -142,7 +142,7 @@
      flex-shrink:0 the wrapper collapses below its content height and
      the table body gets visually clipped. */
   flex-shrink: 0;
-  max-height: 400px;
+  max-height: 600px;
   overflow: auto;
 }
 
