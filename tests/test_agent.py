@@ -91,6 +91,42 @@ async def test_agent_index(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_menu_link_added_for_users_with_permission(datasette_instance, cookies):
+    """An authenticated user with datasette-agent must see a link to
+    /-/agent in Datasette's top-right menu dropdown."""
+    response = await datasette_instance.client.get("/-/plugins", cookies=cookies)
+    assert response.status_code == 200
+    assert 'href="/-/agent"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_menu_link_hidden_without_permission(datasette_instance):
+    """A user without datasette-agent must not see the menu entry — no
+    point linking them to a 403."""
+    response = await datasette_instance.client.get("/-/plugins")
+    assert response.status_code == 200
+    assert 'href="/-/agent"' not in response.text
+
+
+@pytest.mark.asyncio
+async def test_homepage_action_added_for_users_with_permission(
+    datasette_instance, cookies
+):
+    """An authenticated user with datasette-agent must see a link to
+    /-/agent in the homepage action menu."""
+    response = await datasette_instance.client.get("/", cookies=cookies)
+    assert response.status_code == 200
+    assert 'href="/-/agent"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_homepage_action_hidden_without_permission(datasette_instance):
+    response = await datasette_instance.client.get("/")
+    assert response.status_code == 200
+    assert 'href="/-/agent"' not in response.text
+
+
+@pytest.mark.asyncio
 async def test_create_conversation(datasette_instance, cookies):
     response = await datasette_instance.client.post(
         "/-/agent/api/conversations",

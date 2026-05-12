@@ -140,6 +140,37 @@ def prepare_jinja2_environment(env, datasette):
 
 
 @hookimpl
+def menu_links(datasette, actor, request):
+    async def inner():
+        if not await datasette.allowed(action="datasette-agent", actor=actor):
+            return []
+        return [
+            {
+                "href": datasette.urls.path("/-/agent"),
+                "label": "Datasette agent",
+            }
+        ]
+
+    return inner
+
+
+@hookimpl
+def homepage_actions(datasette, actor, request):
+    async def inner():
+        if not await datasette.allowed(action="datasette-agent", actor=actor):
+            return []
+        return [
+            {
+                "href": datasette.urls.path("/-/agent"),
+                "label": "Datasette agent",
+                "description": "Open the agent chat assistant",
+            }
+        ]
+
+    return inner
+
+
+@hookimpl
 def database_actions(datasette, actor, database, request):
     from datasette.utils import tilde_encode
 

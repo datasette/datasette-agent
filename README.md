@@ -145,9 +145,8 @@ datasette agent chat mydata.db
 You can pass multiple database files, use `:memory:` for an in-memory database, specify a model, or send a single prompt:
 
 ```bash
-datasette agent chat mydata.db other.db
 datasette agent chat mydata.db -m gpt-5.4-mini
-datasette agent chat mydata.db -p "List all tables"
+datasette agent chat mydata.db -m gpt-5.4-mini -p "List all tables"
 ```
 
 Options:
@@ -198,4 +197,4 @@ Add extra database files to that command to enable the agent to query them.
 
 ## Credits
 
-This plugin includes [streaming-markdown](https://github.com/thetarnav/streaming-markdown) by Damian Tarnawski, MIT licensed.
+This plugin vendors [streaming-markdown](https://github.com/thetarnav/streaming-markdown) by Damian Tarnawski, MIT licensed.
