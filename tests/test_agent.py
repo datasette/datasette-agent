@@ -85,6 +85,66 @@ async def test_conversation_page(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_conversation_page_shows_chat_form_for_user_chat(
+    datasette_instance, cookies
+):
+    """A normal user-owned conversation must render the chat input + send
+    button so the user can keep typing."""
+    resp = await datasette_instance.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}", cookies=cookies
+    )
+    assert response.status_code == 200
+    assert 'id="chat-form"' in response.text
+    assert 'id="message-input"' in response.text
+    assert 'id="send-btn"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_conversation_page_hides_chat_form_for_background_agent(
+    datasette_instance, cookies
+):
+    """A conversation owned by a background agent must not render the chat
+    form — the user can't type to an autonomous agent."""
+    db = datasette_instance.get_internal_database()
+    from datasette_agent.schema import ensure_tables
+
+    await ensure_tables(db)
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01BGCONVAAAAAAAAAAAAAAAAAA"
+    agent_id = "01BGAGENTAAAAAAAAAAAAAAAAA"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Background: x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, "user", "g", "running", now, now],
+    )
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}", cookies=cookies
+    )
+    assert response.status_code == 200
+    assert 'id="chat-form"' not in response.text
+    assert 'id="message-input"' not in response.text
+    assert 'id="send-btn"' not in response.text
+
+
+@pytest.mark.asyncio
 async def test_conversation_not_found(datasette_instance, cookies):
     response = await datasette_instance.client.get(
         "/-/agent/01234567890123456789012345", cookies=cookies

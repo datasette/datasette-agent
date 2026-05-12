@@ -67,14 +67,17 @@
     {% endif %}
   </div>
 
+  {% if not background_agent %}
   <form id="chat-form" class="agent-input">
     <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
     <button type="submit" id="send-btn">Send</button>
   </form>
+  {% endif %}
 </div>
 
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
 <script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
+{% if not background_agent %}
 <script type="module">
 const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
 const pending = sessionStorage.getItem("agent_pending_message");
@@ -83,4 +86,5 @@ if (pending) {
   window.sendMessage(conversationId, pending);
 }
 </script>
+{% endif %}
 {% endblock %}

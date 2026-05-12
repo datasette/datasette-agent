@@ -90,6 +90,13 @@ async def agent_conversation(request, datasette):
         )
     ).rows
 
+    background_agent = (
+        await db.execute(
+            "SELECT id, status FROM agent_background_agents WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).first()
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
@@ -97,6 +104,7 @@ async def agent_conversation(request, datasette):
                 "conversation": dict(row),
                 "messages": flatten_for_render(messages),
                 "conversation_id": conversation_id,
+                "background_agent": dict(background_agent) if background_agent else None,
             },
             request=request,
         )
