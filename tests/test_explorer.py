@@ -70,7 +70,7 @@ async def test_explorer_reports_table_created(datasette_instance):
     db = datasette_instance.get_internal_database()
     await ensure_tables(db)
     tables = await db.table_names()
-    assert "datasette_agent_explorer_reports" in tables
+    assert "agent_explorer_reports" in tables
 
 
 # --- Explorer core logic tests ---
@@ -92,7 +92,7 @@ async def test_start_explorer_creates_records(datasette_instance):
     db = datasette_instance.get_internal_database()
     report = (
         await db.execute(
-            "SELECT * FROM datasette_agent_explorer_reports WHERE id = ?",
+            "SELECT * FROM agent_explorer_reports WHERE id = ?",
             [report_id],
         )
     ).first()
@@ -117,7 +117,7 @@ async def test_start_explorer_with_table(datasette_instance):
     db = datasette_instance.get_internal_database()
     report = (
         await db.execute(
-            "SELECT * FROM datasette_agent_explorer_reports WHERE id = ?",
+            "SELECT * FROM agent_explorer_reports WHERE id = ?",
             [report_id],
         )
     ).first()
@@ -139,7 +139,7 @@ async def test_start_explorer_with_extra_prompt(datasette_instance):
     db = datasette_instance.get_internal_database()
     report = (
         await db.execute(
-            "SELECT * FROM datasette_agent_explorer_reports WHERE id = ?",
+            "SELECT * FROM agent_explorer_reports WHERE id = ?",
             [report_id],
         )
     ).first()
@@ -162,7 +162,7 @@ async def test_append_to_report_tool(datasette_instance):
     now = datetime.now(timezone.utc).isoformat()
     report_id = "01TEST_REPORT_ID_AAAAAAAA"
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports "
+        "INSERT INTO agent_explorer_reports "
         "(id, actor_id, database_name, content, created_at, updated_at) "
         "VALUES (?, 'user', 'test_db', '', ?, ?)",
         [report_id, now, now],
@@ -183,7 +183,7 @@ async def test_append_to_report_tool(datasette_instance):
     # Check content was appended
     row = (
         await db.execute(
-            "SELECT content FROM datasette_agent_explorer_reports WHERE id = ?",
+            "SELECT content FROM agent_explorer_reports WHERE id = ?",
             [report_id],
         )
     ).first()
@@ -197,7 +197,7 @@ async def test_append_to_report_tool(datasette_instance):
     )
     row = (
         await db.execute(
-            "SELECT content FROM datasette_agent_explorer_reports WHERE id = ?",
+            "SELECT content FROM agent_explorer_reports WHERE id = ?",
             [report_id],
         )
     ).first()
@@ -271,12 +271,12 @@ async def test_explorer_page_shows_background_agent_error(datasette_instance, co
     error = "No model_id provided and no default_model configured."
 
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations "
+        "INSERT INTO agent_conversations "
         "(id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         [conversation_id, "user", "Background: test", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents "
+        "INSERT INTO agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, error, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
@@ -291,7 +291,7 @@ async def test_explorer_page_shows_background_agent_error(datasette_instance, co
         ],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports "
+        "INSERT INTO agent_explorer_reports "
         "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, '', ?, ?)",
         [report_id, agent_id, "user", "test_db", now, now],
@@ -408,18 +408,18 @@ async def test_report_detail_page_loads(datasette_instance, cookies):
     report_id = "01ARZ3NDEKTSV4RRFFQ69G5FA3"
 
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations "
+        "INSERT INTO agent_conversations "
         "(id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         [conversation_id, "user", "Background: test", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents "
+        "INSERT INTO agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [agent_id, conversation_id, "user", "Explore test_db", "completed", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports "
+        "INSERT INTO agent_explorer_reports "
         "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [report_id, agent_id, "user", "test_db", "## Findings\n\nSome data.", now, now],
@@ -468,18 +468,18 @@ async def test_explorer_listing_links_to_report_page(datasette_instance, cookies
     report_id = "01ARZ3NDEKTSV4RRFFQ69G5FB3"
 
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations "
+        "INSERT INTO agent_conversations "
         "(id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         [conversation_id, "user", "Background: test", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents "
+        "INSERT INTO agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [agent_id, conversation_id, "user", "Explore test_db", "completed", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports "
+        "INSERT INTO agent_explorer_reports "
         "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [report_id, agent_id, "user", "test_db", "## Some content", now, now],
@@ -512,15 +512,15 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
     db_agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FC2"
     db_report_id = "01ARZ3NDEKTSV4RRFFQ69G5FC3"
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         [db_conv_id, "user", "Background: db explore", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [db_agent_id, db_conv_id, "user", "Explore test_db", "completed", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+        "INSERT INTO agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
         [db_report_id, db_agent_id, "user", "test_db", "DB findings", now, now],
     )
 
@@ -529,11 +529,11 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
     tbl_agent_id = "01ARZ3NDEKTSV4RRFFQ69G5FC5"
     tbl_report_id = "01ARZ3NDEKTSV4RRFFQ69G5FC6"
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
         [tbl_conv_id, "user", "Background: table explore", now, now],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agent_background_agents (id, conversation_id, actor_id, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [
             tbl_agent_id,
             tbl_conv_id,
@@ -545,7 +545,7 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
         ],
     )
     await db.execute_write(
-        "INSERT INTO datasette_agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agent_explorer_reports (id, agent_id, actor_id, database_name, table_name, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
             tbl_report_id,
             tbl_agent_id,
@@ -568,3 +568,101 @@ async def test_database_explorer_includes_table_reports(datasette_instance, cook
     assert f"/-/agent/explore/report/{tbl_report_id}" in response.text
     # Table-scoped report should show table name
     assert "users" in response.text
+
+
+# --- Live refresh of the explorer listing page ---
+
+
+async def _insert_report(db, conversation_id, agent_id, report_id, status, *,
+                          final_message=None, error=None, content=""):
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Background: x", now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_background_agents "
+        "(id, conversation_id, actor_id, goal, status, final_message, error, "
+        "created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [agent_id, conversation_id, "user", "Explore test_db", status,
+         final_message, error, now, now],
+    )
+    await db.execute_write(
+        "INSERT INTO agent_explorer_reports "
+        "(id, agent_id, actor_id, database_name, content, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [report_id, agent_id, "user", "test_db", content, now, now],
+    )
+
+
+@pytest.mark.asyncio
+async def test_explorer_listing_marks_running_rows_for_polling(
+    datasette_instance, cookies
+):
+    """A running report on the listing page must be tagged so the page can
+    target it for live refresh."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    await _insert_report(
+        db,
+        "01ARZ3NDEKTSV4RRFFQ69POLL1",
+        "01ARZ3NDEKTSV4RRFFQ69POLL2",
+        "01ARZ3NDEKTSV4RRFFQ69POLL3",
+        "running",
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # The running row's <div> carries a data attribute reflecting its live
+    # status so JS can locate it without re-templating.
+    assert '<div class="explorer-report"' in response.text
+    assert 'data-agent-status="running"' in response.text
+    # The page polls the per-report status endpoint
+    assert "/-/agent/api/explore/" in response.text
+
+
+@pytest.mark.asyncio
+async def test_explorer_listing_does_not_poll_terminal_rows(
+    datasette_instance, cookies
+):
+    """Completed and errored reports should not be marked for polling; the
+    listing JS should only target running/pending."""
+    await _setup_test_db(datasette_instance)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+
+    await _insert_report(
+        db,
+        "01ARZ3NDEKTSV4RRFFQ69DONE01",
+        "01ARZ3NDEKTSV4RRFFQ69DONE02",
+        "01ARZ3NDEKTSV4RRFFQ69DONE03",
+        "completed",
+        final_message="all good",
+    )
+
+    response = await datasette_instance.client.get(
+        "/-/agent/explore/test_db",
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    # The actual report <div> must reflect the terminal status; no row
+    # marked running/pending means the polling loop has nothing to do.
+    import re
+
+    div_attrs = re.findall(
+        r'<div class="explorer-report"[^>]*>', response.text
+    )
+    assert div_attrs
+    for attrs in div_attrs:
+        assert 'data-agent-status="completed"' in attrs
+        assert 'data-agent-status="running"' not in attrs
+        assert 'data-agent-status="pending"' not in attrs

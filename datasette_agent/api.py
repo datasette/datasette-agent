@@ -30,14 +30,14 @@ async def start_background_agent(
 
     # Create conversation record for message logging
     await db.execute_write(
-        "INSERT INTO datasette_agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?)",
         [conversation_id, actor_id, f"Background: {goal[:100]}", now, now],
     )
 
     # Create background agent record
     await db.execute_write(
-        "INSERT INTO datasette_agent_background_agents "
+        "INSERT INTO agent_background_agents "
         "(id, conversation_id, actor_id, goal, status, spawned_by_conversation_id, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
         [
@@ -74,6 +74,25 @@ async def start_background_agent(
     return agent_id
 
 
+async def reconcile_running_agents(datasette):
+    """Mark any agent rows left in pending/running as error.
+
+    Background agent tasks live only in process memory (in
+    datasette._background_agent_tasks), so a Datasette restart abandons
+    every in-flight run. Without this pass, those rows stay marked
+    running forever and the explorer report page spins indefinitely.
+    """
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "UPDATE agent_background_agents "
+        "SET status = 'error', error = ?, updated_at = ? "
+        "WHERE status IN ('pending', 'running')",
+        ["Interrupted by Datasette restart", now],
+    )
+
+
 async def get_background_agent_status(datasette, agent_id):
     """Get the status of a background agent.
 
@@ -84,7 +103,7 @@ async def get_background_agent_status(datasette, agent_id):
 
     row = (
         await db.execute(
-            "SELECT * FROM datasette_agent_background_agents WHERE id = ?",
+            "SELECT * FROM agent_background_agents WHERE id = ?",
             [agent_id],
         )
     ).first()

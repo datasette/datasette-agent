@@ -31,6 +31,10 @@ def register_routes():
             views.api_background_agent_status,
         ),
         (
+            r"^/-/agent/api/background/(?P<agent_id>[A-Za-z0-9]{26})/cancel$",
+            views.api_cancel_background_agent,
+        ),
+        (
             r"^/-/agent/explore/report/(?P<report_id>[A-Za-z0-9]{26})$",
             views.explorer_report_page,
         ),
@@ -53,6 +57,10 @@ def register_routes():
             views.agent_conversation_markdown,
         ),
         (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/poll$",
+            views.agent_conversation_poll,
+        ),
+        (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stream$",
             views.agent_stream,
         ),
@@ -62,6 +70,16 @@ def register_routes():
 @hookimpl
 def skip_csrf(scope):
     return scope["path"].startswith("/-/agent/")
+
+
+@hookimpl
+def startup(datasette):
+    from .api import reconcile_running_agents
+
+    async def inner():
+        await reconcile_running_agents(datasette)
+
+    return inner
 
 
 @hookimpl

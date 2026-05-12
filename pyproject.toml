@@ -1,6 +1,6 @@
 [project]
 name = "datasette-agent"
-version = "0.0.3"
+version = "0.0.4"
 description = "An LLM-powered agent assistant for Datasette"
 readme = "README.md"
 authors = [{name = "Simon Willison"}]
@@ -10,8 +10,9 @@ classifiers=[
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "datasette",
-    "datasette-llm",
+    "datasette>=1.0a28",
+    "datasette-llm>=0.1a7",
+    "llm>=0.32a2",
     "python-ulid",
 ]
 
@@ -19,14 +20,13 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
-    "llm-echo>=0.3",
+    "llm-echo>=0.5a0",
     "inline-snapshot",
 ]
 
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
-
 
 [project.urls]
 Homepage = "https://github.com/datasette/datasette-agent"

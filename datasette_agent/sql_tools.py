@@ -1,9 +1,48 @@
+import html
 import json
 from collections.abc import Mapping
 
 from datasette.resources import DatabaseResource, TableResource
 
 from .tools import AgentTool
+
+
+_DISPLAY_MODES = ("model", "both", "user")
+
+
+def _render_rows_html(columns, rows, truncated):
+    """Render a SQL result rowset as a small HTML <table>.
+
+    All column and cell values are HTML-escaped; cells are rendered with
+    their str() value. The output is dropped into the chat under a
+    .agent-rich-result wrapper by the existing _html side channel.
+    """
+    head = "".join(f"<th>{html.escape(str(c))}</th>" for c in columns)
+    body_rows = []
+    for row in rows:
+        if isinstance(row, Mapping):
+            cells = [row.get(c) for c in columns]
+        else:
+            cells = list(row)
+        body_rows.append(
+            "<tr>"
+            + "".join(f"<td>{html.escape(str(v))}</td>" for v in cells)
+            + "</tr>"
+        )
+    body = "".join(body_rows)
+    foot = ""
+    if truncated:
+        foot = (
+            f'<tfoot><tr><td colspan="{len(columns)}">'
+            "Results truncated</td></tr></tfoot>"
+        )
+    return (
+        '<table class="agent-sql-result">'
+        f"<thead><tr>{head}</tr></thead>"
+        f"<tbody>{body}</tbody>"
+        f"{foot}"
+        "</table>"
+    )
 
 
 def _get_value(item, key):
@@ -13,7 +52,7 @@ def _get_value(item, key):
 
 
 async def _list_databases_and_tables(datasette, actor):
-    result = {}
+    databases = []
     for db_name, db in datasette.databases.items():
         if db_name.startswith("_"):
             continue
@@ -23,9 +62,10 @@ async def _list_databases_and_tables(datasette, actor):
             actor=actor,
         ):
             continue
-        tables = await db.table_names()
-        result[db_name] = tables
-    return json.dumps(result)
+        databases.append(
+            {"database_name": db_name, "table_names": await db.table_names()}
+        )
+    return json.dumps({"databases": databases})
 
 
 async def _describe_table(datasette, actor, database: str, table: str):
@@ -35,7 +75,27 @@ async def _describe_table(datasette, actor, database: str, table: str):
         actor=actor,
     ):
         return json.dumps({"error": "Permission denied"})
+    if database not in datasette.databases:
+        available = [
+            name
+            for name in datasette.databases
+            if not name.startswith("_")
+        ]
+        return json.dumps(
+            {
+                "error": f"Database '{database}' not found",
+                "available_databases": available,
+            }
+        )
     db = datasette.get_database(database)
+    table_names = await db.table_names()
+    if table not in table_names:
+        return json.dumps(
+            {
+                "error": f"Table '{table}' not found in database '{database}'",
+                "available_tables": table_names,
+            }
+        )
     columns = await db.table_column_details(table)
     foreign_keys = await db.foreign_keys_for_table(table)
     return json.dumps(
@@ -58,25 +118,66 @@ async def _describe_table(datasette, actor, database: str, table: str):
     )
 
 
-async def _sql_query(datasette, actor, database: str, sql: str):
+async def _sql_query(
+    datasette, actor, database: str, sql: str, display: str = "model"
+):
     if not await datasette.allowed(
         action="execute-sql",
         resource=DatabaseResource(database=database),
         actor=actor,
     ):
         return json.dumps({"error": "Permission denied"})
+    if database not in datasette.databases:
+        available = [
+            name for name in datasette.databases if not name.startswith("_")
+        ]
+        return json.dumps(
+            {
+                "error": f"Database '{database}' not found",
+                "available_databases": available,
+            }
+        )
+    if display not in _DISPLAY_MODES:
+        display = "model"
     db = datasette.get_database(database)
     try:
         result = await db.execute(sql, truncate=True)
         rows = [dict(row) for row in result.rows]
-        output = json.dumps(
-            {
+
+        if display == "user":
+            # Hide bulk rows from the model: surface a summary the model
+            # can reason over (columns + row_count) and stash the actual
+            # rows under _rows for export.
+            payload = {
+                "columns": result.columns,
+                "row_count": len(rows),
+                "truncated": result.truncated,
+                "_html": _render_rows_html(
+                    result.columns, rows, result.truncated
+                ),
+                "_rows": rows,
+            }
+        elif display == "both":
+            payload = {
+                "columns": result.columns,
+                "rows": rows,
+                "truncated": result.truncated,
+                "_html": _render_rows_html(
+                    result.columns, rows, result.truncated
+                ),
+            }
+        else:  # "model" — unchanged default
+            payload = {
                 "columns": result.columns,
                 "rows": rows,
                 "truncated": result.truncated,
             }
-        )
-        # Truncate large outputs to avoid overwhelming the model
+
+        output = json.dumps(payload)
+        # Truncate large outputs to avoid overwhelming the model. Note
+        # this can corrupt JSON for very large _rows in user mode — the
+        # primary user-visible _html and the strip path don't depend on
+        # the model parsing the truncated tail.
         if len(output) > 10000:
             output = output[:10000] + "\n... (truncated)"
         return output
@@ -124,6 +225,23 @@ def get_default_tools():
                     "sql": {
                         "type": "string",
                         "description": "The SQL query to execute",
+                    },
+                    "display": {
+                        "type": "string",
+                        "enum": list(_DISPLAY_MODES),
+                        "default": "model",
+                        "description": (
+                            "Where results go. 'model' (default) returns "
+                            "rows to you alone — pick this when you need "
+                            "to reason over the data and won't show it to "
+                            "the user verbatim. 'both' returns rows to you "
+                            "AND renders an HTML table the user sees — pick "
+                            "this when you'll comment on the data you're "
+                            "answering with. 'user' renders the table for "
+                            "the user but only returns columns + row_count "
+                            "to you — pick this for 'show me…' style "
+                            "queries where you don't need to read the rows."
+                        ),
                     },
                 },
                 "required": ["database", "sql"],

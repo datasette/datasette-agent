@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}">
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
   <div class="agent-header">
     <a href="/-/agent">&larr; Back</a>
     <h1>{{ conversation.title or "Chat" }}</h1>
@@ -54,6 +54,11 @@
         <div class="agent-message agent-message-assistant">
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
+        {% elif msg.role == "reasoning" and msg.content %}
+        <details class="agent-reasoning">
+          <summary>Thinking</summary>
+          <div class="agent-reasoning-content">{{ msg.content }}</div>
+        </details>
         {% endif %}
       {% endif %}
     {% endfor %}
@@ -62,14 +67,17 @@
     {% endif %}
   </div>
 
+  {% if not background_agent %}
   <form id="chat-form" class="agent-input">
     <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
     <button type="submit" id="send-btn">Send</button>
   </form>
+  {% endif %}
 </div>
 
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
 <script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
+{% if not background_agent %}
 <script type="module">
 const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
 const pending = sessionStorage.getItem("agent_pending_message");
@@ -78,4 +86,80 @@ if (pending) {
   window.sendMessage(conversationId, pending);
 }
 </script>
+{% else %}
+<script>
+// Live-refresh the page while the background agent is still working.
+// Each poll asks the server for current status + message count; when
+// either has changed we reload to pick up the new messages. We preserve
+// scroll: if the user was at the bottom of #messages before reload,
+// stick them at the bottom of the now-longer transcript.
+(function () {
+  const chat = document.querySelector(".agent-chat");
+  if (!chat || !chat.dataset.pollUrl) return;
+  const pollUrl = chat.dataset.pollUrl;
+  const convId = chat.dataset.conversationId;
+  const messagesEl = document.getElementById("messages");
+
+  const initialStatus = chat.dataset.agentStatus || "pending";
+  const initialCount = parseInt(chat.dataset.messageCount || "0", 10);
+
+  const SCROLL_KEY = `agent-bg-${convId}-scroll`;
+
+  function nearBottom() {
+    return (
+      messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight
+      < 50
+    );
+  }
+
+  // Restore scroll on load.
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SCROLL_KEY) || "null");
+    if (saved && saved.atBottom) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    } else if (saved && typeof saved.top === "number") {
+      messagesEl.scrollTop = saved.top;
+    } else {
+      // First load: drop to the bottom so the user sees the latest activity.
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  } catch (e) {}
+
+  // Track scroll continuously so we know what to restore after reload.
+  messagesEl.addEventListener("scroll", () => {
+    sessionStorage.setItem(
+      SCROLL_KEY,
+      JSON.stringify({top: messagesEl.scrollTop, atBottom: nearBottom()})
+    );
+  });
+
+  const terminal = (s) => s === "completed" || s === "error";
+  if (terminal(initialStatus)) {
+    // Nothing to poll; clear any saved scroll so a future visit starts fresh.
+    sessionStorage.removeItem(SCROLL_KEY);
+    return;
+  }
+
+  let polling = true;
+  async function poll() {
+    if (!polling) return;
+    try {
+      const resp = await fetch(pollUrl);
+      if (resp.ok) {
+        const data = await resp.json();
+        const statusChanged = data.agent_status !== initialStatus;
+        const countChanged = (data.message_count || 0) !== initialCount;
+        if (statusChanged || countChanged) {
+          polling = false;
+          window.location.reload();
+          return;
+        }
+      }
+    } catch (e) {}
+    if (polling) setTimeout(poll, 2000);
+  }
+  setTimeout(poll, 2000);
+})();
+</script>
+{% endif %}
 {% endblock %}
