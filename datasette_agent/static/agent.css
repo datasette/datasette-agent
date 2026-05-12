@@ -138,7 +138,12 @@
 
 .agent-rich-result {
   max-width: calc(100% - 2em);
-  overflow-x: auto;
+  /* Direct child of the flex-column .agent-messages — without explicit
+     flex-shrink:0 the wrapper collapses below its content height and
+     the table body gets visually clipped. */
+  flex-shrink: 0;
+  max-height: 400px;
+  overflow: auto;
 }
 
 .agent-rich-result iframe {
@@ -153,8 +158,14 @@
   background: #fff;
   border: 1px solid #d0d7de;
   border-radius: 4px;
-  overflow: hidden;
   max-width: 100%;
+}
+
+/* Keep the header row visible while scrolling a tall result. */
+.agent-sql-result thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .agent-sql-result thead th {
