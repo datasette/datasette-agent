@@ -87,7 +87,7 @@ async def test_agent_permission_denied(datasette_instance):
 async def test_agent_index(datasette_instance, cookies):
     response = await datasette_instance.client.get("/-/agent", cookies=cookies)
     assert response.status_code == 200
-    assert "Agent" in response.text
+    assert "Datasette agent" in response.text
 
 
 @pytest.mark.asyncio
