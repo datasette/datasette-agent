@@ -196,12 +196,6 @@
   border-bottom: none;
 }
 
-.agent-sql-result tbody td:hover {
-  white-space: normal;
-  word-break: break-word;
-  background: #fffbea;
-}
-
 .agent-sql-result tfoot td {
   padding: 0.3rem 0.6rem;
   font-style: italic;
