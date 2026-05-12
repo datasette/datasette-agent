@@ -33,9 +33,7 @@ def make_tool_message_dict(name, output, tool_call_id):
 def message_dict_text(msg_dict):
     """Concatenate text parts of a MessageDict (used for title / display)."""
     return "".join(
-        p.get("text", "")
-        for p in msg_dict.get("parts", [])
-        if p.get("type") == "text"
+        p.get("text", "") for p in msg_dict.get("parts", []) if p.get("type") == "text"
     )
 
 

@@ -6,7 +6,6 @@ from datasette.resources import DatabaseResource, TableResource
 
 from .tools import AgentTool
 
-
 _DISPLAY_MODES = ("model", "both", "user")
 
 
@@ -25,9 +24,7 @@ def _render_rows_html(columns, rows, truncated):
         else:
             cells = list(row)
         body_rows.append(
-            "<tr>"
-            + "".join(f"<td>{html.escape(str(v))}</td>" for v in cells)
-            + "</tr>"
+            "<tr>" + "".join(f"<td>{html.escape(str(v))}</td>" for v in cells) + "</tr>"
         )
     body = "".join(body_rows)
     foot = ""
@@ -76,11 +73,7 @@ async def _describe_table(datasette, actor, database: str, table: str):
     ):
         return json.dumps({"error": "Permission denied"})
     if database not in datasette.databases:
-        available = [
-            name
-            for name in datasette.databases
-            if not name.startswith("_")
-        ]
+        available = [name for name in datasette.databases if not name.startswith("_")]
         return json.dumps(
             {
                 "error": f"Database '{database}' not found",
@@ -118,9 +111,7 @@ async def _describe_table(datasette, actor, database: str, table: str):
     )
 
 
-async def _sql_query(
-    datasette, actor, database: str, sql: str, display: str = "model"
-):
+async def _sql_query(datasette, actor, database: str, sql: str, display: str = "model"):
     if not await datasette.allowed(
         action="execute-sql",
         resource=DatabaseResource(database=database),
@@ -128,9 +119,7 @@ async def _sql_query(
     ):
         return json.dumps({"error": "Permission denied"})
     if database not in datasette.databases:
-        available = [
-            name for name in datasette.databases if not name.startswith("_")
-        ]
+        available = [name for name in datasette.databases if not name.startswith("_")]
         return json.dumps(
             {
                 "error": f"Database '{database}' not found",
@@ -152,9 +141,7 @@ async def _sql_query(
                 "columns": result.columns,
                 "row_count": len(rows),
                 "truncated": result.truncated,
-                "_html": _render_rows_html(
-                    result.columns, rows, result.truncated
-                ),
+                "_html": _render_rows_html(result.columns, rows, result.truncated),
                 "_rows": rows,
             }
         elif display == "both":
@@ -162,9 +149,7 @@ async def _sql_query(
                 "columns": result.columns,
                 "rows": rows,
                 "truncated": result.truncated,
-                "_html": _render_rows_html(
-                    result.columns, rows, result.truncated
-                ),
+                "_html": _render_rows_html(result.columns, rows, result.truncated),
             }
         else:  # "model" — unchanged default
             payload = {

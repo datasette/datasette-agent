@@ -1,6 +1,5 @@
 import json
 
-import pytest
 from inline_snapshot import snapshot
 
 from datasette_agent.export_markdown import format_conversation_markdown
@@ -22,8 +21,7 @@ def test_user_and_assistant_messages():
         _msg("assistant", content="Hi! How can I help?"),
     ]
     result = format_conversation_markdown("Test Chat", messages)
-    assert result == snapshot(
-        """\
+    assert result == snapshot("""\
 # Test Chat
 
 ## User
@@ -33,8 +31,7 @@ Hello there
 ## Agent
 
 Hi! How can I help?
-"""
-    )
+""")
 
 
 def test_tool_call_and_result():
@@ -53,8 +50,7 @@ def test_tool_call_and_result():
         _msg("assistant", content="There are 42 rows."),
     ]
     result = format_conversation_markdown("Tool Test", messages)
-    assert result == snapshot(
-        """\
+    assert result == snapshot("""\
 # Tool Test
 
 ## User
@@ -89,8 +85,7 @@ Count rows
 ## Agent
 
 There are 42 rows.
-"""
-    )
+""")
 
 
 def test_html_widget_in_tool_result():
@@ -100,8 +95,7 @@ def test_html_widget_in_tool_result():
         _msg("tool_result", tool_name="render", tool_output=output),
     ]
     result = format_conversation_markdown("HTML Test", messages)
-    assert result == snapshot(
-        """\
+    assert result == snapshot("""\
 # HTML Test
 
 <details>
@@ -127,8 +121,7 @@ def test_html_widget_in_tool_result():
 ```
 
 </details>
-"""
-    )
+""")
 
 
 def test_create_artifact():
@@ -145,8 +138,7 @@ def test_create_artifact():
         _msg("tool_result", tool_name="create_artifact", tool_output=output),
     ]
     result = format_conversation_markdown("Artifact Test", messages)
-    assert result == snapshot(
-        """\
+    assert result == snapshot("""\
 # Artifact Test
 
 <details>
@@ -185,8 +177,7 @@ def test_create_artifact():
 ```
 
 </details>
-"""
-    )
+""")
 
 
 def test_concurrent_tool_calls_paired_correctly():
@@ -233,8 +224,7 @@ def test_tool_result_error_string():
         ),
     ]
     result = format_conversation_markdown("Error Test", messages)
-    assert result == snapshot(
-        """\
+    assert result == snapshot("""\
 # Error Test
 
 <details>
@@ -251,8 +241,7 @@ Error: table not found
 ```
 
 </details>
-"""
-    )
+""")
 
 
 def test_empty_assistant_message_skipped():
@@ -262,12 +251,10 @@ def test_empty_assistant_message_skipped():
         _msg("assistant", content="Real content"),
     ]
     result = format_conversation_markdown("Skip Empty", messages)
-    assert result == snapshot(
-        """\
+    assert result == snapshot("""\
 # Skip Empty
 
 ## Agent
 
 Real content
-"""
-    )
+""")

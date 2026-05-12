@@ -231,9 +231,7 @@ async def _insert_background_conversation(
 
 
 @pytest.mark.asyncio
-async def test_conversation_poll_returns_status_and_count(
-    datasette_instance, cookies
-):
+async def test_conversation_poll_returns_status_and_count(datasette_instance, cookies):
     """The poll endpoint is the heartbeat the conversation page uses to
     decide when to reload — it must report current background-agent
     status and message count."""
@@ -320,7 +318,7 @@ async def test_background_conversation_page_includes_poll_url(
     )
     assert response.status_code == 200
     assert "/-/agent/01POLLPAGECONVAAAAAAAAAAAA/poll" in response.text
-    assert 'data-poll-url=' in response.text
+    assert "data-poll-url=" in response.text
 
 
 @pytest.mark.asyncio
@@ -342,7 +340,7 @@ async def test_user_conversation_page_does_not_include_poll_url(
         cookies=cookies,
     )
     assert response.status_code == 200
-    assert 'data-poll-url=' not in response.text
+    assert "data-poll-url=" not in response.text
 
 
 @pytest.mark.asyncio
@@ -647,17 +645,13 @@ async def test_describe_table_tool(tmp_path):
     assert result["foreign_keys"][0]["column"] == "author_id"
     assert result["foreign_keys"][0]["other_table"] == "authors"
 
-    bad_db = json.loads(
-        await _describe_table(ds, {"id": "test"}, "nope", "books")
-    )
+    bad_db = json.loads(await _describe_table(ds, {"id": "test"}, "nope", "books"))
     assert bad_db == {
         "error": "Database 'nope' not found",
         "available_databases": ["test"],
     }
 
-    bad_table = json.loads(
-        await _describe_table(ds, {"id": "test"}, "test", "nope")
-    )
+    bad_table = json.loads(await _describe_table(ds, {"id": "test"}, "test", "nope"))
     assert bad_table["error"] == "Table 'nope' not found in database 'test'"
     assert set(bad_table["available_tables"]) == {"authors", "books"}
 
@@ -678,9 +672,7 @@ async def test_list_databases_and_tables_shape(tmp_path):
     await ds.invoke_startup()
     result = json.loads(await _list_databases_and_tables(ds, {"id": "test"}))
     assert result == {
-        "databases": [
-            {"database_name": "alpha", "table_names": ["one", "two"]}
-        ]
+        "databases": [{"database_name": "alpha", "table_names": ["one", "two"]}]
     }
 
 

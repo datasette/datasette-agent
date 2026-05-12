@@ -207,9 +207,7 @@ async def test_render_rows_html_table_shape():
 async def test_render_rows_html_truncated_marker():
     from datasette_agent.sql_tools import _render_rows_html
 
-    html = _render_rows_html(
-        columns=["a"], rows=[[1]], truncated=True
-    )
+    html = _render_rows_html(columns=["a"], rows=[[1]], truncated=True)
     assert "truncated" in html.lower()
 
 

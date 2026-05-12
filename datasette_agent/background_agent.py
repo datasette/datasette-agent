@@ -90,9 +90,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
 
     try:
         # Save initial goal as the opening user message.
-        await insert_message(
-            db, conversation_id, make_user_message_dict(goal)
-        )
+        await insert_message(db, conversation_id, make_user_message_dict(goal))
 
         llm_instance = LLM(datasette)
         model = await llm_instance.model(purpose="agent", actor=actor)

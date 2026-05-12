@@ -78,13 +78,15 @@ def format_conversation_markdown(title, messages):
 
             # HTML widget from _html
             if html_content:
-                parts.append(f"<details>\n<summary>HTML widget: {tool_name}</summary>\n")
+                parts.append(
+                    f"<details>\n<summary>HTML widget: {tool_name}</summary>\n"
+                )
                 parts.append(f"```html\n{html_content}\n```\n")
                 parts.append("</details>\n")
 
             # Artifact HTML from create_artifact arguments
             if artifact_html:
-                parts.append(f"<details>\n<summary>Artifact HTML</summary>\n")
+                parts.append("<details>\n<summary>Artifact HTML</summary>\n")
                 parts.append(f"```html\n{artifact_html}\n```\n")
                 parts.append("</details>\n")
 

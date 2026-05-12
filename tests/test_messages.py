@@ -8,9 +8,7 @@ from datasette_agent.messages import strip_internal_keys
 def test_strip_internal_keys_removes_underscore_prefixed():
     """Any top-level key starting with _ is treated as a side-channel for
     user-visible rendering / export and must not flow back to the model."""
-    raw = json.dumps(
-        {"columns": ["a"], "rows": [[1]], "_html": "<table></table>"}
-    )
+    raw = json.dumps({"columns": ["a"], "rows": [[1]], "_html": "<table></table>"})
     stripped = json.loads(strip_internal_keys(raw))
     assert stripped == {"columns": ["a"], "rows": [[1]]}
 
@@ -35,9 +33,7 @@ def test_strip_internal_keys_preserves_non_underscore_keys():
     """Public keys must be left alone — including ones the legacy strip
     used to remove like 'sql'. Plugins that want a key hidden must opt in
     by prefixing it with _."""
-    raw = json.dumps(
-        {"columns": ["a"], "rows": [[1]], "sql": "select * from t"}
-    )
+    raw = json.dumps({"columns": ["a"], "rows": [[1]], "sql": "select * from t"})
     stripped = json.loads(strip_internal_keys(raw))
     assert stripped == {
         "columns": ["a"],

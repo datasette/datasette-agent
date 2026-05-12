@@ -1,4 +1,3 @@
-import asyncio
 import json
 import sys
 from datetime import datetime, timezone
@@ -54,14 +53,12 @@ async def run_chat(datasette, initial_prompt=None):
     async def after_call(tool, tool_call, tool_result):
         output = tool_result.output or ""
         display = output if len(output) <= 500 else output[:500] + "..."
-        print(f"--- Result ---")
+        print("--- Result ---")
         print(display)
-        print(f"---")
+        print("---")
         sys.stdout.flush()
         pending_tool_messages.append(
-            make_tool_message_dict(
-                tool_result.name, output, tool_result.tool_call_id
-            )
+            make_tool_message_dict(tool_result.name, output, tool_result.tool_call_id)
         )
         tool_result.output = strip_internal_keys(output)
 
@@ -82,9 +79,7 @@ async def run_chat(datasette, initial_prompt=None):
                 break
         first = False
 
-        await insert_message(
-            db, conversation_id, make_user_message_dict(user_message)
-        )
+        await insert_message(db, conversation_id, make_user_message_dict(user_message))
 
         chain_kwargs = {}
         if first_message:
