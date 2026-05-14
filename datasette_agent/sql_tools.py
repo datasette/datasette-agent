@@ -51,8 +51,6 @@ def _get_value(item, key):
 async def _list_databases_and_tables(datasette, actor):
     databases = []
     for db_name, db in datasette.databases.items():
-        if db_name.startswith("_"):
-            continue
         if not await datasette.allowed(
             action="view-database",
             resource=DatabaseResource(database=db_name),
@@ -73,7 +71,7 @@ async def _describe_table(datasette, actor, database: str, table: str):
     ):
         return json.dumps({"error": "Permission denied"})
     if database not in datasette.databases:
-        available = [name for name in datasette.databases if not name.startswith("_")]
+        available = list(datasette.databases)
         return json.dumps(
             {
                 "error": f"Database '{database}' not found",
@@ -119,7 +117,7 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
     ):
         return json.dumps({"error": "Permission denied"})
     if database not in datasette.databases:
-        available = [name for name in datasette.databases if not name.startswith("_")]
+        available = list(datasette.databases)
         return json.dumps(
             {
                 "error": f"Database '{database}' not found",

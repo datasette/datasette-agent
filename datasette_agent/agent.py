@@ -54,8 +54,6 @@ async def _build_system_prompt(datasette, actor):
     ]
     db_info = {}
     for db_name, db in datasette.databases.items():
-        if db_name.startswith("_"):
-            continue
         tables = await db.table_names()
         if tables:
             db_info[db_name] = tables

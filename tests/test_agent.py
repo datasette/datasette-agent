@@ -78,6 +78,27 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_includes_underscore_databases(tmp_path):
+    """Databases whose name starts with `_` (e.g. `_internal`, custom
+    underscore-prefixed databases) must appear in the system prompt
+    listing — the agent should see anything the actor can query."""
+    from datasette_agent.agent import _build_system_prompt
+
+    ds = Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    prompt = await _build_system_prompt(ds, {"id": "user"})
+    assert "_custom" in prompt
+
+
+@pytest.mark.asyncio
 async def test_agent_permission_denied(datasette_instance):
     response = await datasette_instance.client.get("/-/agent")
     assert response.status_code == 403

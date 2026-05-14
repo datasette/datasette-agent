@@ -222,3 +222,80 @@ async def test_render_rows_html_escapes_html_in_cells():
     )
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+@pytest.mark.asyncio
+async def test_list_databases_includes_underscore_db_when_permitted(tmp_path):
+    """Databases whose name starts with `_` are not hidden from the agent.
+    If the actor has view-database permission they show up in the listing
+    alongside everything else — Datasette's permission system is the only
+    gatekeeper."""
+    from datasette_agent.sql_tools import _list_databases_and_tables
+
+    ds = Datasette(memory=True, internal=str(tmp_path / "internal.db"))
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    result = json.loads(await _list_databases_and_tables(ds, {"id": "user"}))
+    names = {d["database_name"] for d in result["databases"]}
+    assert "_custom" in names
+
+
+@pytest.mark.asyncio
+async def test_sql_query_unknown_database_lists_underscore_dbs(tmp_path):
+    """When sql_query reports an unknown-database error, the
+    `available_databases` list must include any underscore-prefixed
+    databases the actor can execute-sql against."""
+    from datasette_agent.sql_tools import _sql_query
+
+    ds = Datasette(memory=True, internal=str(tmp_path / "internal.db"))
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    result = json.loads(
+        await _sql_query(ds, {"id": "user"}, "nope", "select 1")
+    )
+    assert result["error"] == "Database 'nope' not found"
+    assert "_custom" in result["available_databases"]
+
+
+@pytest.mark.asyncio
+async def test_describe_table_unknown_database_lists_underscore_dbs(tmp_path):
+    """The describe_table unknown-database error path must also include
+    underscore databases in `available_databases`."""
+    from datasette_agent.sql_tools import _describe_table
+
+    ds = Datasette(memory=True, internal=str(tmp_path / "internal.db"))
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    result = json.loads(
+        await _describe_table(ds, {"id": "user"}, "nope", "foo")
+    )
+    assert result["error"] == "Database 'nope' not found"
+    assert "_custom" in result["available_databases"]
+
+
+@pytest.mark.asyncio
+async def test_sql_query_executes_against_underscore_database(tmp_path):
+    """A user with execute-sql permission must actually be able to run a
+    query against an underscore-prefixed database — the filter previously
+    blocked listing but the query path itself was fine; we still want a
+    direct test that the end-to-end happy path works."""
+    from datasette_agent.sql_tools import _sql_query
+
+    ds = Datasette(memory=True, internal=str(tmp_path / "internal.db"))
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await db.execute_write(
+        "INSERT OR IGNORE INTO foo (id) VALUES (1), (2)"
+    )
+    await ds.invoke_startup()
+
+    result = json.loads(
+        await _sql_query(ds, {"id": "user"}, "_custom", "select count(*) as n from foo")
+    )
+    assert result["rows"] == [{"n": 2}]
