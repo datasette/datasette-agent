@@ -52,7 +52,7 @@ async def _list_databases_and_tables(datasette, actor):
     databases = []
     for db_name, db in datasette.databases.items():
         if not await datasette.allowed(
-            action="view-database",
+            action="execute-sql",
             resource=DatabaseResource(database=db_name),
             actor=actor,
         ):

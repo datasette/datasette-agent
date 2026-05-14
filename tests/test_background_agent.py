@@ -240,6 +240,7 @@ async def test_background_agent_completes(datasette_instance):
         start_background_agent,
     )
 
+    await datasette_instance.invoke_startup()
     agent_id = await start_background_agent(
         datasette=datasette_instance,
         actor={"id": "user"},
@@ -291,6 +292,7 @@ async def test_pending_notification_created_on_completion(datasette_instance):
 
     db = datasette_instance.get_internal_database()
     await ensure_tables(db)
+    await datasette_instance.invoke_startup()
 
     agent_id = await start_background_agent(
         datasette=datasette_instance,
