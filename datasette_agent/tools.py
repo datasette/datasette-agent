@@ -12,6 +12,7 @@ class AgentTool:
     description: str
     input_schema: dict
     fn: Callable  # async fn(datasette, actor, **tool_params) -> str
+    required_permission: str | None = None
 
 
 async def get_agent_tools(datasette):
@@ -31,6 +32,18 @@ async def get_agent_tools_by_plugin(datasette):
         if result:
             grouped[impl.plugin_name] = list(result)
     return grouped
+
+
+async def filter_tools_for_actor(datasette, actor, tools):
+    """Drop tools whose `required_permission` the actor lacks."""
+    out = []
+    for tool in tools:
+        if tool.required_permission and not await datasette.allowed(
+            action=tool.required_permission, actor=actor
+        ):
+            continue
+        out.append(tool)
+    return out
 
 
 def make_llm_tools(agent_tools, datasette, actor):
