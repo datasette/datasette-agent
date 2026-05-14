@@ -31,12 +31,13 @@ Visit `/-/agent/background` to launch background agents directly. Each one is gi
 
 ### Permissions
 
-This plugin registers two independent permissions:
+This plugin registers three independent permissions:
 
 - `datasette-agent` — required to use the chat assistant under `/-/agent`.
 - `datasette-agent-explore` — required to see the "Explore with AI agent" entries in the database/table action menus and to use the explorer routes under `/-/agent/explore/`.
+- `datasette-agent-background` — required to use the `spawn_background_agent` and `check_background_agent` tools from chat, and to access the `/-/agent/background` page and `/-/agent/api/background/*` endpoints. The background-agent endpoints require both `datasette-agent` and `datasette-agent-background`.
 
-The two permissions are independent: an actor may hold one without the other. The `--root` user has both.
+The three permissions are independent: an actor may hold any subset. The `--root` user holds all of them.
 
 ## Registering additional tools from plugins
 
@@ -73,9 +74,48 @@ def register_agent_tools(datasette):
                 "required": ["query"],
             },
             fn=my_tool_handler,
+            # Optional: name a Datasette permission action that gates this tool.
+            # required_permission="myplugin-write",
         ),
     ]
 ```
+
+### Gating a tool with a permission
+
+`AgentTool` accepts an optional `required_permission: str | None` field. When set, the agent harness calls `datasette.allowed(action=required_permission, actor=actor)` for the current actor before sending the tool list to the LLM. If the actor lacks the permission, the tool is filtered out of the list — the model never sees it and cannot call it. There is no runtime "permission denied" branch your `fn` needs to handle.
+
+Your plugin is responsible for registering the action via Datasette's `register_actions` plugin hook:
+
+```python
+from datasette import hookimpl
+from datasette.permissions import Action
+from datasette_agent.tools import AgentTool
+
+
+@hookimpl
+def register_actions():
+    return [
+        Action(
+            name="myplugin-write",
+            description="Allow my plugin's write tools",
+        ),
+    ]
+
+
+@hookimpl
+def register_agent_tools(datasette):
+    return [
+        AgentTool(
+            name="my_write_tool",
+            description="Writes things",
+            input_schema={"type": "object", "properties": {}},
+            fn=my_write_handler,
+            required_permission="myplugin-write",
+        ),
+    ]
+```
+
+For a working example see this plugin's own `spawn_background_agent` and `check_background_agent` tools, which use `required_permission="datasette-agent-background"`.
 
 ### Tool handler function
 
