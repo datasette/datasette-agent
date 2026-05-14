@@ -179,15 +179,9 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             status = "error"
 
         now = datetime.now(timezone.utc).isoformat()
-        # Guard with status='running' so a natural-completion write loses
-        # to a cancel write that already flipped the row to 'error'.
-        await db.execute_write(
-            "UPDATE agent_background_agents "
-            "SET status = ?, final_message = ?, error = ?, updated_at = ? "
-            "WHERE id = ? AND status = 'running'",
-            [status, final_message, error, now, agent_id],
-        )
-
+        # Insert the notification BEFORE flipping status, so observers that
+        # poll status and then read notifications cannot see status =
+        # 'completed' before the notification row is committed.
         if spawned_by_conversation_id:
             notification_content = (
                 f"[Background agent {agent_id} {status}] "
@@ -199,6 +193,15 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                 "(conversation_id, content, created_at) VALUES (?, ?, ?)",
                 [spawned_by_conversation_id, notification_content, now],
             )
+
+        # Guard with status='running' so a natural-completion write loses
+        # to a cancel write that already flipped the row to 'error'.
+        await db.execute_write(
+            "UPDATE agent_background_agents "
+            "SET status = ?, final_message = ?, error = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'running'",
+            [status, final_message, error, now, agent_id],
+        )
 
     except Exception as e:
         now = datetime.now(timezone.utc).isoformat()
