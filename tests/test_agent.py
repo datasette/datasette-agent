@@ -45,6 +45,7 @@ async def test_system_prompt_documents_display_modes(datasette_instance):
     the user never sees rendered tables."""
     from datasette_agent.agent import _build_system_prompt
 
+    await datasette_instance.invoke_startup()
     prompt = await _build_system_prompt(datasette_instance, {"id": "user"})
     lowered = prompt.lower()
     # All three modes must be named so the model knows the menu.
@@ -68,6 +69,7 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
     showed."""
     from datasette_agent.agent import _build_system_prompt
 
+    await datasette_instance.invoke_startup()
     prompt = await _build_system_prompt(datasette_instance, {"id": "user"})
     lowered = prompt.lower()
     # We don't pin exact wording — just that the prompt contains both
@@ -75,6 +77,58 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
     # table so the model can connect the two.
     assert "repeat" in lowered or "restate" in lowered or "duplicate" in lowered
     assert "table" in lowered
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_hides_dbs_without_execute_sql(tmp_path):
+    """The system prompt lists the databases the agent can use. If the
+    actor lacks execute-sql on a database, naming it in the prompt is
+    misleading — the model will be told it can query something it can't."""
+    from datasette_agent.agent import _build_system_prompt
+
+    ds = Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {"datasette-agent": {"id": "user"}},
+            "databases": {
+                "private": {
+                    "permissions": {"execute-sql": {"id": "someone_else"}}
+                }
+            },
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    public = ds.add_memory_database("public")
+    private = ds.add_memory_database("private")
+    await public.execute_write("CREATE TABLE IF NOT EXISTS p (id INTEGER PRIMARY KEY)")
+    await private.execute_write("CREATE TABLE IF NOT EXISTS s (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    prompt = await _build_system_prompt(ds, {"id": "user"})
+    assert "public" in prompt
+    assert "private" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_includes_underscore_databases(tmp_path):
+    """Databases whose name starts with `_` (e.g. `_internal`, custom
+    underscore-prefixed databases) must appear in the system prompt
+    listing — the agent should see anything the actor can query."""
+    from datasette_agent.agent import _build_system_prompt
+
+    ds = Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    prompt = await _build_system_prompt(ds, {"id": "user"})
+    assert "_custom" in prompt
 
 
 @pytest.mark.asyncio

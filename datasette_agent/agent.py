@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 
+from datasette.resources import DatabaseResource
 from datasette_llm import LLM
 
 from .context import current_conversation_id
@@ -54,7 +55,11 @@ async def _build_system_prompt(datasette, actor):
     ]
     db_info = {}
     for db_name, db in datasette.databases.items():
-        if db_name.startswith("_"):
+        if not await datasette.allowed(
+            action="execute-sql",
+            resource=DatabaseResource(database=db_name),
+            actor=actor,
+        ):
             continue
         tables = await db.table_names()
         if tables:

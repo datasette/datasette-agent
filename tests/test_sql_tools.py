@@ -222,3 +222,51 @@ async def test_render_rows_html_escapes_html_in_cells():
     )
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+
+
+@pytest.mark.asyncio
+async def test_list_databases_includes_underscore_db_when_permitted(tmp_path):
+    """Databases whose name starts with `_` are not hidden from the agent.
+    If the actor has execute-sql permission they show up in the listing
+    alongside everything else — Datasette's permission system is the only
+    gatekeeper."""
+    from datasette_agent.sql_tools import _list_databases_and_tables
+
+    ds = Datasette(memory=True, internal=str(tmp_path / "internal.db"))
+    db = ds.add_memory_database("_custom")
+    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    result = json.loads(await _list_databases_and_tables(ds, {"id": "user"}))
+    names = {d["database_name"] for d in result["databases"]}
+    assert "_custom" in names
+
+
+@pytest.mark.asyncio
+async def test_list_databases_hides_dbs_without_execute_sql(tmp_path):
+    """A database the actor cannot execute-sql against must not appear in
+    the listing — otherwise the model will happily suggest queries that
+    will then be rejected at execution time."""
+    from datasette_agent.sql_tools import _list_databases_and_tables
+
+    ds = Datasette(
+        memory=True,
+        config={
+            "databases": {
+                "private": {
+                    "permissions": {"execute-sql": {"id": "someone_else"}}
+                }
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    public = ds.add_memory_database("public")
+    private = ds.add_memory_database("private")
+    await public.execute_write("CREATE TABLE IF NOT EXISTS p (id INTEGER PRIMARY KEY)")
+    await private.execute_write("CREATE TABLE IF NOT EXISTS s (id INTEGER PRIMARY KEY)")
+    await ds.invoke_startup()
+
+    result = json.loads(await _list_databases_and_tables(ds, {"id": "user"}))
+    names = {d["database_name"] for d in result["databases"]}
+    assert "public" in names
+    assert "private" not in names
