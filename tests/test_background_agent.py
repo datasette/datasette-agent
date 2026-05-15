@@ -456,9 +456,7 @@ def datasette_chat_only(tmp_path):
 
 @pytest.fixture
 def chat_only_cookies(datasette_chat_only):
-    return {
-        "ds_actor": datasette_chat_only.client.actor_cookie({"id": "chat_only"})
-    }
+    return {"ds_actor": datasette_chat_only.client.actor_cookie({"id": "chat_only"})}
 
 
 @pytest.mark.asyncio
