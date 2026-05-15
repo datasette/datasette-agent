@@ -56,6 +56,7 @@ def datasette_instance(tmp_path):
         config={
             "permissions": {
                 "datasette-agent": {"id": "user"},
+                "datasette-agent-background": {"id": "user"},
             }
         },
         internal=str(tmp_path / "internal.db"),
@@ -269,6 +270,74 @@ async def test_background_tools_registered(datasette_instance):
     assert "check_background_agent" in tool_names
 
 
+@pytest.mark.asyncio
+async def test_background_permission_action_registered(datasette_instance):
+    """The plugin must register a datasette-agent-background permission action."""
+    await datasette_instance.invoke_startup()
+    action = datasette_instance.get_action("datasette-agent-background")
+    assert action is not None
+    assert action.name == "datasette-agent-background"
+
+
+@pytest.mark.asyncio
+async def test_background_tools_declare_required_permission(datasette_instance):
+    """spawn_background_agent and check_background_agent must require the new action."""
+    from datasette_agent.tools import get_agent_tools
+
+    tools = await get_agent_tools(datasette_instance)
+    by_name = {t.name: t for t in tools}
+    assert (
+        by_name["spawn_background_agent"].required_permission
+        == "datasette-agent-background"
+    )
+    assert (
+        by_name["check_background_agent"].required_permission
+        == "datasette-agent-background"
+    )
+
+
+@pytest.mark.asyncio
+async def test_filter_tools_drops_unauthorised(datasette_instance):
+    """Actor without datasette-agent-background should have those tools filtered out."""
+    from datasette_agent.tools import filter_tools_for_actor, get_agent_tools
+
+    await datasette_instance.invoke_startup()
+    tools = await get_agent_tools(datasette_instance)
+    # Use an actor with no granted permissions — the fixture only names "user".
+    filtered = await filter_tools_for_actor(
+        datasette_instance, {"id": "stranger"}, tools
+    )
+    names = {t.name for t in filtered}
+    assert "spawn_background_agent" not in names
+    assert "check_background_agent" not in names
+    # Unrelated tools survive.
+    assert "list_databases_and_tables" in names
+
+
+@pytest.mark.asyncio
+async def test_filter_tools_keeps_authorised(tmp_path):
+    """Actor with datasette-agent-background granted keeps the tools."""
+    from datasette_agent.tools import filter_tools_for_actor, get_agent_tools
+
+    ds = Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                "datasette-agent-background": {"id": "user"},
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    await ds.invoke_startup()
+    tools = await get_agent_tools(ds)
+    filtered = await filter_tools_for_actor(ds, {"id": "user"}, tools)
+    names = {t.name for t in filtered}
+    assert "spawn_background_agent" in names
+    assert "check_background_agent" in names
+
+
 # --- Context var ---
 
 
@@ -367,6 +436,72 @@ async def test_background_index_page(datasette_instance, cookies):
 @pytest.mark.asyncio
 async def test_background_index_requires_permission(datasette_instance):
     response = await datasette_instance.client.get("/-/agent/background")
+    assert response.status_code == 403
+
+
+@pytest.fixture
+def datasette_chat_only(tmp_path):
+    """Actor has datasette-agent (chat access) but NOT datasette-agent-background."""
+    return Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "chat_only"},
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+
+
+@pytest.fixture
+def chat_only_cookies(datasette_chat_only):
+    return {"ds_actor": datasette_chat_only.client.actor_cookie({"id": "chat_only"})}
+
+
+@pytest.mark.asyncio
+async def test_background_index_requires_background_permission(
+    datasette_chat_only, chat_only_cookies
+):
+    """Holding datasette-agent alone is not enough for the background index."""
+    response = await datasette_chat_only.client.get(
+        "/-/agent/background", cookies=chat_only_cookies
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_api_create_background_agent_requires_background_permission(
+    datasette_chat_only, chat_only_cookies
+):
+    response = await datasette_chat_only.client.post(
+        "/-/agent/api/background",
+        content=json.dumps({"goal": "Analyze the data"}),
+        headers={"Content-Type": "application/json"},
+        cookies=chat_only_cookies,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_api_background_agent_status_requires_background_permission(
+    datasette_chat_only, chat_only_cookies
+):
+    response = await datasette_chat_only.client.get(
+        "/-/agent/api/background/01STATUSAUTHAAAAAAAAAAAAAA",
+        cookies=chat_only_cookies,
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_api_cancel_background_agent_requires_background_permission(
+    datasette_chat_only, chat_only_cookies
+):
+    response = await datasette_chat_only.client.post(
+        "/-/agent/api/background/01CANCELAUTHAAAAAAAAAAAAAA/cancel",
+        cookies=chat_only_cookies,
+    )
     assert response.status_code == 403
 
 

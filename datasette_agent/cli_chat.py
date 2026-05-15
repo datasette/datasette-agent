@@ -12,7 +12,7 @@ from .messages import (
     strip_internal_keys,
 )
 from .schema import ensure_tables
-from .tools import get_agent_tools, make_llm_tools
+from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
 async def run_chat(datasette, initial_prompt=None):
@@ -33,6 +33,7 @@ async def run_chat(datasette, initial_prompt=None):
     actor = {"id": "cli"}
 
     agent_tools = await get_agent_tools(datasette)
+    agent_tools = await filter_tools_for_actor(datasette, actor, agent_tools)
     llm_tools = make_llm_tools(agent_tools, datasette, actor)
 
     llm_instance = LLM(datasette)

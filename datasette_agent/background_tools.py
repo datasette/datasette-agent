@@ -55,6 +55,7 @@ def get_background_tools():
                 "required": ["goal"],
             },
             fn=_spawn_background_agent,
+            required_permission="datasette-agent-background",
         ),
         AgentTool(
             name="check_background_agent",
@@ -73,5 +74,6 @@ def get_background_tools():
                 "required": ["agent_id"],
             },
             fn=_check_background_agent,
+            required_permission="datasette-agent-background",
         ),
     ]

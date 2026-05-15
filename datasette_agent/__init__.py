@@ -18,6 +18,10 @@ def register_actions():
             name="datasette-agent-explore",
             description="Launch and view AI explorer reports on databases and tables",
         ),
+        Action(
+            name="datasette-agent-background",
+            description="Spawn and inspect background agents",
+        ),
     ]
 
 

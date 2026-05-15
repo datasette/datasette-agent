@@ -247,6 +247,9 @@ async def agent_stream(request, datasette):
 
 async def agent_background_index(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-background", actor=request.actor
+    )
     db = datasette.get_internal_database()
     await ensure_tables(db)
     actor_id = _actor_id(request)
@@ -278,6 +281,9 @@ async def agent_background_index(request, datasette):
 
 async def api_create_background_agent(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-background", actor=request.actor
+    )
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
 
@@ -307,6 +313,9 @@ async def api_create_background_agent(request, datasette):
 
 async def api_background_agent_status(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-background", actor=request.actor
+    )
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
@@ -334,6 +343,9 @@ async def api_cancel_background_agent(request, datasette):
     so the caller can refresh and see the existing result.
     """
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(
+        action="datasette-agent-background", actor=request.actor
+    )
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
 
