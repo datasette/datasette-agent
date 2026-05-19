@@ -278,6 +278,57 @@ async def test_context_var_exists():
     assert current_conversation_id.get() is None
 
 
+@pytest.mark.asyncio
+async def test_background_agent_sets_and_resets_current_conversation_id(
+    datasette_instance,
+):
+    from datasette_agent.api import get_background_agent_status, start_background_agent
+    from datasette_agent.context import current_conversation_id
+    from datasette_agent.tools import AgentTool
+
+    seen = []
+
+    async def capture_context(datasette, actor):
+        seen.append(current_conversation_id.get())
+        return json.dumps({"ok": True})
+
+    capture_tool = AgentTool(
+        name="capture_context",
+        description="Capture current conversation context for tests",
+        input_schema={"type": "object", "properties": {}},
+        fn=capture_context,
+    )
+    goal = json.dumps(
+        {
+            "prompt": "Capture context",
+            "tool_calls": [
+                {"name": "capture_context", "arguments": {}},
+                {
+                    "name": "mark_finished",
+                    "arguments": {"final_message": "done", "error": None},
+                },
+            ],
+        }
+    )
+
+    agent_id = await start_background_agent(
+        datasette=datasette_instance,
+        actor={"id": "user"},
+        goal=goal,
+        tools=[capture_tool],
+    )
+
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(datasette_instance, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+
+    assert status["status"] == "completed"
+    assert seen == [status["conversation_id"]]
+    assert current_conversation_id.get() is None
+
+
 # --- Pending notifications ---
 
 

@@ -362,6 +362,39 @@
   cursor: not-allowed;
 }
 
+.agent-local-files {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0;
+  border-top: 1px solid #ddd;
+  color: #555;
+  font-size: 0.85rem;
+}
+
+.agent-local-files-select,
+.agent-local-files-forget {
+  border: 1px solid #c7d0d9;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.3rem 0.65rem;
+}
+
+.agent-local-files-select:hover,
+.agent-local-files-forget:hover {
+  background: #f3f4f6;
+}
+
+.agent-local-files-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Index page */
 .agent-new-chat {
   display: flex;

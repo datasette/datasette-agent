@@ -141,6 +141,104 @@ async def test_create_conversation(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_agent_stream_rejects_overlapping_turn(
+    datasette_instance, cookies
+):
+    from datasette_agent.schema import ensure_tables
+    from datasette_agent.turns import conversation_turn
+
+    resp = await datasette_instance.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    async with conversation_turn(conversation_id):
+        response = await datasette_instance.client.post(
+            f"/-/agent/{conversation_id}/stream",
+            content=json.dumps({"message": "second message"}),
+            headers={"Content-Type": "application/json"},
+            cookies=cookies,
+        )
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "already running for this conversation" in response.text
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    count = (
+        await db.execute(
+            "SELECT count(*) FROM agent_messages WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).single_value()
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_run_agent_sets_and_resets_current_conversation_id(
+    datasette_instance, monkeypatch
+):
+    from datetime import datetime, timezone
+
+    from datasette_agent.agent import run_agent
+    from datasette_agent.context import current_conversation_id
+    from datasette_agent.schema import ensure_tables
+    from datasette_agent.tools import AgentTool
+
+    seen = []
+
+    async def capture_context(datasette, actor):
+        seen.append(current_conversation_id.get())
+        return json.dumps({"ok": True})
+
+    async def fake_get_agent_tools(datasette):
+        return [
+            AgentTool(
+                name="capture_context",
+                description="Capture current conversation context for tests",
+                input_schema={"type": "object", "properties": {}},
+                fn=capture_context,
+            )
+        ]
+
+    class Writer:
+        async def write(self, message):
+            return None
+
+    monkeypatch.setattr("datasette_agent.agent.get_agent_tools", fake_get_agent_tools)
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = "01CTXWEBAGENTAAAAAAAAAAAA"
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, now, now],
+    )
+
+    user_message = json.dumps(
+        {
+            "prompt": "Capture context",
+            "tool_calls": [{"name": "capture_context", "arguments": {}}],
+        }
+    )
+    await run_agent(
+        datasette_instance,
+        {"id": "user"},
+        conversation_id,
+        user_message,
+        Writer(),
+    )
+
+    assert seen == [conversation_id]
+    assert current_conversation_id.get() is None
+
+
+@pytest.mark.asyncio
 async def test_conversation_page(datasette_instance, cookies):
     # Create a conversation first
     resp = await datasette_instance.client.post(

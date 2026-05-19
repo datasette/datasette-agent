@@ -14,12 +14,33 @@ class AgentTool:
     fn: Callable  # async fn(datasette, actor, **tool_params) -> str
 
 
+@dataclass
+class AgentClientTool:
+    name: str
+    description: str
+    input_schema: dict
+    module_url: str
+    timeout: float = 30.0
+
+
 async def get_agent_tools(datasette):
     tools = []
     for result in pm.hook.register_agent_tools(datasette=datasette):
         result = await await_me_maybe(result)
         if result:
             tools.extend(result)
+    return tools
+
+
+async def get_agent_client_tools(datasette):
+    tools = []
+    for result in pm.hook.register_agent_client_tools(datasette=datasette):
+        result = await await_me_maybe(result)
+        if result:
+            if isinstance(result, AgentClientTool):
+                tools.append(result)
+            else:
+                tools.extend(result)
     return tools
 
 
@@ -30,6 +51,19 @@ async def get_agent_tools_by_plugin(datasette):
         result = await await_me_maybe(impl.function(datasette=datasette))
         if result:
             grouped[impl.plugin_name] = list(result)
+    return grouped
+
+
+async def get_agent_client_tools_by_plugin(datasette):
+    """Return dict mapping plugin name to list of AgentClientTool instances."""
+    grouped = {}
+    for impl in pm.hook.register_agent_client_tools.get_hookimpls():
+        result = await await_me_maybe(impl.function(datasette=datasette))
+        if result:
+            if isinstance(result, AgentClientTool):
+                grouped[impl.plugin_name] = [result]
+            else:
+                grouped[impl.plugin_name] = list(result)
     return grouped
 
 
@@ -46,6 +80,29 @@ def make_llm_tools(agent_tools, datasette, actor):
                 name=agent_tool.name,
                 description=agent_tool.description,
                 input_schema=agent_tool.input_schema,
+                implementation=_impl,
+            )
+        )
+    return llm_tools
+
+
+def make_client_llm_tools(client_tools, runner):
+    """Convert AgentClientTool instances to llm.Tool instances.
+
+    The runner is responsible for sending the tool call to the browser and
+    awaiting the matching result.
+    """
+    llm_tools = []
+    for client_tool in client_tools:
+
+        async def _impl(_client_tool=client_tool, **kwargs):
+            return await runner.run(_client_tool, kwargs)
+
+        llm_tools.append(
+            llm_library.Tool(
+                name=client_tool.name,
+                description=client_tool.description,
+                input_schema=client_tool.input_schema,
                 implementation=_impl,
             )
         )

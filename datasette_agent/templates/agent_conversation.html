@@ -76,6 +76,9 @@
 </div>
 
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
+{% for module_url in client_tool_modules %}
+<script type="module" src="{{ module_url }}"></script>
+{% endfor %}
 <script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
 {% if not background_agent %}
 <script type="module">

@@ -65,6 +65,10 @@ def register_routes():
             views.agent_conversation_poll,
         ),
         (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/client-tool-result/(?P<call_id>[A-Za-z0-9_-]+)$",
+            views.agent_client_tool_result,
+        ),
+        (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stream$",
             views.agent_stream,
         ),
@@ -290,3 +294,10 @@ def register_agent_tools(datasette):
     from .sql_tools import get_default_tools
 
     return get_default_tools() + get_background_tools()
+
+
+@hookimpl
+def register_agent_client_tools(datasette):
+    from .local_files import get_local_file_client_tools
+
+    return get_local_file_client_tools()

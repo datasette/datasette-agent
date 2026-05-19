@@ -132,6 +132,46 @@ The `_html` value is inserted into the chat as raw HTML, so it can include custo
 - [datasette-agent-charts](https://github.com/datasette/datasette-agent-charts) - renders charts from SQL query results using Observable Plot
 - [datasette-agent-openai-imagegen](https://github.com/datasette/datasette-agent-openai-imagegen) - generates images using OpenAI's image generation API
 
+## Browser-backed tools
+
+Datasette Agent can also expose tools that run in the user's browser instead of
+on the server. Browser tools are only available in the web chat UI, and can use
+browser-granted capabilities that Python cannot access directly.
+
+The built-in local file tools add a "Select local folder" control to the chat
+page. After the user selects a folder, the agent can list relative file paths,
+search likely text files, and read bounded text slices from specific files. The
+browser never exposes absolute paths, and file contents are only sent back to
+the agent in response to tool calls.
+
+Plugins can register browser tools with `register_agent_client_tools` and
+return `AgentClientTool` instances:
+
+```python
+from datasette import hookimpl
+from datasette_agent.tools import AgentClientTool
+
+
+@hookimpl
+def register_agent_client_tools(datasette):
+    return [
+        AgentClientTool(
+            name="my_browser_tool",
+            description="Do something in the user's browser",
+            input_schema={"type": "object", "properties": {}},
+            module_url="/-/static-plugins/my-plugin/my-browser-tools.js",
+        ),
+    ]
+```
+
+The browser module registers a matching handler:
+
+```javascript
+window.datasetteAgent.registerTool("my_browser_tool", async (args) => {
+  return {status: "done"};
+});
+```
+
 ## CLI commands
 
 ### Interactive chat

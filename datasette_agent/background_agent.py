@@ -12,6 +12,7 @@ from .messages import (
     make_user_message_dict,
     strip_internal_keys,
 )
+from .context import current_conversation_id
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
@@ -88,6 +89,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     mark_finished_tool = _make_mark_finished_tool(finished_state)
     tools.append(mark_finished_tool)
 
+    conversation_token = current_conversation_id.set(conversation_id)
     try:
         # Save initial goal as the opening user message.
         await insert_message(db, conversation_id, make_user_message_dict(goal))
@@ -207,3 +209,5 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             "SET status = 'error', error = ?, updated_at = ? WHERE id = ?",
             [str(e), now, agent_id],
         )
+    finally:
+        current_conversation_id.reset(conversation_token)

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from datasette_llm import LLM
 
+from .context import current_conversation_id
 from .messages import (
     insert_message,
     insert_response,
@@ -86,25 +87,29 @@ async def run_chat(datasette, initial_prompt=None):
             chain_kwargs["system"] = system_prompt
             first_message = False
 
-        chain_response = conversation.chain(
-            user_message,
-            stream=True,
-            tools=llm_tools,
-            before_call=before_call,
-            after_call=after_call,
-            **chain_kwargs,
-        )
+        conversation_token = current_conversation_id.set(conversation_id)
+        try:
+            chain_response = conversation.chain(
+                user_message,
+                stream=True,
+                tools=llm_tools,
+                before_call=before_call,
+                after_call=after_call,
+                **chain_kwargs,
+            )
 
-        print()
-        async for resp in chain_response.responses():
-            async for chunk in resp:
-                print(chunk, end="", flush=True)
-            response_pk = await insert_response(db, conversation_id, resp)
-            for tool_msg in pending_tool_messages:
-                await insert_message(
-                    db, conversation_id, tool_msg, response_id=response_pk
-                )
-            pending_tool_messages.clear()
+            print()
+            async for resp in chain_response.responses():
+                async for chunk in resp:
+                    print(chunk, end="", flush=True)
+                response_pk = await insert_response(db, conversation_id, resp)
+                for tool_msg in pending_tool_messages:
+                    await insert_message(
+                        db, conversation_id, tool_msg, response_id=response_pk
+                    )
+                pending_tool_messages.clear()
+        finally:
+            current_conversation_id.reset(conversation_token)
         print()
 
         if one_shot:

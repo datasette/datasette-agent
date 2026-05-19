@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from datasette_llm import LLM
 
+from .client_tools import BrowserClientToolRunner
 from .context import current_conversation_id
 from .messages import (
     insert_message,
@@ -14,7 +15,12 @@ from .messages import (
     strip_internal_keys,
 )
 from .schema import ensure_tables
-from .tools import get_agent_tools, make_llm_tools
+from .tools import (
+    get_agent_client_tools,
+    get_agent_tools,
+    make_client_llm_tools,
+    make_llm_tools,
+)
 
 
 async def _build_system_prompt(datasette, actor):
@@ -70,11 +76,18 @@ async def _send_sse(writer, event, data):
     await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def run_agent(datasette, actor, conversation_id, user_message, writer):
+async def run_agent(
+    datasette,
+    actor,
+    conversation_id,
+    user_message,
+    writer,
+    client_tool_names=None,
+):
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
-    current_conversation_id.set(conversation_id)
+    conversation_token = current_conversation_id.set(conversation_id)
 
     # Drain any pending notifications and prepend their text to the user
     # turn so the model sees them on this turn.
@@ -99,6 +112,16 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
 
     agent_tools = await get_agent_tools(datasette)
     llm_tools = make_llm_tools(agent_tools, datasette, actor)
+    if client_tool_names:
+        client_tool_name_set = set(client_tool_names)
+        client_tools = [
+            tool
+            for tool in await get_agent_client_tools(datasette)
+            if tool.name in client_tool_name_set
+        ]
+        if client_tools:
+            runner = BrowserClientToolRunner(writer, conversation_id, actor)
+            llm_tools.extend(make_client_llm_tools(client_tools, runner))
 
     system_prompt = await _build_system_prompt(datasette, actor)
     prior_messages = await load_messages(db, conversation_id)
@@ -199,6 +222,8 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
 
     except Exception as e:
         await _send_sse(writer, "error", {"message": str(e)})
+    finally:
+        current_conversation_id.reset(conversation_token)
 
 
 # Re-exports for background_agent.py / cli_chat.py compatibility.

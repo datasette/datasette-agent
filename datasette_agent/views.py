@@ -6,9 +6,12 @@ from datasette.utils.asgi import AsgiStream, Response
 from ulid import ULID
 
 from .agent import run_agent
+from .client_tools import CLIENT_TOOL_RESULT_MAX_BYTES, resolve_client_tool_call
 from .export_markdown import format_conversation_markdown
 from .messages import flatten_for_render
 from .schema import ensure_tables
+from .tools import get_agent_client_tools
+from .turns import ConversationTurnAlreadyRunning, conversation_turn
 
 
 def _actor_id(request):
@@ -17,6 +20,10 @@ def _actor_id(request):
         if actor_id is not None:
             return str(actor_id)
     return None
+
+
+async def _send_sse(writer, event, data):
+    await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
 async def agent_index(request, datasette):
@@ -97,6 +104,14 @@ async def agent_conversation(request, datasette):
         )
     ).first()
 
+    client_tool_modules = []
+    if not background_agent:
+        seen_modules = set()
+        for tool in await get_agent_client_tools(datasette):
+            if tool.module_url not in seen_modules:
+                client_tool_modules.append(tool.module_url)
+                seen_modules.add(tool.module_url)
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
@@ -107,6 +122,7 @@ async def agent_conversation(request, datasette):
                 "background_agent": (
                     dict(background_agent) if background_agent else None
                 ),
+                "client_tool_modules": client_tool_modules,
             },
             request=request,
         )
@@ -225,15 +241,32 @@ async def agent_stream(request, datasette):
     body = await request.post_body()
     data = json.loads(body)
     user_message = data.get("message", "")
+    client_tool_names = data.get("client_tools") or []
 
     async def stream_fn(writer):
-        await run_agent(
-            datasette=datasette,
-            actor=request.actor,
-            conversation_id=conversation_id,
-            user_message=user_message,
-            writer=writer,
-        )
+        try:
+            async with conversation_turn(conversation_id):
+                await run_agent(
+                    datasette=datasette,
+                    actor=request.actor,
+                    conversation_id=conversation_id,
+                    user_message=user_message,
+                    writer=writer,
+                    client_tool_names=client_tool_names,
+                )
+        except ConversationTurnAlreadyRunning:
+            await _send_sse(
+                writer,
+                "error",
+                {
+                    "message": (
+                        "Another agent turn is already running for this "
+                        "conversation. Wait for it to finish before sending "
+                        "another message."
+                    )
+                },
+            )
+            await _send_sse(writer, "done", {})
 
     return AsgiStream(
         stream_fn,
@@ -243,6 +276,55 @@ async def agent_stream(request, datasette):
         },
         content_type="text/event-stream",
     )
+
+
+async def agent_client_tool_result(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    body = await request.post_body()
+    if len(body) > CLIENT_TOOL_RESULT_MAX_BYTES:
+        return Response.json({"error": "Client tool result too large"}, status=413)
+    try:
+        data = json.loads(body or b"{}")
+    except json.JSONDecodeError as e:
+        return Response.json({"error": f"Invalid JSON: {e}"}, status=400)
+
+    try:
+        resolved = resolve_client_tool_call(
+            conversation_id,
+            request.url_vars["call_id"],
+            request.actor,
+            data,
+        )
+    except PermissionError as e:
+        return Response.json({"error": str(e)}, status=403)
+    if not resolved:
+        return Response.json(
+            {
+                "ok": False,
+                "ignored": True,
+                "error": "Client tool call no longer pending",
+            }
+        )
+    return Response.json({"ok": True})
 
 
 async def agent_background_index(request, datasette):

@@ -1,5 +1,65 @@
 import * as smd from "./smd.js";
 
+const clientToolHandlers = new Map();
+
+function errorMessage(error) {
+  if (!error) return "Unknown error";
+  if (error.message) return String(error.message);
+  return String(error);
+}
+
+async function runClientToolCall(call) {
+  const entry = clientToolHandlers.get(call.name);
+  let payload;
+  try {
+    if (!entry) {
+      throw new Error("No browser handler registered for " + call.name);
+    }
+    const result = await entry.handler(call.arguments || {}, { call });
+    payload = { nonce: call.nonce, ok: true, result };
+  } catch (error) {
+    payload = { nonce: call.nonce, ok: false, error: errorMessage(error) };
+  }
+
+  try {
+    const response = await fetch(call.result_url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      let message = response.status + " " + response.statusText;
+      try {
+        const data = await response.json();
+        if (data.error) message = data.error;
+      } catch {}
+      appendMessage("assistant", "Client tool result error: " + message);
+    }
+  } catch (error) {
+    appendMessage(
+      "assistant",
+      "Client tool result connection error: " + errorMessage(error),
+    );
+  }
+}
+
+window.datasetteAgent = window.datasetteAgent || {};
+Object.assign(window.datasetteAgent, {
+  registerTool(name, handler, options = {}) {
+    clientToolHandlers.set(name, { handler, options });
+  },
+  availableClientTools() {
+    const names = [];
+    for (const [name, entry] of clientToolHandlers.entries()) {
+      const enabled = entry.options.enabled;
+      if (!enabled || enabled()) {
+        names.push(name);
+      }
+    }
+    return names;
+  },
+});
+
 // Auto-follow: only programmatically scroll to bottom while the user is
 // already pinned there. If they scroll up to read earlier content, stop
 // yanking them back; resume once they scroll back down.
@@ -234,7 +294,10 @@ async function sendMessage(conversationId, message) {
     const response = await fetch("/-/agent/" + conversationId + "/stream", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message}),
+      body: JSON.stringify({
+        message,
+        client_tools: window.datasetteAgent.availableClientTools(),
+      }),
     });
 
     const reader = response.body.getReader();
@@ -301,6 +364,8 @@ async function sendMessage(conversationId, message) {
               currentAssistant = null;
             }
             appendToolCall(data.name, data.arguments);
+          } else if (eventType === "client_tool_call") {
+            runClientToolCall(data);
           } else if (eventType === "tool_result") {
             appendToolResult(data.name, data.output);
           } else if (eventType === "done") {
