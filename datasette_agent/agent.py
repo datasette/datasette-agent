@@ -171,7 +171,7 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             async for event in response.astream_events():
                 if event.type == "text":
                     await _send_sse(writer, "text_chunk", {"content": event.chunk})
-                elif event.type == "reasoning":
+                elif event.type == "reasoning" and event.chunk:
                     await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
                 # tool_call_name / tool_call_args / tool_result events are
                 # surfaced via before_call / after_call once the chain

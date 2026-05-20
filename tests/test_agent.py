@@ -620,6 +620,84 @@ async def test_reasoning_streams_and_persists(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
+    from llm.parts import StreamEvent
+
+    from datasette_agent.agent import run_agent
+    from datasette_agent.schema import ensure_tables
+
+    ds = Datasette(
+        memory=True,
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    await ds.invoke_startup()
+    db = ds.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = "test-empty-reasoning"
+    now = "2026-05-19T00:00:00+00:00"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, now, now],
+    )
+
+    class FakeResponse:
+        async def astream_events(self):
+            yield StreamEvent(type="reasoning", chunk="")
+            yield StreamEvent(type="reasoning", chunk="visible reasoning")
+            yield StreamEvent(type="text", chunk="final answer")
+
+        def to_dict(self):
+            return {
+                "model": "fake",
+                "id": "fake-response",
+                "prompt": {},
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "text": "final answer"}],
+                    }
+                ],
+            }
+
+    class FakeChain:
+        async def responses(self):
+            yield FakeResponse()
+
+    class FakeModel:
+        model_id = "fake"
+
+        def chain(self, *args, **kwargs):
+            return FakeChain()
+
+    class FakeLLM:
+        def __init__(self, datasette):
+            pass
+
+        async def model(self, purpose, actor):
+            return FakeModel()
+
+    class Writer:
+        def __init__(self):
+            self.chunks = []
+
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
+    writer = Writer()
+
+    await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
+
+    events = _parse_sse("".join(writer.chunks))
+    reasoning = [event for event in events if event["event"] == "reasoning_chunk"]
+    assert reasoning == [
+        {"event": "reasoning_chunk", "data": {"content": "visible reasoning"}}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_conversation_title_auto_set(datasette_instance, cookies):
     ds = datasette_instance
 

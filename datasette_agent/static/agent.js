@@ -282,6 +282,10 @@ async function sendMessage(conversationId, message) {
           const data = JSON.parse(line.slice(6));
 
           if (eventType === "reasoning_chunk") {
+            if (!data.content) {
+              eventType = null;
+              continue;
+            }
             if (!currentReasoning) {
               currentReasoning = startReasoningBlock();
             }
