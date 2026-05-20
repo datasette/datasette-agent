@@ -222,12 +222,20 @@ async function sendMessage(conversationId, message) {
 
   let currentAssistant = null;
   let currentReasoning = null;
+  let hasToolActivity = false;
+  let streamDone = false;
 
   function closeReasoning() {
     if (currentReasoning) {
       endReasoningBlock(currentReasoning);
       currentReasoning = null;
     }
+  }
+
+  function stopPendingToolCalls() {
+    document.querySelectorAll(".agent-tool-call.pending").forEach(el => {
+      el.classList.remove("pending");
+    });
   }
 
   try {
@@ -248,14 +256,13 @@ async function sendMessage(conversationId, message) {
     thinkingEl.textContent = "Thinking\u2026";
     messages.appendChild(thinkingEl);
     scrollToBottomIfFollowing();
-    let streamDone = false;
 
     function updateThinking() {
       // Show the "Thinking…" placeholder only while we're waiting for
       // the first signal — any text, reasoning, or tool activity from
       // the model supersedes it.
       const hasActivity =
-        streamDone || currentAssistant || currentReasoning;
+        streamDone || currentAssistant || currentReasoning || hasToolActivity;
       if (hasActivity) {
         if (thinkingEl.parentNode) thinkingEl.remove();
       } else {
@@ -266,6 +273,7 @@ async function sendMessage(conversationId, message) {
       }
     }
 
+    let eventType = null;
     while (true) {
       const {done, value} = await reader.read();
       if (done) break;
@@ -274,7 +282,6 @@ async function sendMessage(conversationId, message) {
       const lines = buffer.split("\n");
       buffer = lines.pop();
 
-      let eventType = null;
       for (const line of lines) {
         if (line.startsWith("event: ")) {
           eventType = line.slice(7);
@@ -304,12 +311,15 @@ async function sendMessage(conversationId, message) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
             }
+            hasToolActivity = true;
             appendToolCall(data.name, data.arguments);
           } else if (eventType === "tool_result") {
+            hasToolActivity = true;
             appendToolResult(data.name, data.output);
           } else if (eventType === "done") {
             streamDone = true;
             closeReasoning();
+            stopPendingToolCalls();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -317,6 +327,7 @@ async function sendMessage(conversationId, message) {
           } else if (eventType === "error") {
             streamDone = true;
             closeReasoning();
+            stopPendingToolCalls();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -333,12 +344,18 @@ async function sendMessage(conversationId, message) {
     }
 
     // Ensure parsers are ended if stream closes without done event
+    streamDone = true;
+    stopPendingToolCalls();
+    updateThinking();
     closeReasoning();
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
     }
   } catch (err) {
+    streamDone = true;
     closeReasoning();
+    stopPendingToolCalls();
+    document.querySelectorAll(".agent-thinking").forEach(el => el.remove());
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
     }
