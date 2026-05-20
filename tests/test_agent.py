@@ -141,7 +141,7 @@ async def test_agent_permission_denied(datasette_instance):
 async def test_agent_index(datasette_instance, cookies):
     response = await datasette_instance.client.get("/-/agent", cookies=cookies)
     assert response.status_code == 200
-    assert "Datasette agent" in response.text
+    assert "Datasette Agent" in response.text
 
 
 @pytest.mark.asyncio
@@ -151,6 +151,7 @@ async def test_menu_link_added_for_users_with_permission(datasette_instance, coo
     response = await datasette_instance.client.get("/-/plugins", cookies=cookies)
     assert response.status_code == 200
     assert 'href="/-/agent"' in response.text
+    assert "Datasette Agent" in response.text
 
 
 @pytest.mark.asyncio

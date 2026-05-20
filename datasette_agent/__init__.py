@@ -151,7 +151,7 @@ def menu_links(datasette, actor, request):
         return [
             {
                 "href": datasette.urls.path("/-/agent"),
-                "label": "Datasette agent",
+                "label": "Datasette Agent",
             }
         ]
 
@@ -166,7 +166,7 @@ def homepage_actions(datasette, actor, request):
         return [
             {
                 "href": datasette.urls.path("/-/agent"),
-                "label": "Datasette agent",
+                "label": "Datasette Agent",
                 "description": "Open the agent chat assistant",
             }
         ]
