@@ -7,6 +7,8 @@
 
 An LLM-powered agent assistant for Datasette
 
+See [Datasette Agent, an extensible AI assistant for Datasette](https://datasette.io/blog/2026/datasette-agent/) for more about this project, including tips on running it on your own machine.
+
 ## Installation
 
 Install this plugin in the same environment as Datasette.
