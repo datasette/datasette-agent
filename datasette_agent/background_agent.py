@@ -10,7 +10,7 @@ from .messages import (
     load_messages,
     make_tool_message_dict,
     make_user_message_dict,
-    strip_internal_keys,
+    prepare_tool_output_for_model,
 )
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
@@ -139,7 +139,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                         tool_result.name, output, tool_result.tool_call_id
                     )
                 )
-                tool_result.output = strip_internal_keys(output)
+                tool_result.output = prepare_tool_output_for_model(output)
 
             llm_tools = make_llm_tools(tools, datasette, actor)
 

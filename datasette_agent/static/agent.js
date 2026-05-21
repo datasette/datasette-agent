@@ -166,6 +166,18 @@ function prettyPrintJson(text) {
   }
 }
 
+function createSqlEditLink(url) {
+  const editLink = document.createElement("p");
+  editLink.className = "agent-sql-edit-link";
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "View and edit SQL";
+  editLink.appendChild(link);
+  return editLink;
+}
+
 function appendToolResult(name, output) {
   const messages = document.getElementById("messages");
 
@@ -181,7 +193,10 @@ function appendToolResult(name, output) {
   if (parsed && parsed._html) {
     const container = document.createElement("div");
     container.className = "agent-rich-result";
-    container.innerHTML = parsed._html;
+    container.insertAdjacentHTML("beforeend", parsed._html);
+    if (parsed._edit_sql_url) {
+      container.appendChild(createSqlEditLink(parsed._edit_sql_url));
+    }
     // Append first so scripts can find sibling elements (e.g. iframes) in the DOM
     messages.appendChild(container);
     // Re-create script elements so they execute (innerHTML doesn't run scripts)
@@ -206,6 +221,9 @@ function appendToolResult(name, output) {
   const pre = document.createElement("pre");
   pre.textContent = prettyPrintJson(output);
   details.appendChild(pre);
+  if (parsed && parsed._edit_sql_url && !parsed._html) {
+    details.appendChild(createSqlEditLink(parsed._edit_sql_url));
+  }
   group.appendChild(details);
   scrollToBottomIfFollowing();
 }

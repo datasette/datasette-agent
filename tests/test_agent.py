@@ -92,9 +92,7 @@ async def test_system_prompt_hides_dbs_without_execute_sql(tmp_path):
         config={
             "permissions": {"datasette-agent": {"id": "user"}},
             "databases": {
-                "private": {
-                    "permissions": {"execute-sql": {"id": "someone_else"}}
-                }
+                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
             },
         },
         internal=str(tmp_path / "internal.db"),

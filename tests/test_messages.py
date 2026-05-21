@@ -2,7 +2,13 @@
 
 import json
 
-from datasette_agent.messages import strip_internal_keys
+import pytest
+
+from datasette_agent.messages import (
+    _shrink_json_value,
+    prepare_tool_output_for_model,
+    strip_internal_keys,
+)
 
 
 def test_strip_internal_keys_removes_underscore_prefixed():
@@ -59,3 +65,112 @@ def test_strip_internal_keys_non_dict_passthrough():
     """JSON that doesn't decode to a dict (lists, scalars) is passed through."""
     arr = json.dumps([{"_html": "x"}, {"_html": "y"}])
     assert strip_internal_keys(arr) == arr
+
+
+@pytest.mark.parametrize(
+    ("value", "expected", "changed"),
+    [
+        ("abcdef", "abc... (truncated)", True),
+        ("abc", "abc", False),
+        ("", "", False),
+        ([1, 2, 3, 4], [1, 2], True),
+        ([1, 2, 3], [1], True),
+        ([1], [], True),
+        ([], [], False),
+        (
+            [{"note": "abcdef"}],
+            [{"note": "abc... (truncated)"}],
+            True,
+        ),
+        (
+            {"rows": [1, 2, 3, 4], "status": "ok"},
+            {"rows": [1, 2], "status": "ok"},
+            True,
+        ),
+        (
+            {"summary": {"note": "abcdef"}, "status": "ok"},
+            {"summary": {"note": "abc... (truncated)"}, "status": "ok"},
+            True,
+        ),
+        (
+            {"agent_output_truncated": True, "rows": [1, 2, 3, 4]},
+            {"agent_output_truncated": True, "rows": [1, 2]},
+            True,
+        ),
+        ({"agent_output_truncated": True}, {"agent_output_truncated": True}, False),
+        (42, 42, False),
+        (False, False, False),
+        (None, None, False),
+    ],
+)
+def test_shrink_json_value(value, expected, changed):
+    assert _shrink_json_value(value, string_prefix_length=3) == (expected, changed)
+
+
+def test_prepare_tool_output_for_model_keeps_large_html_side_channel_out():
+    """Large user-visible HTML should not make model-visible output truncate.
+
+    _html is rendered from the original persisted/SSE payload; the model gets
+    the stripped payload, so only model-visible keys should count toward the
+    limit.
+    """
+    raw = json.dumps(
+        {
+            "columns": ["a"],
+            "row_count": 1,
+            "truncated": False,
+            "_html": "<table>" + ("x" * 5000) + "</table>",
+            "_rows": [{"a": "x" * 5000}],
+        }
+    )
+    prepared = prepare_tool_output_for_model(raw, max_length=1000)
+    data = json.loads(prepared)
+    assert data == {"columns": ["a"], "row_count": 1, "truncated": False}
+
+
+def test_prepare_tool_output_for_model_recursively_truncates_to_valid_json():
+    raw = json.dumps(
+        {
+            "columns": ["name", "description"],
+            "rows": [
+                {
+                    "name": "one",
+                    "description": "first " + ("x" * 500),
+                },
+                {
+                    "name": "two",
+                    "description": "second " + ("y" * 500),
+                },
+                {
+                    "name": "three",
+                    "description": "third " + ("z" * 500),
+                },
+            ],
+            "truncated": False,
+            "_html": "<table>" + ("h" * 5000) + "</table>",
+        }
+    )
+    prepared = prepare_tool_output_for_model(raw, max_length=350)
+    assert len(prepared) <= 350
+    data = json.loads(prepared)
+    assert data["agent_output_truncated"] is True
+    assert data["truncated"] is False
+    assert "_html" not in data
+    assert len(data["rows"]) < 3
+
+
+def test_prepare_tool_output_for_model_truncates_nested_strings():
+    raw = json.dumps(
+        {
+            "summary": {
+                "notes": "important prefix " + ("x" * 1000),
+            },
+            "status": "ok",
+        }
+    )
+    prepared = prepare_tool_output_for_model(raw, max_length=180)
+    assert len(prepared) <= 180
+    data = json.loads(prepared)
+    assert data["agent_output_truncated"] is True
+    assert data["status"] == "ok"
+    assert len(data["summary"]["notes"]) < 1000

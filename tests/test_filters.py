@@ -1,6 +1,7 @@
 """Tests for the Jinja filters registered by datasette-agent."""
 
 import pytest
+import json
 
 from datasette.app import Datasette
 
@@ -67,3 +68,34 @@ async def test_format_datetime_passthrough_for_garbage(datasette_instance):
 async def test_format_datetime_passthrough_for_empty(datasette_instance):
     assert await _filter(datasette_instance, "agent_format_datetime", "") == ""
     assert await _filter(datasette_instance, "agent_format_datetime", None) == ""
+
+
+@pytest.mark.asyncio
+async def test_extract_edit_sql_url_for_non_html_result(datasette_instance):
+    out = await _filter(
+        datasette_instance,
+        "agent_extract_edit_sql_url",
+        json.dumps(
+            {
+                "columns": ["a"],
+                "rows": [{"a": 1}],
+                "_edit_sql_url": "/data/-/query?sql=select+a",
+            }
+        ),
+    )
+    assert out == "/data/-/query?sql=select+a"
+
+
+@pytest.mark.asyncio
+async def test_extract_edit_sql_url_for_html_result(datasette_instance):
+    out = await _filter(
+        datasette_instance,
+        "agent_extract_edit_sql_url",
+        json.dumps(
+            {
+                "_html": "<table></table>",
+                "_edit_sql_url": "/data/-/query?sql=select+a",
+            }
+        ),
+    )
+    assert out == "/data/-/query?sql=select+a"

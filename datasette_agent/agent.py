@@ -12,6 +12,7 @@ from .messages import (
     make_tool_message_dict,
     make_user_message_dict,
     message_dict_text,
+    prepare_tool_output_for_model,
     strip_internal_keys,
 )
 from .schema import ensure_tables
@@ -141,8 +142,8 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         pending_tool_messages.append(
             make_tool_message_dict(tool_result.name, output, tool_result.tool_call_id)
         )
-        # Strip before the model sees it on the next chain step.
-        tool_result.output = strip_internal_keys(output)
+        # Strip user-only keys and safely cap JSON before the model sees it.
+        tool_result.output = prepare_tool_output_for_model(output)
 
     try:
         chain_response = model.chain(
@@ -216,6 +217,7 @@ __all__ = [
     "make_tool_message_dict",
     "make_user_message_dict",
     "message_dict_text",
+    "prepare_tool_output_for_model",
     "run_agent",
     "strip_internal_keys",
 ]

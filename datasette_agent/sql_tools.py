@@ -1,6 +1,7 @@
 import html
 import json
 from collections.abc import Mapping
+from urllib.parse import urlencode
 
 from datasette.resources import DatabaseResource, TableResource
 
@@ -33,13 +34,16 @@ def _render_rows_html(columns, rows, truncated):
             f'<tfoot><tr><td colspan="{len(columns)}">'
             "Results truncated</td></tr></tfoot>"
         )
-    return (
+    table = (
+        '<div class="agent-sql-result-scroll">'
         '<table class="agent-sql-result">'
         f"<thead><tr>{head}</tr></thead>"
         f"<tbody>{body}</tbody>"
         f"{foot}"
         "</table>"
+        "</div>"
     )
+    return table
 
 
 def _get_value(item, key):
@@ -127,6 +131,8 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
     if display not in _DISPLAY_MODES:
         display = "model"
     db = datasette.get_database(database)
+    query_path = datasette.urls.database(database) + "/-/query"
+    edit_sql_url = f"{query_path}?{urlencode({'sql': sql})}"
     try:
         result = await db.execute(sql, truncate=True)
         rows = [dict(row) for row in result.rows]
@@ -141,6 +147,7 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
                 "truncated": result.truncated,
                 "_html": _render_rows_html(result.columns, rows, result.truncated),
                 "_rows": rows,
+                "_edit_sql_url": edit_sql_url,
             }
         elif display == "both":
             payload = {
@@ -148,24 +155,19 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
                 "rows": rows,
                 "truncated": result.truncated,
                 "_html": _render_rows_html(result.columns, rows, result.truncated),
+                "_edit_sql_url": edit_sql_url,
             }
         else:  # "model" — unchanged default
             payload = {
                 "columns": result.columns,
                 "rows": rows,
                 "truncated": result.truncated,
+                "_edit_sql_url": edit_sql_url,
             }
 
-        output = json.dumps(payload)
-        # Truncate large outputs to avoid overwhelming the model. Note
-        # this can corrupt JSON for very large _rows in user mode — the
-        # primary user-visible _html and the strip path don't depend on
-        # the model parsing the truncated tail.
-        if len(output) > 10000:
-            output = output[:10000] + "\n... (truncated)"
-        return output
+        return json.dumps(payload)
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e), "_edit_sql_url": edit_sql_url})
 
 
 def get_default_tools():

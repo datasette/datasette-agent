@@ -125,6 +125,17 @@ def prepare_jinja2_environment(env, datasette):
 
     env.filters["agent_extract_html"] = extract_html
 
+    def extract_edit_sql_url(value):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed.get("_edit_sql_url", "")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return ""
+
+    env.filters["agent_extract_edit_sql_url"] = extract_edit_sql_url
+
     def format_datetime(value):
         """Render persisted ISO 8601 timestamps as 'YYYY-MM-DD HH:MM:SS' —
         drop microseconds and the tz suffix for compact tabular display.

@@ -150,6 +150,12 @@
   max-height: 800px;
 }
 
+.agent-sql-result-scroll {
+  max-width: 100%;
+  max-height: 600px;
+  overflow: auto;
+}
+
 .agent-sql-result {
   border-collapse: collapse;
   font-size: 0.85rem;
@@ -202,6 +208,33 @@
   color: #666;
   background: #f3f4f6;
   border-top: 1px solid #d0d7de;
+}
+
+.agent-sql-edit-link {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.agent-sql-edit-link a {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border: 1px solid #d0d7de;
+  border-radius: 3px;
+  background: #fff;
+  color: #57606a;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.agent-sql-edit-link a:hover,
+.agent-sql-edit-link a:focus {
+  border-color: #afb8c1;
+  background: #f6f8fa;
+  color: #24292f;
+  text-decoration: none;
 }
 
 .agent-tool-group {

@@ -29,16 +29,25 @@
         </details>
         {% elif msg.role == "tool_result" %}
         {% set html_content = msg.tool_output | agent_extract_html %}
+        {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
         {% if html_content %}
         </div>
         {% set in_tool_group.value = false %}
-        <div class="agent-rich-result">{{ html_content | safe }}</div>
+        <div class="agent-rich-result">
+          {{ html_content | safe }}
+          {% if edit_sql_url %}
+          <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View and edit SQL</a></p>
+          {% endif %}
+        </div>
         <div class="agent-tool-group">
         {% set in_tool_group.value = true %}
         {% endif %}
         <details class="agent-tool-result">
           <summary>Result: {{ msg.tool_name }}</summary>
           <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
+          {% if edit_sql_url and not html_content %}
+          <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View and edit SQL</a></p>
+          {% endif %}
         </details>
         {% endif %}
       {% else %}

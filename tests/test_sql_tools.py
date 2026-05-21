@@ -9,10 +9,11 @@ sql_query exposes three modes via a `display` parameter:
 
 The user-visible HTML rides on the `_html` side channel and full rowsets
 that should not flow back to the model sit under `_rows` — both stripped
-by strip_internal_keys before history rebuild.
+by prepare_tool_output_for_model before history rebuild.
 """
 
 import json
+from urllib.parse import urlencode
 
 from datasette.app import Datasette
 import pytest
@@ -65,6 +66,10 @@ def _get_sql_tool():
     raise AssertionError("sql_query tool not found")
 
 
+def _expected_sql_edit_url(ds, database, sql):
+    return ds.urls.database(database) + "/-/query?" + urlencode({"sql": sql})
+
+
 @pytest.mark.asyncio
 async def test_sql_query_model_mode_default(datasette_with_data):
     """Default (no display arg) returns full rows to the model, no _html."""
@@ -81,6 +86,9 @@ async def test_sql_query_model_mode_default(datasette_with_data):
     assert len(data["rows"]) == 3
     assert "_html" not in data
     assert "_rows" not in data
+    assert data["_edit_sql_url"] == _expected_sql_edit_url(
+        datasette_with_data, "data", "select * from items order by id"
+    )
 
 
 @pytest.mark.asyncio
@@ -100,9 +108,16 @@ async def test_sql_query_both_mode_returns_rows_and_html(datasette_with_data):
     assert data["columns"] == ["id", "name", "qty"]
     assert len(data["rows"]) == 3
     assert "_html" in data
+    expected_url = _expected_sql_edit_url(
+        datasette_with_data, "data", "select * from items order by id"
+    )
+    assert data["_edit_sql_url"] == expected_url
     assert "<table" in data["_html"]
+    assert '<div class="agent-sql-result-scroll">' in data["_html"]
     # Cell content from the rendered table
     assert "apple" in data["_html"]
+    assert "View and edit SQL" not in data["_html"]
+    assert expected_url not in data["_html"]
 
 
 @pytest.mark.asyncio
@@ -125,17 +140,64 @@ async def test_sql_query_user_mode_hides_rows_from_model(datasette_with_data):
     assert "rows" not in data  # model-visible bulk rows are gone
     assert "_html" in data
     assert "_rows" in data
+    expected_url = _expected_sql_edit_url(
+        datasette_with_data, "data", "select * from items order by id"
+    )
+    assert data["_edit_sql_url"] == expected_url
     assert len(data["_rows"]) == 3
+    assert '<div class="agent-sql-result-scroll">' in data["_html"]
+    assert "View and edit SQL" not in data["_html"]
+    assert expected_url not in data["_html"]
+
+
+@pytest.mark.asyncio
+async def test_sql_query_user_mode_preserves_large_user_visible_payload(
+    datasette_with_data,
+):
+    """The tool must return valid full JSON even when _html/_rows are large.
+
+    The browser extracts _html from this original output. Model-facing
+    truncation happens later, after user-visible side-channel keys are removed.
+    """
+    await datasette_with_data.invoke_startup()
+    db = datasette_with_data.add_memory_database("wide")
+    columns_sql = ", ".join(f"c{i} TEXT" for i in range(36))
+    await db.execute_write(f"CREATE TABLE wide_items ({columns_sql})")
+    column_names = [f"c{i}" for i in range(36)]
+    placeholders = ", ".join("?" for _ in column_names)
+    insert_sql = (
+        f"INSERT INTO wide_items ({', '.join(column_names)}) "
+        f"VALUES ({placeholders})"
+    )
+    for i in range(10):
+        await db.execute_write(
+            insert_sql,
+            [f"value {i}-{j} " + ("x" * 20) for j in range(36)],
+        )
+
+    tool = _get_sql_tool()
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="wide",
+        sql="select * from wide_items",
+        display="user",
+    )
+    assert len(out) > 10000
+    data = json.loads(out)
+    assert data["row_count"] == 10
+    assert len(data["_rows"]) == 10
+    assert "<table" in data["_html"]
 
 
 @pytest.mark.asyncio
 async def test_sql_query_user_mode_strips_to_summary_for_model(
     datasette_with_data,
 ):
-    """After strip_internal_keys (i.e. what the model actually sees in
-    history rebuild), `user` mode leaves columns + row_count + truncated +
-    sql, but nothing rowset-shaped."""
-    from datasette_agent.messages import strip_internal_keys
+    """After prepare_tool_output_for_model (i.e. what the model actually
+    sees in history rebuild), `user` mode leaves columns + row_count +
+    truncated, but nothing rowset-shaped."""
+    from datasette_agent.messages import prepare_tool_output_for_model
 
     await _seed_items(datasette_with_data)
     tool = _get_sql_tool()
@@ -146,7 +208,7 @@ async def test_sql_query_user_mode_strips_to_summary_for_model(
         sql="select * from items order by id",
         display="user",
     )
-    stripped = json.loads(strip_internal_keys(raw))
+    stripped = json.loads(prepare_tool_output_for_model(raw))
     assert "_html" not in stripped
     assert "_rows" not in stripped
     assert "rows" not in stripped
@@ -184,6 +246,27 @@ async def test_sql_query_invalid_display_falls_back_to_model(
     data = json.loads(out)
     assert "rows" in data
     assert "_html" not in data
+    assert data["_edit_sql_url"] == _expected_sql_edit_url(
+        datasette_with_data, "data", "select * from items order by id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sql_query_error_includes_edit_sql_url(datasette_with_data):
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    sql = "select * from nope"
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql=sql,
+    )
+    data = json.loads(out)
+    assert "error" in data
+    assert data["_edit_sql_url"] == _expected_sql_edit_url(
+        datasette_with_data, "data", sql
+    )
 
 
 @pytest.mark.asyncio
@@ -253,9 +336,7 @@ async def test_list_databases_hides_dbs_without_execute_sql(tmp_path):
         memory=True,
         config={
             "databases": {
-                "private": {
-                    "permissions": {"execute-sql": {"id": "someone_else"}}
-                }
+                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
             }
         },
         internal=str(tmp_path / "internal.db"),
