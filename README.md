@@ -39,6 +39,326 @@ This plugin registers three independent permissions:
 
 The three permissions are independent: an actor may hold any subset. The `--root` user holds all of them.
 
+## JSON API
+
+The plugin exposes a small JSON API under `/-/agent`. Use normal Datasette authentication for these endpoints, usually by sending the same cookies that the Datasette UI uses. The plugin skips Datasette CSRF checks for paths below `/-/agent/`, so API clients can `POST` JSON directly.
+
+All JSON request bodies should use:
+
+```http
+Content-Type: application/json
+```
+
+IDs in URLs are 26-character ULIDs. Responses that include timestamps use ISO 8601 strings. Conversation, background-agent, and explorer-report records are scoped to the current Datasette actor: if another actor owns the record the API returns `403 Forbidden`.
+
+Common error responses returned by the route handlers are JSON objects such as:
+
+```json
+{"error": "Not found"}
+```
+
+Permission failures are handled by Datasette and return `403 Forbidden`.
+
+### Create a conversation
+
+```http
+POST /-/agent/api/conversations
+```
+
+Permission: `datasette-agent`
+
+Creates an empty chat conversation for the current actor and returns its ID. The request body is not currently inspected; if you have an initial user message, send it afterwards to the stream endpoint.
+
+Response:
+
+```json
+{
+  "conversation_id": "01JEXAMPLE000000000000000"
+}
+```
+
+Example:
+
+```bash
+curl -X POST http://localhost:8001/-/agent/api/conversations \
+  -H 'Content-Type: application/json' \
+  --data '{}'
+```
+
+### Stream a chat response
+
+```http
+POST /-/agent/{conversation_id}/stream
+```
+
+Permission: `datasette-agent`
+
+Sends a user message to an existing conversation and streams the assistant response using Server-Sent Events (SSE). This endpoint uses `POST` with a JSON body, so browser clients should use `fetch()` streaming rather than the native `EventSource` API, which only supports `GET`.
+
+Request:
+
+```json
+{
+  "message": "What tables are in this Datasette instance?"
+}
+```
+
+Response headers include:
+
+```http
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Content-Encoding: none
+```
+
+Each event frame has an `event:` line and a single JSON `data:` line:
+
+```text
+event: text_chunk
+data: {"content": "There are three tables:"}
+
+event: done
+data: {}
+
+```
+
+SSE event types:
+
+- `reasoning_chunk` - optional reasoning text from models that expose it. Data: `{"content": "..."}`
+- `text_chunk` - assistant markdown text. Concatenate these in order for the visible assistant message. Data: `{"content": "..."}`
+- `tool_call` - emitted before the agent runs a tool. Data: `{"name": "sql_query", "arguments": {...}}`
+- `tool_result` - emitted after a tool returns. Data: `{"name": "sql_query", "output": "..."}`. The `output` value is the raw tool-output string, often JSON.
+- `done` - successful terminal event. Data: `{}`
+- `error` - terminal failure event. Data: `{"message": "..."}`
+
+Clients should treat `done` or `error` as terminal. If the HTTP stream closes before either event, treat the response as interrupted.
+
+Example:
+
+```bash
+curl -N -X POST http://localhost:8001/-/agent/01JEXAMPLE000000000000000/stream \
+  -H 'Content-Type: application/json' \
+  --data '{"message": "List the tables"}'
+```
+
+Minimal browser client:
+
+```javascript
+const response = await fetch(`/-/agent/${conversationId}/stream`, {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({message: "List the tables"}),
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+let buffer = "";
+let eventType = null;
+
+while (true) {
+  const {done, value} = await reader.read();
+  if (done) break;
+  buffer += decoder.decode(value, {stream: true});
+  const lines = buffer.split("\n");
+  buffer = lines.pop();
+
+  for (const line of lines) {
+    if (line.startsWith("event: ")) {
+      eventType = line.slice(7);
+    } else if (line.startsWith("data: ") && eventType) {
+      const data = JSON.parse(line.slice(6));
+      console.log(eventType, data);
+      eventType = null;
+    }
+  }
+}
+```
+
+### Poll a conversation
+
+```http
+GET /-/agent/{conversation_id}/poll
+```
+
+Permission: `datasette-agent`
+
+Returns a lightweight status object for a conversation. This is mainly used by conversation pages linked to background agents, where new messages may appear without the user submitting a chat turn.
+
+Response:
+
+```json
+{
+  "agent_status": "running",
+  "message_count": 3
+}
+```
+
+`agent_status` is one of `pending`, `running`, `completed`, `error`, or `null` when the conversation is a normal user chat with no linked background agent.
+
+### Start a background agent
+
+```http
+POST /-/agent/api/background
+```
+
+Permissions: `datasette-agent` and `datasette-agent-background`
+
+Starts an autonomous background agent for the current actor. The agent creates its own conversation and runs until it calls its internal `mark_finished` tool, hits its iteration limit, errors, or is cancelled.
+
+Request:
+
+```json
+{
+  "goal": "Analyze the data and summarize unusual patterns"
+}
+```
+
+Response:
+
+```json
+{
+  "agent_id": "01JEXAMPLE111111111111111",
+  "conversation_id": "01JEXAMPLE222222222222222",
+  "status": "pending"
+}
+```
+
+`goal` is required. `status` is usually `pending` or `running` immediately after creation.
+
+### Get background-agent status
+
+```http
+GET /-/agent/api/background/{agent_id}
+```
+
+Permissions: `datasette-agent` and `datasette-agent-background`
+
+Returns the stored background-agent row for the current actor.
+
+Response:
+
+```json
+{
+  "id": "01JEXAMPLE111111111111111",
+  "conversation_id": "01JEXAMPLE222222222222222",
+  "actor_id": "user",
+  "goal": "Analyze the data and summarize unusual patterns",
+  "status": "completed",
+  "final_message": "Analysis complete",
+  "error": null,
+  "spawned_by_conversation_id": null,
+  "created_at": "2026-05-20T12:00:00+00:00",
+  "updated_at": "2026-05-20T12:00:05+00:00"
+}
+```
+
+`status` is one of `pending`, `running`, `completed`, or `error`. Cancelled agents are marked as `error` with `error` set to `"Cancelled by user"`.
+
+### Cancel a background agent
+
+```http
+POST /-/agent/api/background/{agent_id}/cancel
+```
+
+Permissions: `datasette-agent` and `datasette-agent-background`
+
+Cancels a pending or running background agent. No request body is required.
+
+Response when cancellation changes the agent:
+
+```json
+{
+  "agent_id": "01JEXAMPLE111111111111111",
+  "status": "error",
+  "cancelled": true
+}
+```
+
+Response for an already terminal agent:
+
+```json
+{
+  "agent_id": "01JEXAMPLE111111111111111",
+  "status": "completed",
+  "cancelled": false
+}
+```
+
+### Start an explorer report
+
+```http
+POST /-/agent/api/explore
+```
+
+Permission: `datasette-agent-explore`
+
+Starts a background exploration report for a database, optionally focused on a single table. The report content is appended over time as the background agent discovers findings.
+
+Request:
+
+```json
+{
+  "database": "fixtures",
+  "table": "facetable",
+  "extra_prompt": "Focus on missing values and date ranges"
+}
+```
+
+Fields:
+
+- `database` - required Datasette database name.
+- `table` - optional table name.
+- `extra_prompt` - optional additional guidance for the explorer agent.
+
+Response:
+
+```json
+{
+  "report_id": "01JEXAMPLE333333333333333",
+  "agent_id": "01JEXAMPLE444444444444444"
+}
+```
+
+### Get an explorer report
+
+```http
+GET /-/agent/api/explore/{report_id}
+```
+
+Permission: `datasette-agent-explore`
+
+Returns the explorer report row, joined to its background-agent status. Poll this endpoint while `agent_status` is `pending` or `running`.
+
+Response:
+
+```json
+{
+  "id": "01JEXAMPLE333333333333333",
+  "agent_id": "01JEXAMPLE444444444444444",
+  "actor_id": "user",
+  "database_name": "fixtures",
+  "table_name": "facetable",
+  "extra_prompt": "Focus on missing values and date ranges",
+  "content": "## Table structure\n\n...",
+  "created_at": "2026-05-20T12:00:00+00:00",
+  "updated_at": "2026-05-20T12:00:30+00:00",
+  "agent_status": "running",
+  "agent_final_message": null,
+  "agent_error": null,
+  "agent_conversation_id": "01JEXAMPLE555555555555555"
+}
+```
+
+### Related non-JSON endpoint
+
+```http
+GET /-/agent/{conversation_id}/markdown
+```
+
+Permission: `datasette-agent`
+
+Downloads the conversation as Markdown. The response is `text/markdown; charset=utf-8` with a `Content-Disposition` attachment filename derived from the conversation title.
+
 ## Registering additional tools from plugins
 
 Other Datasette plugins can register additional tools for the agent using the `register_agent_tools` plugin hook.
