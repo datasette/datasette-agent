@@ -173,7 +173,7 @@ function createSqlEditLink(url) {
   link.href = url;
   link.target = "_blank";
   link.rel = "noopener";
-  link.textContent = "View and edit SQL";
+  link.textContent = "View SQL query";
   editLink.appendChild(link);
   return editLink;
 }

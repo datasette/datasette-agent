@@ -167,6 +167,12 @@ async def _render_widget(datasette, actor, database, sql):
 
 The `_html` value is inserted into the chat as raw HTML, so it can include custom elements, scripts, and styles. The other keys (`database`, `sql`, and `summary` in this example) are what the LLM receives as the tool result.
 
+If your plugin runs SQL and displays the results in HTML, add a link below the rendered output using Datasette Agent's built-in SQL link styling:
+
+```html
+<p class="agent-sql-edit-link"><a href="/data/-/query?sql=select+1">View SQL query</a></p>
+```
+
 ### Example plugins
 
 - [datasette-agent-charts](https://github.com/datasette/datasette-agent-charts) - renders charts from SQL query results using Observable Plot

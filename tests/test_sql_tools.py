@@ -116,7 +116,7 @@ async def test_sql_query_both_mode_returns_rows_and_html(datasette_with_data):
     assert '<div class="agent-sql-result-scroll">' in data["_html"]
     # Cell content from the rendered table
     assert "apple" in data["_html"]
-    assert "View and edit SQL" not in data["_html"]
+    assert "View SQL query" not in data["_html"]
     assert expected_url not in data["_html"]
 
 
@@ -146,7 +146,7 @@ async def test_sql_query_user_mode_hides_rows_from_model(datasette_with_data):
     assert data["_edit_sql_url"] == expected_url
     assert len(data["_rows"]) == 3
     assert '<div class="agent-sql-result-scroll">' in data["_html"]
-    assert "View and edit SQL" not in data["_html"]
+    assert "View SQL query" not in data["_html"]
     assert expected_url not in data["_html"]
 
 
