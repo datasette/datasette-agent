@@ -180,6 +180,32 @@ async def test_homepage_action_hidden_without_permission(datasette_instance):
 
 
 @pytest.mark.asyncio
+async def test_jump_section_script_added_for_users_with_permission(
+    datasette_instance, cookies
+):
+    from datasette_agent import __version__
+
+    response = await datasette_instance.client.get("/", cookies=cookies)
+    assert response.status_code == 200
+    assert "makeJumpSections" in response.text
+    assert f"const pluginVersion = \"{__version__}\";" in response.text
+    assert "version: pluginVersion" in response.text
+    assert "datasette-agent-jump-start" in response.text
+    assert "datasette-agent-jump-hint" in response.text
+    assert "Press Enter to start. Shift+Enter adds a new line." in response.text
+    assert 'event.key === "Enter" && !event.shiftKey' in response.text
+    assert "/-/agent/api/conversations" in response.text
+
+
+@pytest.mark.asyncio
+async def test_jump_section_script_hidden_without_permission(datasette_instance):
+    response = await datasette_instance.client.get("/")
+    assert response.status_code == 200
+    assert "makeJumpSections" not in response.text
+    assert "datasette-agent-jump-start" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_create_conversation(datasette_instance, cookies):
     response = await datasette_instance.client.post(
         "/-/agent/api/conversations",
