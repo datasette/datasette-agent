@@ -35,8 +35,10 @@ def register_actions():
 @hookimpl
 def register_routes():
     from . import views
+    from . import identity_routes
 
     return [
+        (r"^/-/agent/pic/(?P<slug>[^/]+)$", identity_routes.agent_pic),
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/background$", views.agent_background_index),
@@ -80,6 +82,116 @@ def register_routes():
             views.agent_stream,
         ),
     ]
+
+
+@hookimpl
+def actor_from_request(datasette, request):
+    """Authenticate an agent from its own bearer token.
+
+    Reads ``Authorization: Bearer dsatok_…``; if absent or not one of ours,
+    returns None so other auth plugins (and Datasette's own dstok_ handler)
+    still run. A valid, non-disabled agent token resolves to the agent actor
+    dict (``{"id":"agent:…","kind":"agent","agent":True,"display_name":…}``).
+    """
+    from .identities import TOKEN_PREFIX, verify_token
+
+    async def inner():
+        authorization = request.headers.get("authorization") or ""
+        if not authorization.startswith("Bearer "):
+            return None
+        token = authorization[len("Bearer ") :]
+        if not token.startswith(TOKEN_PREFIX):
+            return None
+        row = await verify_token(datasette, token)
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "display_name": row["display_name"],
+            "kind": "agent",
+            "agent": True,
+        }
+
+    return inner
+
+
+@hookimpl
+def datasette_resolve_actors(datasette, actor_ids):
+    """Resolve ``agent:`` actor ids to display + avatar.
+
+    This is the datasette-user-profiles sub-hook (profiles owns the
+    firstresult core ``actors_from_ids``). We only claim ids prefixed
+    ``agent:`` and ignore the rest.
+    """
+    from .identities import AGENT_PREFIX, list_identities
+
+    async def inner():
+        agent_ids = {str(a) for a in actor_ids if str(a).startswith(AGENT_PREFIX)}
+        if not agent_ids:
+            return {}
+        rows = await list_identities(datasette)
+        result = {}
+        for row in rows:
+            if row["id"] in agent_ids:
+                result[row["id"]] = {
+                    "id": row["id"],
+                    "display_name": row["display_name"],
+                    "kind": "agent",
+                    "avatar_url": datasette.urls.path(
+                        f"/-/agent/pic/{row['slug']}"
+                    ),
+                }
+        return result
+
+    return inner
+
+
+def _profiles_installed():
+    """True if datasette-user-profiles is importable (it owns the firstresult
+    core ``actors_from_ids`` hook and invokes our ``datasette_resolve_actors``
+    sub-hook)."""
+    try:
+        import datasette_user_profiles  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+if not _profiles_installed():
+
+    @hookimpl
+    def actors_from_ids(datasette, actor_ids):
+        """Fallback owner of the firstresult ``actors_from_ids`` hook.
+
+        Only registered when datasette-user-profiles is NOT installed (profiles
+        is the preferred owner — it merges every plugin's
+        ``datasette_resolve_actors`` sub-hook). Standalone, we resolve our own
+        ``agent:`` ids and leave the rest as bare ``{"id": ...}`` so agents
+        still render with names/avatars without profiles present.
+        """
+        from .identities import AGENT_PREFIX, list_identities
+
+        async def inner():
+            ids = [str(a) for a in actor_ids]
+            result = {}
+            agent_ids = {i for i in ids if i.startswith(AGENT_PREFIX)}
+            if agent_ids:
+                rows = await list_identities(datasette)
+                for row in rows:
+                    if row["id"] in agent_ids:
+                        result[row["id"]] = {
+                            "id": row["id"],
+                            "display_name": row["display_name"],
+                            "kind": "agent",
+                            "avatar_url": datasette.urls.path(
+                                f"/-/agent/pic/{row['slug']}"
+                            ),
+                        }
+            for i in ids:
+                result.setdefault(i, {"id": i})
+            return result
+
+        return inner
 
 
 @hookimpl
