@@ -39,6 +39,7 @@ def register_routes():
 
     return [
         (r"^/-/agent/pic/(?P<slug>[^/]+)$", identity_routes.agent_pic),
+        (r"^/-/agent/api/identities$", identity_routes.api_identities),
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/background$", views.agent_background_index),
