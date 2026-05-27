@@ -24,7 +24,7 @@ dev = [
     "inline-snapshot",
     "datasette-acl",
     "datasette-user-profiles",
-    "datasette-share",
+    "datasette-acl-share",
 ]
 
 [build-system]
@@ -53,4 +53,4 @@ datasette_agent = ["static/*", "templates/*"]
 [tool.uv.sources]
 datasette-acl = { path = "../datasette-acl", editable = true }
 datasette-user-profiles = { path = "../datasette-user-profiles", editable = true }
-datasette-share = { path = "../datasette-share", editable = true }
+datasette-acl-share = { path = "../datasette-share", editable = true }

@@ -162,7 +162,7 @@ async def test_identities_api_owned_and_shareable(datasette_instance):
     ids = {a["id"] for a in data["results"]}
     # Alice sees her own private + bob's shareable, NOT bob's private.
     assert ids == {"agent:alice-priv", "agent:bob-shared"}
-    # Shape: datasette-share consumes "results"; "agents" is also provided.
+    # Shape: datasette-acl-share consumes "results"; "agents" is also provided.
     assert data["results"] == data["agents"]
     alice_agent = next(a for a in data["results"] if a["id"] == "agent:alice-priv")
     assert alice_agent["kind"] == "agent"

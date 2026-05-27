@@ -63,7 +63,7 @@ async def agent_pic(request, datasette):
 
 
 def _agent_actor_dict(datasette, row, *, current_actor_id=None):
-    """Render an identity row as a datasette-share Actor dict."""
+    """Render an identity row as a datasette-acl-share Actor dict."""
     out = {
         "id": row["id"],
         "slug": row["slug"],
@@ -80,7 +80,7 @@ async def api_identities(request, datasette):
     """GET /-/agent/api/identities?q= — agents the current actor may share with.
 
     v1 scope (plan §6): owned_by_me OR shareable=1. Requires an authenticated
-    actor. Returns both ``results`` (consumed by datasette-share's listAgents)
+    actor. Returns both ``results`` (consumed by datasette-acl-share's listAgents)
     and ``agents`` (the shape named in the task file) for compatibility.
     """
     actor = request.actor

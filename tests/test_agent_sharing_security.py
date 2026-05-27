@@ -1,7 +1,7 @@
 """Phase-07/05: share-with-agent integration + security tests.
 
 Exercises the real acl engine (datasette-acl) + profiles (actor resolution) +
-datasette-share (capability detection) installed alongside datasette-agent.
+datasette-acl-share (capability detection) installed alongside datasette-agent.
 
 Security properties asserted:
   * Least privilege: an agent's access == only what is granted to agent:<id>.
@@ -124,7 +124,7 @@ async def test_share_capabilities_reports_agents(ds):
 
 @pytest.mark.asyncio
 async def test_identities_endpoint_present_for_capability_probe(ds):
-    """datasette-share probes listAgents; the route must exist (not 404)."""
+    """datasette-acl-share probes listAgents; the route must exist (not 404)."""
     await _make_agent(ds, shareable=True)
     response = await ds.client.get(
         "/-/agent/api/identities",
