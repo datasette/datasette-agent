@@ -107,8 +107,49 @@
 
 .agent-message-assistant .agent-message-content ul,
 .agent-message-assistant .agent-message-content ol {
-  margin: 0.4em 0;
-  padding-left: 1.5em;
+  margin: 0.35em 0;
+  padding-left: 1.4em;
+  list-style-position: outside;
+}
+
+.agent-message-assistant .agent-message-content ul {
+  list-style-type: disc;
+}
+
+.agent-message-assistant .agent-message-content ul ul {
+  list-style-type: circle;
+}
+
+.agent-message-assistant .agent-message-content ul ul ul {
+  list-style-type: square;
+}
+
+.agent-message-assistant .agent-message-content ol {
+  list-style-type: decimal;
+}
+
+.agent-message-assistant .agent-message-content ol ol {
+  list-style-type: lower-alpha;
+}
+
+.agent-message-assistant .agent-message-content li {
+  display: list-item;
+  margin: 0.16em 0;
+}
+
+.agent-message-assistant .agent-message-content li::marker {
+  color: #555;
+}
+
+.agent-message-assistant .agent-message-content li > p {
+  margin: 0.16em 0;
+}
+
+.agent-message-assistant .agent-message-content li > ul,
+.agent-message-assistant .agent-message-content li > ol {
+  margin-top: 0.18em;
+  margin-bottom: 0.18em;
+  padding-left: 1.25em;
 }
 
 .agent-message-assistant .agent-message-content blockquote {
@@ -338,6 +379,53 @@
 .agent-reasoning-content p:first-child { margin-top: 0; }
 .agent-reasoning-content p:last-child { margin-bottom: 0; }
 
+.agent-reasoning-content ul,
+.agent-reasoning-content ol {
+  margin: 0.35em 0;
+  padding-left: 1.4em;
+  list-style-position: outside;
+}
+
+.agent-reasoning-content ul {
+  list-style-type: disc;
+}
+
+.agent-reasoning-content ul ul {
+  list-style-type: circle;
+}
+
+.agent-reasoning-content ul ul ul {
+  list-style-type: square;
+}
+
+.agent-reasoning-content ol {
+  list-style-type: decimal;
+}
+
+.agent-reasoning-content ol ol {
+  list-style-type: lower-alpha;
+}
+
+.agent-reasoning-content li {
+  display: list-item;
+  margin: 0.16em 0;
+}
+
+.agent-reasoning-content li::marker {
+  color: #666;
+}
+
+.agent-reasoning-content li > p {
+  margin: 0.16em 0;
+}
+
+.agent-reasoning-content li > ul,
+.agent-reasoning-content li > ol {
+  margin-top: 0.18em;
+  margin-bottom: 0.18em;
+  padding-left: 1.25em;
+}
+
 .agent-reasoning-content pre {
   background: #f5f5f5;
   border-radius: 3px;
@@ -542,4 +630,51 @@
 .explorer-report-message {
   color: #555;
   margin: 0.75rem 0;
+}
+
+.explorer-report-rendered ul,
+.explorer-report-rendered ol {
+  margin: 0.35em 0;
+  padding-left: 1.4em;
+  list-style-position: outside;
+}
+
+.explorer-report-rendered ul {
+  list-style-type: disc;
+}
+
+.explorer-report-rendered ul ul {
+  list-style-type: circle;
+}
+
+.explorer-report-rendered ul ul ul {
+  list-style-type: square;
+}
+
+.explorer-report-rendered ol {
+  list-style-type: decimal;
+}
+
+.explorer-report-rendered ol ol {
+  list-style-type: lower-alpha;
+}
+
+.explorer-report-rendered li {
+  display: list-item;
+  margin: 0.16em 0;
+}
+
+.explorer-report-rendered li::marker {
+  color: #555;
+}
+
+.explorer-report-rendered li > p {
+  margin: 0.16em 0;
+}
+
+.explorer-report-rendered li > ul,
+.explorer-report-rendered li > ol {
+  margin-top: 0.18em;
+  margin-bottom: 0.18em;
+  padding-left: 1.25em;
 }
