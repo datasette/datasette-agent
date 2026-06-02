@@ -503,6 +503,10 @@
   overflow-y: auto;
 }
 
+.agent-tool-result pre {
+  white-space: pre-wrap;
+}
+
 .agent-input {
   display: flex;
   gap: 0.5rem;
