@@ -344,6 +344,9 @@
   font-size: 0.85rem;
   border: 1px solid #ddd;
   border-radius: 4px;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
   padding: 0.25rem 0.5rem;
 }
 
@@ -501,9 +504,6 @@
   overflow-x: auto;
   max-height: 200px;
   overflow-y: auto;
-}
-
-.agent-tool-result pre {
   white-space: pre-wrap;
 }
 
