@@ -45,12 +45,64 @@
   align-self: flex-start;
   background: #f0f0f0;
   color: #333;
+  position: relative;
+  padding-right: 2.1rem;
+  padding-bottom: 1.55rem;
 }
 
 .agent-message-content {
   word-wrap: break-word;
   overflow-wrap: break-word;
   overflow-x: auto;
+}
+
+.agent-response-copy {
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  color: #666;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: background 0.12s, color 0.12s, opacity 0.12s;
+}
+
+.agent-response-copy-label {
+  display: none;
+  font-size: 0.68rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.agent-response-copy:hover,
+.agent-response-copy:focus-visible {
+  color: #333;
+  background: #e0e0e0;
+  opacity: 1;
+}
+
+.agent-response-copy:focus-visible {
+  outline: 2px solid #8a8fd8;
+  outline-offset: 2px;
+}
+
+.agent-response-copy.copied {
+  opacity: 1;
+  padding-left: 0.35rem;
+  padding-right: 0.2rem;
+}
+
+.agent-response-copy.copied .agent-response-copy-label {
+  display: inline;
 }
 
 .agent-message-user .agent-message-content {

@@ -5,6 +5,64 @@ import * as smd from "./smd.js";
 // yanking them back; resume once they scroll back down.
 let autoFollow = true;
 const FOLLOW_THRESHOLD_PX = 50;
+const assistantCopyText = new WeakMap();
+
+function createCopyIconSvg(size = 12) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", size);
+  svg.setAttribute("height", size);
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+
+  const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  rect.setAttribute("x", "9");
+  rect.setAttribute("y", "9");
+  rect.setAttribute("width", "13");
+  rect.setAttribute("height", "13");
+  rect.setAttribute("rx", "2");
+  svg.appendChild(rect);
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+  );
+  svg.appendChild(path);
+
+  return svg;
+}
+
+function addAssistantCopyButton(messageEl) {
+  if (messageEl.querySelector(".agent-response-copy")) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "agent-response-copy";
+  button.setAttribute("aria-label", "Copy response");
+  const copiedLabel = document.createElement("span");
+  copiedLabel.className = "agent-response-copy-label";
+  copiedLabel.textContent = "Copied";
+  button.appendChild(copiedLabel);
+  button.appendChild(createCopyIconSvg());
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(assistantCopyText.get(messageEl) || "");
+      button.classList.add("copied");
+      setTimeout(() => button.classList.remove("copied"), 1350);
+    } catch (err) {
+      console.error("Copy response failed:", err);
+    }
+  });
+  messageEl.appendChild(button);
+}
+
+function setAssistantCopyText(messageEl, text) {
+  assistantCopyText.set(messageEl, text || "");
+  addAssistantCopyButton(messageEl);
+}
 
 (function initScrollFollow() {
   const messages = document.getElementById("messages");
@@ -31,16 +89,17 @@ function appendMessage(role, content) {
   div.className = "agent-message agent-message-" + role;
   const contentDiv = document.createElement("div");
   contentDiv.className = "agent-message-content";
+  div.appendChild(contentDiv);
   if (role === "assistant" && content) {
     // Render existing content as markdown
     const renderer = smd.default_renderer(contentDiv);
     const parser = smd.parser(renderer);
     smd.parser_write(parser, content);
     smd.parser_end(parser);
+    setAssistantCopyText(div, content);
   } else {
     contentDiv.textContent = content;
   }
-  div.appendChild(contentDiv);
   messages.appendChild(div);
   scrollToBottom();
   return contentDiv;
@@ -124,11 +183,12 @@ function startAssistantMessage() {
   const contentDiv = document.createElement("div");
   contentDiv.className = "agent-message-content";
   div.appendChild(contentDiv);
+  setAssistantCopyText(div, "");
   messages.appendChild(div);
 
   const renderer = smd.default_renderer(contentDiv);
   const parser = smd.parser(renderer);
-  return { contentDiv, parser };
+  return { messageEl: div, contentDiv, parser, rawText: "" };
 }
 
 function getOrCreateToolGroup() {
@@ -321,6 +381,8 @@ async function sendMessage(conversationId, message) {
             if (!currentAssistant) {
               currentAssistant = startAssistantMessage();
             }
+            currentAssistant.rawText += data.content;
+            setAssistantCopyText(currentAssistant.messageEl, currentAssistant.rawText);
             smd.parser_write(currentAssistant.parser, data.content);
             scrollToBottomIfFollowing();
           } else if (eventType === "tool_call") {
@@ -392,6 +454,8 @@ window.sendMessage = sendMessage;
 document.querySelectorAll(".agent-message-assistant .agent-message-content").forEach(el => {
   const raw = el.textContent;
   if (!raw) return;
+  const messageEl = el.closest(".agent-message-assistant");
+  if (messageEl) setAssistantCopyText(messageEl, raw);
   el.textContent = "";
   const renderer = smd.default_renderer(el);
   const parser = smd.parser(renderer);
