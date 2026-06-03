@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -227,13 +228,22 @@ async def agent_stream(request, datasette):
     user_message = data.get("message", "")
 
     async def stream_fn(writer):
-        await run_agent(
-            datasette=datasette,
-            actor=request.actor,
-            conversation_id=conversation_id,
-            user_message=user_message,
-            writer=writer,
-        )
+        # Register this run so POST .../cancel can interrupt it mid-stream.
+        # stream_fn IS the cancellable coroutine, so we track its own task.
+        tasks = getattr(datasette, "_chat_agent_tasks", None)
+        if tasks is None:
+            tasks = datasette._chat_agent_tasks = {}
+        tasks[conversation_id] = asyncio.current_task()
+        try:
+            await run_agent(
+                datasette=datasette,
+                actor=request.actor,
+                conversation_id=conversation_id,
+                user_message=user_message,
+                writer=writer,
+            )
+        finally:
+            tasks.pop(conversation_id, None)
 
     return AsgiStream(
         stream_fn,
@@ -243,6 +253,42 @@ async def agent_stream(request, datasette):
         },
         content_type="text/event-stream",
     )
+
+
+async def api_cancel_chat(request, datasette):
+    """Stop an in-flight chat stream for a conversation.
+
+    Mirrors api_cancel_background_agent: idempotent for conversations with
+    no live stream (returns 200 with cancelled=false), so the client can
+    safely fire-and-forget when the user hits Stop.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    task = getattr(datasette, "_chat_agent_tasks", {}).get(conversation_id)
+    cancelled = False
+    if task is not None and not task.done():
+        task.cancel()
+        cancelled = True
+
+    return Response.json({"conversation_id": conversation_id, "cancelled": cancelled})
 
 
 async def agent_background_index(request, datasette):

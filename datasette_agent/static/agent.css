@@ -539,6 +539,21 @@
   cursor: not-allowed;
 }
 
+/* Send button morphs into Stop while a response is streaming. */
+.agent-input button.agent-stop-btn {
+  background: #dc3545;
+}
+
+.agent-stopped-notice {
+  align-self: center;
+  margin: 0.5rem 0;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 999px;
+}
+
 /* Index page */
 .agent-new-chat {
   display: flex;

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -124,6 +125,13 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
     # message order in agent_messages.
     pending_tool_messages = []
 
+    # Text / reasoning streamed for the CURRENT (in-flight) response, kept
+    # so that if the user hits Stop mid-stream we can persist what we've
+    # shown them. Reset at the start of each response and cleared once the
+    # response is durably persisted via insert_response.
+    current_text = ""
+    current_reasoning = ""
+
     async def before_call(tool, tool_call):
         await _send_sse(
             writer,
@@ -169,16 +177,24 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
                 await insert_message(db, conversation_id, tool_msg)
             pending_tool_messages.clear()
 
+            current_text = ""
+            current_reasoning = ""
             async for event in response.astream_events():
                 if event.type == "text":
+                    current_text += event.chunk or ""
                     await _send_sse(writer, "text_chunk", {"content": event.chunk})
                 elif event.type == "reasoning" and event.chunk:
+                    current_reasoning += event.chunk
                     await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
                 # tool_call_name / tool_call_args / tool_result events are
                 # surfaced via before_call / after_call once the chain
                 # framework invokes them, so no SSE handler needed here.
 
             await insert_response(db, conversation_id, response)
+            # Durably persisted — drop the partial buffers so a later Stop
+            # doesn't re-persist this response's content.
+            current_text = ""
+            current_reasoning = ""
 
         # Final flush: tool results from the last response in the chain
         # (chain_limit hit or terminal tool call) would otherwise be lost.
@@ -203,6 +219,33 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             )
 
         await _send_sse(writer, "done", {})
+
+    except asyncio.CancelledError:
+        # User hit Stop. Persist any buffered tool results, then a partial
+        # assistant message from what we'd streamed so far, so the next
+        # turn sees a coherent history rather than a dangling user turn.
+        # Only plain text/reasoning is buffered here — never unanswered
+        # tool_calls — so this can't break provider message ordering.
+        for tool_msg in pending_tool_messages:
+            await insert_message(db, conversation_id, tool_msg)
+        pending_tool_messages.clear()
+
+        parts = []
+        if current_reasoning:
+            parts.append({"type": "reasoning", "text": current_reasoning})
+        if current_text:
+            parts.append({"type": "text", "text": current_text})
+        if parts:
+            await insert_message(
+                db, conversation_id, {"role": "assistant", "parts": parts}
+            )
+
+        # Best-effort: the client may already be gone.
+        try:
+            await _send_sse(writer, "stopped", {})
+        except Exception:
+            pass
+        raise
 
     except Exception as e:
         await _send_sse(writer, "error", {"message": str(e)})

@@ -288,10 +288,44 @@ function appendToolResult(name, output) {
   scrollToBottomIfFollowing();
 }
 
+// While a response is streaming, the Send button morphs into Stop. These
+// hold the in-flight fetch's AbortController so Stop can tear it down, and
+// a flag so the form's submit handler knows which action to take.
+let activeController = null;
+let isStreaming = false;
+
+function appendStoppedNotice() {
+  const messages = document.getElementById("messages");
+  const el = document.createElement("div");
+  el.className = "agent-stopped-notice";
+  el.textContent = "Stopped";
+  messages.appendChild(el);
+  scrollToBottomIfFollowing();
+}
+
+// Stop a streaming response: abort the client read loop AND tell the server
+// to stop generating. The abort alone only closes the connection — the
+// server won't notice promptly between writes — so the cancel POST is what
+// actually halts the agent loop and persists the partial turn.
+async function stopAgent(conversationId) {
+  if (activeController) {
+    activeController.abort();
+  }
+  try {
+    await fetch("/-/agent/" + conversationId + "/cancel", {method: "POST"});
+  } catch (e) {
+    // Best-effort: the read loop is already aborting regardless.
+  }
+}
+
 async function sendMessage(conversationId, message) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
-  sendBtn.disabled = true;
+  activeController = new AbortController();
+  isStreaming = true;
+  // Keep the button enabled so it can act as Stop.
+  sendBtn.textContent = "Stop";
+  sendBtn.classList.add("agent-stop-btn");
   input.disabled = true;
 
   // Show user message
@@ -321,6 +355,7 @@ async function sendMessage(conversationId, message) {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({message}),
+      signal: activeController.signal,
     });
 
     const reader = response.body.getReader();
@@ -396,13 +431,16 @@ async function sendMessage(conversationId, message) {
           } else if (eventType === "tool_result") {
             hasToolActivity = true;
             appendToolResult(data.name, data.output);
-          } else if (eventType === "done") {
+          } else if (eventType === "done" || eventType === "stopped") {
             streamDone = true;
             closeReasoning();
             stopPendingToolCalls();
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
+            }
+            if (eventType === "stopped") {
+              appendStoppedNotice();
             }
           } else if (eventType === "error") {
             streamDone = true;
@@ -438,9 +476,19 @@ async function sendMessage(conversationId, message) {
     document.querySelectorAll(".agent-thinking").forEach(el => el.remove());
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
+      currentAssistant = null;
     }
-    appendMessage("assistant", "Connection error: " + err.message);
+    if (err.name === "AbortError") {
+      // User hit Stop — the partial response stays on screen.
+      appendStoppedNotice();
+    } else {
+      appendMessage("assistant", "Connection error: " + err.message);
+    }
   } finally {
+    isStreaming = false;
+    activeController = null;
+    sendBtn.textContent = "Send";
+    sendBtn.classList.remove("agent-stop-btn");
     sendBtn.disabled = false;
     input.disabled = false;
     input.focus();
@@ -483,10 +531,15 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
 // Wire up form
 document.getElementById("chat-form").addEventListener("submit", (e) => {
   e.preventDefault();
+  const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
+  // While streaming the button is a Stop button.
+  if (isStreaming) {
+    stopAgent(conversationId);
+    return;
+  }
   const input = document.getElementById("message-input");
   const message = input.value.trim();
   if (!message) return;
-  const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
   sendMessage(conversationId, message);
 });
 

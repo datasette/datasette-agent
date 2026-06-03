@@ -989,6 +989,163 @@ def test_chat_command_shows_tool_calls(tmp_path):
     assert result.exit_code == 0
 
 
+@pytest.mark.asyncio
+async def test_run_agent_persists_partial_text_on_cancel(tmp_path, monkeypatch):
+    """When the agent task is cancelled mid-stream, run_agent must persist
+    the partial assistant text it already streamed — so the turn isn't left
+    dangling for the next request — emit a 'stopped' SSE event, then
+    re-raise CancelledError so the task terminates cleanly."""
+    import asyncio
+
+    from llm.parts import StreamEvent
+
+    from datasette_agent.agent import run_agent
+    from datasette_agent.schema import ensure_tables
+
+    ds = Datasette(
+        memory=True,
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    await ds.invoke_startup()
+    db = ds.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = "test-cancel-partial"
+    now = "2026-05-19T00:00:00+00:00"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, now, now],
+    )
+
+    class FakeResponse:
+        async def astream_events(self):
+            yield StreamEvent(type="text", chunk="Partial ")
+            yield StreamEvent(type="text", chunk="answer so far")
+            # Simulate the user hitting Stop mid-stream.
+            raise asyncio.CancelledError()
+
+        def to_dict(self):
+            return {"model": "fake", "id": "fake", "prompt": {}, "messages": []}
+
+    class FakeChain:
+        async def responses(self):
+            yield FakeResponse()
+
+    class FakeModel:
+        model_id = "fake"
+
+        def chain(self, *args, **kwargs):
+            return FakeChain()
+
+    class FakeLLM:
+        def __init__(self, datasette):
+            pass
+
+        async def model(self, purpose, actor):
+            return FakeModel()
+
+    class Writer:
+        def __init__(self):
+            self.chunks = []
+
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
+    writer = Writer()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
+
+    rows = (
+        await db.execute(
+            "SELECT role, message_json FROM agent_messages "
+            "WHERE conversation_id = ? ORDER BY id",
+            [conversation_id],
+        )
+    ).rows
+    assistant_text = ""
+    for row in rows:
+        if row["role"] != "assistant":
+            continue
+        msg = json.loads(row["message_json"])
+        for part in msg.get("parts", []):
+            if part.get("type") == "text":
+                assistant_text += part.get("text", "")
+    assert assistant_text == "Partial answer so far"
+
+    events = _parse_sse("".join(writer.chunks))
+    assert any(e["event"] == "stopped" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_cancel_chat_requires_permission(datasette_instance):
+    resp = await datasette_instance.client.post(
+        "/-/agent/01CANCELXXXXXXXXXXXXXXXXXX/cancel"
+    )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cancel_chat_not_found(datasette_instance, cookies):
+    resp = await datasette_instance.client.post(
+        "/-/agent/01CANCELXXXXXXXXXXXXXXXXXX/cancel",
+        cookies=cookies,
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_chat_no_active_task_returns_false(datasette_instance, cookies):
+    """Cancelling a conversation with no in-flight stream is idempotent —
+    200 with cancelled=false so the client can just refresh."""
+    ds = datasette_instance
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    resp = await ds.client.post(f"/-/agent/{conversation_id}/cancel", cookies=cookies)
+    assert resp.status_code == 200
+    assert resp.json()["cancelled"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_chat_cancels_active_task(datasette_instance, cookies):
+    """When a stream task is registered for the conversation, the cancel
+    endpoint must cancel it and report cancelled=true."""
+    import asyncio
+
+    ds = datasette_instance
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+
+    async def _long():
+        await asyncio.sleep(30)
+
+    task = asyncio.ensure_future(_long())
+    ds._chat_agent_tasks = {conversation_id: task}
+
+    resp = await ds.client.post(f"/-/agent/{conversation_id}/cancel", cookies=cookies)
+    assert resp.status_code == 200
+    assert resp.json()["cancelled"] is True
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert task.cancelled()
+
+
 def _parse_sse(text):
     """Parse SSE text into a list of {event, data} dicts."""
     events = []
