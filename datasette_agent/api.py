@@ -9,16 +9,27 @@ from .tools import get_agent_tools
 
 
 async def start_background_agent(
-    datasette, actor, goal, tools=None, spawned_by_conversation_id=None
+    datasette,
+    actor,
+    goal,
+    tools=None,
+    spawned_by_conversation_id=None,
+    identity_id=None,
+    launched_by=None,
 ):
     """Start a background agent. Returns the agent_id (ULID).
 
     Args:
         datasette: The Datasette instance
-        actor: The actor dict (e.g. {"id": "user"})
+        actor: The actor dict (e.g. {"id": "user"}). For run-as-agent this is
+            the agent identity actor; tool calls are then authorized against
+            the agent's grants (least privilege).
         goal: The goal prompt for the agent
         tools: Optional list of AgentTool instances. If None, uses default tools.
         spawned_by_conversation_id: If spawned from a chat, the conversation ID to notify on completion.
+        identity_id: Optional agent_identities.id this run acts as (provenance).
+        launched_by: Optional actor id of the human who launched the run
+            (accountability — recorded even though the agent acts as itself).
     """
     db = datasette.get_internal_database()
     await ensure_tables(db)
@@ -30,22 +41,34 @@ async def start_background_agent(
 
     # Create conversation record for message logging
     await db.execute_write(
-        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [conversation_id, actor_id, f"Background: {goal[:100]}", now, now],
+        "INSERT INTO agent_conversations "
+        "(id, actor_id, title, identity_id, launched_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            conversation_id,
+            actor_id,
+            f"Background: {goal[:100]}",
+            identity_id,
+            launched_by,
+            now,
+            now,
+        ],
     )
 
     # Create background agent record
     await db.execute_write(
         "INSERT INTO agent_background_agents "
-        "(id, conversation_id, actor_id, goal, status, spawned_by_conversation_id, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)",
+        "(id, conversation_id, actor_id, goal, status, spawned_by_conversation_id, "
+        "identity_id, launched_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
         [
             agent_id,
             conversation_id,
             actor_id,
             goal,
             spawned_by_conversation_id,
+            identity_id,
+            launched_by,
             now,
             now,
         ],
@@ -72,6 +95,34 @@ async def start_background_agent(
     task.add_done_callback(_cleanup)
 
     return agent_id
+
+
+async def start_background_agent_as_identity(
+    datasette, identity_id, goal, *, launched_by, tools=None, spawned_by_conversation_id=None
+):
+    """Start a background agent running under an agent *identity* actor.
+
+    The job executes as ``agent:<id>`` so every tool call evaluates
+    ``datasette.allowed(..., actor=agent_actor)`` against only the agent's
+    grants (least privilege), and edits are attributed to the agent. The human
+    who launched it is recorded in ``launched_by`` for accountability.
+
+    Raises ValueError if the identity is missing or disabled.
+    """
+    from .identities import load_identity_actor
+
+    identity_actor = await load_identity_actor(datasette, identity_id)
+    if identity_actor is None:
+        raise ValueError(f"Unknown or disabled agent identity: {identity_id}")
+    return await start_background_agent(
+        datasette,
+        actor=identity_actor,
+        goal=goal,
+        tools=tools,
+        spawned_by_conversation_id=spawned_by_conversation_id,
+        identity_id=identity_id,
+        launched_by=launched_by,
+    )
 
 
 async def reconcile_running_agents(datasette):

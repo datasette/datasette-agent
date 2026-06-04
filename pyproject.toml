@@ -22,6 +22,9 @@ dev = [
     "pytest-asyncio",
     "llm-echo>=0.5a0",
     "inline-snapshot",
+    "datasette-acl",
+    "datasette-user-profiles",
+    "datasette-acl-share",
 ]
 
 [build-system]
@@ -46,3 +49,8 @@ include = ["datasette_agent*"]
 
 [tool.setuptools.package-data]
 datasette_agent = ["static/*", "templates/*"]
+
+[tool.uv.sources]
+datasette-acl = { path = "../datasette-acl", editable = true }
+datasette-user-profiles = { path = "../datasette-user-profiles", editable = true }
+datasette-acl-share = { path = "../datasette-acl-share", editable = true }

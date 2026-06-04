@@ -1,0 +1,53 @@
+{
+  "$defs": {
+    "ConversationSummary": {
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Title"
+        },
+        "created_at": {
+          "title": "Created At",
+          "type": "string"
+        },
+        "updated_at": {
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "ConversationSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "conversations": {
+      "items": {
+        "$ref": "#/$defs/ConversationSummary"
+      },
+      "title": "Conversations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "conversations"
+  ],
+  "title": "IndexPageData",
+  "type": "object"
+}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title or "Agent" }}{% endblock %}
+
+{% block extra_head %}
+  {{ datasette_agent_vite_entry(entrypoint) | safe }}
+  <script type="application/json" id="pageData">{{ page_data | tojson }}</script>
+{% endblock %}
+
+{% block content %}
+  <div id="app-root"></div>
+{% endblock %}
