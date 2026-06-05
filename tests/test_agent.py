@@ -29,6 +29,13 @@ def cookies(datasette_instance):
     return {"ds_actor": datasette_instance.client.actor_cookie({"id": "user"})}
 
 
+def assert_rendered_error_page(response, status, message):
+    assert response.status_code == status
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "<!DOCTYPE html>" in response.text
+    assert message in response.text
+
+
 @pytest.mark.asyncio
 async def test_plugin_is_installed():
     datasette = Datasette(memory=True)
@@ -188,7 +195,7 @@ async def test_jump_section_script_added_for_users_with_permission(
     response = await datasette_instance.client.get("/", cookies=cookies)
     assert response.status_code == 200
     assert "makeJumpSections" in response.text
-    assert f"const pluginVersion = \"{__version__}\";" in response.text
+    assert f'const pluginVersion = "{__version__}";' in response.text
     assert "version: pluginVersion" in response.text
     assert "datasette-agent-jump-start" in response.text
     assert "datasette-agent-jump-hint" in response.text
@@ -463,7 +470,7 @@ async def test_conversation_not_found(datasette_instance, cookies):
     response = await datasette_instance.client.get(
         "/-/agent/01234567890123456789012345", cookies=cookies
     )
-    assert response.status_code == 404
+    assert_rendered_error_page(response, 404, "Conversation not found")
 
 
 @pytest.mark.asyncio
@@ -482,6 +489,10 @@ async def test_conversation_actor_scoping(datasette_instance, cookies):
     # Same user can access it
     response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert response.status_code == 200
+
+    other_cookies = {"ds_actor": ds.client.actor_cookie({"id": "other"})}
+    response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=other_cookies)
+    assert_rendered_error_page(response, 403, "Forbidden")
 
 
 @pytest.mark.asyncio

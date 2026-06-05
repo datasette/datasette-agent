@@ -357,9 +357,7 @@ def _agent_jump_section_script(datasette):
     script = script.replace(
         "__CONVERSATION_BASE_URL__", json.dumps(conversation_base_url)
     )
-    return script.replace(
-        "__PLUGIN_VERSION__", json.dumps(__version__)
-    )
+    return script.replace("__PLUGIN_VERSION__", json.dumps(__version__))
 
 
 @hookimpl

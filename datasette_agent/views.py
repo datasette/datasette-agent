@@ -1,8 +1,9 @@
 import json
 from datetime import datetime, timezone
 
+from datasette import Forbidden, NotFound, Response
 from datasette.utils import tilde_decode
-from datasette.utils.asgi import AsgiStream, Response
+from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
 from .agent import run_agent
@@ -79,9 +80,9 @@ async def agent_conversation(request, datasette):
         )
     ).first()
     if row is None:
-        return Response.html("Conversation not found", status=404)
+        raise NotFound("Conversation not found")
     if row["actor_id"] != actor_id:
-        return Response.html("Forbidden", status=403)
+        raise Forbidden("Forbidden")
 
     messages = (
         await db.execute(
@@ -173,9 +174,9 @@ async def agent_conversation_markdown(request, datasette):
         )
     ).first()
     if row is None:
-        return Response.html("Conversation not found", status=404)
+        raise NotFound("Conversation not found")
     if row["actor_id"] != actor_id:
-        return Response.html("Forbidden", status=403)
+        raise Forbidden("Forbidden")
 
     messages = (
         await db.execute(
@@ -403,13 +404,13 @@ async def explorer_page(request, datasette):
     try:
         target_db = datasette.get_database(database_name)
     except KeyError:
-        return Response.html("Database not found", status=404)
+        raise NotFound("Database not found")
 
     # Verify the table exists if specified
     if table_name:
         tables = await target_db.table_names()
         if table_name not in tables:
-            return Response.html("Table not found", status=404)
+            raise NotFound("Table not found")
 
     # Fetch reports for this database/table
     if table_name:
@@ -477,9 +478,9 @@ async def explorer_report_page(request, datasette):
         )
     ).first()
     if row is None:
-        return Response.html("Report not found", status=404)
+        raise NotFound("Report not found")
     if row["actor_id"] != actor_id:
-        return Response.html("Forbidden", status=403)
+        raise Forbidden("Forbidden")
 
     return Response.html(
         await datasette.render_template(

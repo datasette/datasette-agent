@@ -51,6 +51,13 @@ def cookies(datasette_instance):
     return {"ds_actor": datasette_instance.client.actor_cookie({"id": "user"})}
 
 
+def assert_rendered_error_page(response, status, message):
+    assert response.status_code == status
+    assert "text/html" in response.headers.get("content-type", "")
+    assert "<!DOCTYPE html>" in response.text
+    assert message in response.text
+
+
 async def _setup_test_db(datasette_instance):
     """Create a test database with some data."""
     db = datasette_instance.add_memory_database("test_db")
@@ -237,7 +244,7 @@ async def test_explorer_page_nonexistent_database(datasette_instance, cookies):
         "/-/agent/explore/nonexistent",
         cookies=cookies,
     )
-    assert response.status_code == 404
+    assert_rendered_error_page(response, 404, "Database not found")
 
 
 @pytest.mark.asyncio
@@ -247,7 +254,7 @@ async def test_explorer_page_nonexistent_table(datasette_instance, cookies):
         "/-/agent/explore/test_db/nonexistent",
         cookies=cookies,
     )
-    assert response.status_code == 404
+    assert_rendered_error_page(response, 404, "Table not found")
 
 
 @pytest.mark.asyncio
@@ -450,7 +457,7 @@ async def test_report_detail_page_not_found(datasette_instance, cookies):
         "/-/agent/explore/report/01ARZ3NDEKTSV4RRFFQ69G5FA9",
         cookies=cookies,
     )
-    assert response.status_code == 404
+    assert_rendered_error_page(response, 404, "Report not found")
 
 
 @pytest.mark.asyncio
