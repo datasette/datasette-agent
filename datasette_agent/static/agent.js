@@ -238,6 +238,86 @@ function createSqlEditLink(url) {
   return editLink;
 }
 
+const sqlPanelDesktop = window.matchMedia("(min-width: 900px)");
+
+function initSqlPanel() {
+  const workspace = document.getElementById("agent-workspace");
+  const panel = document.getElementById("agent-sql-panel");
+  if (!workspace || !panel) return;
+  const iframe = panel.querySelector("iframe");
+  const openLink = panel.querySelector(".agent-sql-panel-open");
+  const closeButton = panel.querySelector(".agent-sql-panel-close");
+  if (!iframe || !openLink || !closeButton) return;
+
+  function hasPanelRoom() {
+    return sqlPanelDesktop.matches;
+  }
+
+  function clearActiveLink() {
+    workspace.querySelectorAll(".agent-sql-edit-link a[aria-current]").forEach(link => {
+      link.removeAttribute("aria-current");
+    });
+  }
+
+  function closePanel() {
+    workspace.classList.remove("sql-panel-open");
+    panel.hidden = true;
+    iframe.removeAttribute("src");
+    openLink.href = "#";
+    clearActiveLink();
+  }
+
+  function openPanel(url, sourceLink) {
+    panel.hidden = false;
+    workspace.classList.add("sql-panel-open");
+    iframe.src = url;
+    openLink.href = url;
+    clearActiveLink();
+    if (sourceLink) sourceLink.setAttribute("aria-current", "page");
+  }
+
+  iframe.addEventListener("load", () => {
+    try {
+      iframe.contentDocument
+        ?.querySelectorAll("header.hd, footer.ft")
+        .forEach(el => el.remove());
+    } catch (err) {
+      console.debug("Could not tidy SQL iframe chrome:", err);
+    }
+  });
+
+  workspace.addEventListener("click", (event) => {
+    const link = event.target.closest(".agent-sql-edit-link a");
+    if (!link || !workspace.contains(link) || !hasPanelRoom()) return;
+    event.preventDefault();
+    openPanel(link.href, link);
+  });
+
+  closeButton.addEventListener("click", closePanel);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) closePanel();
+  });
+
+  function closeIfNarrow(event) {
+    if (!event.matches || !hasPanelRoom()) closePanel();
+  }
+  if (sqlPanelDesktop.addEventListener) {
+    sqlPanelDesktop.addEventListener("change", closeIfNarrow);
+  } else if (sqlPanelDesktop.addListener) {
+    sqlPanelDesktop.addListener(closeIfNarrow);
+  }
+
+  let resizeQueued = false;
+  window.addEventListener("resize", () => {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => {
+      resizeQueued = false;
+      if (!panel.hidden && !hasPanelRoom()) closePanel();
+    });
+  });
+}
+
 function appendToolResult(name, output) {
   const messages = document.getElementById("messages");
 
@@ -449,6 +529,8 @@ async function sendMessage(conversationId, message) {
 
 // Make sendMessage available globally for the inline script
 window.sendMessage = sendMessage;
+
+initSqlPanel();
 
 // Render existing assistant messages as markdown on page load
 document.querySelectorAll(".agent-message-assistant .agent-message-content").forEach(el => {

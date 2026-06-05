@@ -6,6 +6,11 @@
   margin: 0 auto;
 }
 
+.agent-workspace {
+  margin: 0 auto;
+  max-width: 800px;
+}
+
 .agent-header {
   display: flex;
   align-items: center;
@@ -328,6 +333,109 @@
   background: #f6f8fa;
   color: #24292f;
   text-decoration: none;
+}
+
+.agent-sql-panel {
+  background: #fff;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  display: none;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.agent-sql-panel-header {
+  align-items: center;
+  background: #f6f8fa;
+  border-bottom: 1px solid #d0d7de;
+  color: #24292f;
+  display: flex;
+  font-size: 0.85rem;
+  font-weight: 600;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+}
+
+.agent-sql-panel-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.35rem;
+}
+
+.agent-sql-panel-open {
+  color: #57606a;
+  font-size: 0.78rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.agent-sql-panel-open:hover,
+.agent-sql-panel-open:focus {
+  color: #0969da;
+}
+
+.agent-sql-panel-close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #57606a;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 1.2rem;
+  height: 1.6rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.6rem;
+}
+
+.agent-sql-panel-close:hover,
+.agent-sql-panel-close:focus {
+  background: #eaeef2;
+  color: #24292f;
+}
+
+.agent-sql-panel iframe {
+  border: 0;
+  display: block;
+  height: calc(100% - 2.25rem);
+  width: 100%;
+}
+
+@media (min-width: 900px) {
+  .agent-workspace.sql-panel-open {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    height: calc(100vh - 150px);
+    margin: 0;
+    max-width: none;
+    min-height: 0;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .agent-workspace.sql-panel-open .agent-chat {
+    height: 100%;
+    margin: 0;
+    max-height: 100%;
+    max-width: none;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    width: 100%;
+  }
+
+  .agent-workspace.sql-panel-open .agent-sql-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+  }
 }
 
 .agent-tool-group {

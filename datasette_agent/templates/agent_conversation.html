@@ -3,85 +3,98 @@
 {% block title %}Agent - {{ conversation.title or "Chat" }}{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css?v=sql-panel-4">
 {% endblock %}
 
 {% block content %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
-  <div class="agent-header">
-    <a href="/-/agent">&larr; Back</a>
-    <h1>{{ conversation.title or "Chat" }}</h1>
-    <div class="chat-export-menu" data-markdown-url="/-/agent/{{ conversation_id }}/markdown" data-title="{{ conversation.title or 'chat' }}"></div>
-  </div>
-
-  <div class="agent-messages" id="messages">
-    {% set in_tool_group = namespace(value=false) %}
-    {% for msg in messages %}
-      {% if msg.role in ("tool_call", "tool_result") %}
-        {% if not in_tool_group.value %}
-        <div class="agent-tool-group">
-          {% set in_tool_group.value = true %}
-        {% endif %}
-        {% if msg.role == "tool_call" %}
-        <details class="agent-tool-call">
-          <summary>Tool: {{ msg.tool_name }}</summary>
-          <pre>{{ msg.tool_arguments }}</pre>
-        </details>
-        {% elif msg.role == "tool_result" %}
-        {% set html_content = msg.tool_output | agent_extract_html %}
-        {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
-        {% if html_content %}
-        </div>
-        {% set in_tool_group.value = false %}
-        <div class="agent-rich-result">
-          {{ html_content | safe }}
-          {% if edit_sql_url %}
-          <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
-          {% endif %}
-        </div>
-        <div class="agent-tool-group">
-        {% set in_tool_group.value = true %}
-        {% endif %}
-        <details class="agent-tool-result">
-          <summary>Result: {{ msg.tool_name }}</summary>
-          <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
-          {% if edit_sql_url and not html_content %}
-          <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
-          {% endif %}
-        </details>
-        {% endif %}
-      {% else %}
-        {% if in_tool_group.value %}
-        </div>
-        {% set in_tool_group.value = false %}
-        {% endif %}
-        {% if msg.role == "user" %}
-        <div class="agent-message agent-message-user">
-          <div class="agent-message-content">{{ msg.content }}</div>
-        </div>
-        {% elif msg.role == "assistant" %}
-        <div class="agent-message agent-message-assistant">
-          <div class="agent-message-content">{{ msg.content }}</div>
-        </div>
-        {% elif msg.role == "reasoning" and msg.content %}
-        <details class="agent-reasoning">
-          <summary>Thinking</summary>
-          <div class="agent-reasoning-content">{{ msg.content }}</div>
-        </details>
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-    {% if in_tool_group.value %}
+<div class="agent-workspace" id="agent-workspace">
+  <div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
+    <div class="agent-header">
+      <a href="/-/agent">&larr; Back</a>
+      <h1>{{ conversation.title or "Chat" }}</h1>
+      <div class="chat-export-menu" data-markdown-url="/-/agent/{{ conversation_id }}/markdown" data-title="{{ conversation.title or 'chat' }}"></div>
     </div>
+
+    <div class="agent-messages" id="messages">
+      {% set in_tool_group = namespace(value=false) %}
+      {% for msg in messages %}
+        {% if msg.role in ("tool_call", "tool_result") %}
+          {% if not in_tool_group.value %}
+          <div class="agent-tool-group">
+            {% set in_tool_group.value = true %}
+          {% endif %}
+          {% if msg.role == "tool_call" %}
+          <details class="agent-tool-call">
+            <summary>Tool: {{ msg.tool_name }}</summary>
+            <pre>{{ msg.tool_arguments }}</pre>
+          </details>
+          {% elif msg.role == "tool_result" %}
+          {% set html_content = msg.tool_output | agent_extract_html %}
+          {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
+          {% if html_content %}
+          </div>
+          {% set in_tool_group.value = false %}
+          <div class="agent-rich-result">
+            {{ html_content | safe }}
+            {% if edit_sql_url %}
+            <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
+            {% endif %}
+          </div>
+          <div class="agent-tool-group">
+          {% set in_tool_group.value = true %}
+          {% endif %}
+          <details class="agent-tool-result">
+            <summary>Result: {{ msg.tool_name }}</summary>
+            <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
+            {% if edit_sql_url and not html_content %}
+            <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
+            {% endif %}
+          </details>
+          {% endif %}
+        {% else %}
+          {% if in_tool_group.value %}
+          </div>
+          {% set in_tool_group.value = false %}
+          {% endif %}
+          {% if msg.role == "user" %}
+          <div class="agent-message agent-message-user">
+            <div class="agent-message-content">{{ msg.content }}</div>
+          </div>
+          {% elif msg.role == "assistant" %}
+          <div class="agent-message agent-message-assistant">
+            <div class="agent-message-content">{{ msg.content }}</div>
+          </div>
+          {% elif msg.role == "reasoning" and msg.content %}
+          <details class="agent-reasoning">
+            <summary>Thinking</summary>
+            <div class="agent-reasoning-content">{{ msg.content }}</div>
+          </details>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+      {% if in_tool_group.value %}
+      </div>
+      {% endif %}
+    </div>
+
+    {% if not background_agent %}
+    <form id="chat-form" class="agent-input">
+      <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
+      <button type="submit" id="send-btn">Send</button>
+    </form>
     {% endif %}
   </div>
 
-  {% if not background_agent %}
-  <form id="chat-form" class="agent-input">
-    <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
-    <button type="submit" id="send-btn">Send</button>
-  </form>
-  {% endif %}
+  <aside class="agent-sql-panel" id="agent-sql-panel" aria-label="SQL query" hidden>
+    <div class="agent-sql-panel-header">
+      <span>SQL query</span>
+      <div class="agent-sql-panel-actions">
+        <a class="agent-sql-panel-open" href="#" target="_blank" rel="noopener">Open</a>
+        <button type="button" class="agent-sql-panel-close" aria-label="Close SQL query panel">&times;</button>
+      </div>
+    </div>
+    <iframe title="SQL query"></iframe>
+  </aside>
 </div>
 
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
