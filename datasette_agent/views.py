@@ -7,6 +7,7 @@ from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
 from .agent import run_agent
+from .ask_user import resolve_question
 from .export_markdown import format_conversation_markdown
 from .messages import flatten_for_render
 from .schema import ensure_tables
@@ -244,6 +245,51 @@ async def agent_stream(request, datasette):
         },
         content_type="text/event-stream",
     )
+
+
+async def agent_answer(request, datasette):
+    """Resolve a pending ask_user() question with the user's choice.
+
+    The matching agent turn is parked on an asyncio.Future held open by its
+    SSE stream; setting the result here unblocks the tool that asked.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    # Verify ownership
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    body = await request.post_body()
+    data = json.loads(body)
+    question_id = data.get("question_id")
+    answer = data.get("answer")
+    if not question_id or answer is None:
+        return Response.json(
+            {"error": "question_id and answer are required"}, status=400
+        )
+
+    ok, error = resolve_question(
+        datasette, conversation_id, actor_id, question_id, answer
+    )
+    if not ok:
+        status = 403 if error == "Forbidden" else 400
+        return Response.json({"error": error}, status=status)
+    return Response.json({"ok": True})
 
 
 async def agent_background_index(request, datasette):

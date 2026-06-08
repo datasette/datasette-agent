@@ -143,6 +143,32 @@ return json.dumps({
 })
 ```
 
+### Asking the user a question
+
+A tool can pause the agent and ask the user a multiple-choice question, blocking until they pick an option. Call `ask_user(question, options)` from inside your handler:
+
+```python
+import json
+
+from datasette_agent.ask_user import ask_user
+
+
+async def deploy_tool(datasette, actor, project):
+    target = await ask_user(
+        f"Which environment should I deploy {project} to?",
+        [
+            {"label": "production", "description": "Live, customer-facing"},
+            {"label": "staging", "description": "Safe to break"},
+        ],
+    )
+    # ...deploy to `target`...
+    return json.dumps({"deployed_to": target})
+```
+
+`options` is a list of choice labels (plain strings) or `{"label", "description"}` dicts. The call returns the `label` string of the option the user selected, which you can use however you like — including as part of the JSON you return to the model.
+
+While the question is pending, the chat UI shows the options as clickable buttons and the agent turn is held open until the user answers. `ask_user` only works inside an interactive chat turn — calling it from a background agent or the CLI raises `datasette_agent.ask_user.AskUserUnavailable`, so guard those code paths if your tool can run in both contexts.
+
 ## Rendering custom HTML from tools
 
 Tool plugins can render rich HTML inline in the chat UI by returning a JSON object with an `_html` key. The HTML is rendered directly in the conversation. The remaining keys are returned to the LLM as the tool result, with any key whose name starts with `_` removed first.

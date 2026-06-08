@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from datasette.resources import DatabaseResource
 from datasette_llm import LLM
 
-from .context import current_conversation_id
+from .ask_user import make_ask_user
+from .context import current_ask_user, current_conversation_id
 from .messages import (
     insert_message,
     insert_response,
@@ -81,6 +82,20 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
     await ensure_tables(db)
 
     current_conversation_id.set(conversation_id)
+
+    # Make ask_user() available to tools for this turn. It emits a
+    # `user_question` SSE event and blocks the chain on an asyncio.Future
+    # until the user answers via the answer endpoint.
+    actor_id = None
+    if actor and actor.get("id") is not None:
+        actor_id = str(actor["id"])
+
+    async def _send_question(payload):
+        await _send_sse(writer, "user_question", payload)
+
+    current_ask_user.set(
+        make_ask_user(datasette, conversation_id, actor_id, _send_question)
+    )
 
     # Drain any pending notifications and prepend their text to the user
     # turn so the model sees them on this turn.

@@ -353,6 +353,85 @@ function appendToolResult(name, output, id = null) {
   scrollToBottomIfFollowing();
 }
 
+function appendUserQuestion(conversationId, data) {
+  const messages = document.getElementById("messages");
+  const div = document.createElement("div");
+  div.className = "agent-user-question";
+  div.dataset.questionId = data.id;
+
+  const questionEl = document.createElement("div");
+  questionEl.className = "agent-user-question-text";
+  questionEl.textContent = data.question;
+  div.appendChild(questionEl);
+
+  const optionsEl = document.createElement("div");
+  optionsEl.className = "agent-user-question-options";
+  (data.options || []).forEach(option => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "agent-user-question-option";
+    const label = document.createElement("span");
+    label.className = "agent-user-question-option-label";
+    label.textContent = option.label;
+    btn.appendChild(label);
+    if (option.description) {
+      const desc = document.createElement("span");
+      desc.className = "agent-user-question-option-desc";
+      desc.textContent = option.description;
+      btn.appendChild(desc);
+    }
+    btn.addEventListener("click", () =>
+      answerUserQuestion(conversationId, div, data.id, option.label)
+    );
+    optionsEl.appendChild(btn);
+  });
+  div.appendChild(optionsEl);
+  messages.appendChild(div);
+  scrollToBottom();
+}
+
+async function answerUserQuestion(conversationId, div, questionId, answer) {
+  const buttons = div.querySelectorAll(".agent-user-question-option");
+  const reEnable = () => {
+    div.classList.remove("answered");
+    buttons.forEach(b => {
+      b.disabled = false;
+      b.classList.remove("selected");
+    });
+  };
+  // Optimistically lock the UI and mark the chosen option.
+  div.classList.add("answered");
+  buttons.forEach(b => {
+    b.disabled = true;
+    const label = b.querySelector(".agent-user-question-option-label");
+    if (label && label.textContent === answer) b.classList.add("selected");
+  });
+  const existingError = div.querySelector(".agent-user-question-error");
+  if (existingError) existingError.remove();
+  try {
+    const resp = await fetch("/-/agent/" + conversationId + "/answer", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question_id: questionId, answer}),
+    });
+    if (!resp.ok) {
+      reEnable();
+      const err = document.createElement("div");
+      err.className = "agent-user-question-error";
+      let detail = "";
+      try { detail = (await resp.json()).error || ""; } catch {}
+      err.textContent = "Failed to submit answer" + (detail ? ": " + detail : "");
+      div.appendChild(err);
+    }
+  } catch (e) {
+    reEnable();
+    const err = document.createElement("div");
+    err.className = "agent-user-question-error";
+    err.textContent = "Failed to submit answer: " + e.message;
+    div.appendChild(err);
+  }
+}
+
 async function sendMessage(conversationId, message) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
@@ -494,6 +573,16 @@ async function sendMessage(conversationId, message) {
           } else if (eventType === "tool_result") {
             hasToolActivity = true;
             appendToolResult(data.name, data.output, data.id);
+          } else if (eventType === "user_question") {
+            closeReasoning();
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
+            // Treat as activity so the "Thinking…" placeholder gives way
+            // to the question while we wait for the user to choose.
+            hasToolActivity = true;
+            appendUserQuestion(conversationId, data);
           } else if (eventType === "done") {
             streamDone = true;
             closeReasoning();
