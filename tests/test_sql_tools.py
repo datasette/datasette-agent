@@ -66,6 +66,15 @@ def _get_sql_tool():
     raise AssertionError("sql_query tool not found")
 
 
+def _get_default_tool(name):
+    from datasette_agent.sql_tools import get_default_tools
+
+    for tool in get_default_tools():
+        if tool.name == name:
+            return tool
+    raise AssertionError(f"{name} tool not found")
+
+
 def _expected_sql_edit_url(ds, database, sql):
     return ds.urls.database(database) + "/-/query?" + urlencode({"sql": sql})
 
@@ -267,6 +276,73 @@ async def test_sql_query_error_includes_edit_sql_url(datasette_with_data):
     assert data["_edit_sql_url"] == _expected_sql_edit_url(
         datasette_with_data, "data", sql
     )
+
+
+@pytest.mark.asyncio
+async def test_show_in_datasette_returns_table_url_and_link(datasette_with_data):
+    await _seed_items(datasette_with_data)
+    tool = _get_default_tool("show_in_datasette")
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        databasename="data",
+        tablename="items",
+        querystring="name=apple&qty__gte=3&_facet=qty",
+    )
+    data = json.loads(out)
+    expected_url = (
+        datasette_with_data.urls.table("data", "items")
+        + "?name=apple&qty__gte=3&_facet=qty"
+    )
+    assert data["url"] == expected_url
+    assert data["database"] == "data"
+    assert data["table"] == "items"
+    assert data["querystring"] == "name=apple&qty__gte=3&_facet=qty"
+    assert (
+        'href="/data/items?name=apple&amp;qty__gte=3&amp;_facet=qty"' in data["_html"]
+    )
+    assert 'class="agent-sql-edit-link"' in data["_html"]
+    assert "Show in Datasette" in data["_html"]
+
+
+@pytest.mark.asyncio
+async def test_show_in_datasette_querystring_optional(datasette_with_data):
+    await _seed_items(datasette_with_data)
+    tool = _get_default_tool("show_in_datasette")
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        databasename="data",
+        tablename="items",
+    )
+    data = json.loads(out)
+    assert data["url"] == datasette_with_data.urls.table("data", "items")
+    assert data["querystring"] == ""
+
+
+@pytest.mark.asyncio
+async def test_show_in_datasette_strips_leading_question_mark(datasette_with_data):
+    await _seed_items(datasette_with_data)
+    tool = _get_default_tool("show_in_datasette")
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        databasename="data",
+        tablename="items",
+        querystring="?name=pear",
+    )
+    data = json.loads(out)
+    assert data["url"] == datasette_with_data.urls.table("data", "items") + "?name=pear"
+    assert data["querystring"] == "name=pear"
+
+
+@pytest.mark.asyncio
+async def test_show_in_datasette_appears_in_input_schema():
+    tool = _get_default_tool("show_in_datasette")
+    assert tool.input_schema["required"] == ["databasename", "tablename"]
+    props = tool.input_schema["properties"]
+    assert set(props) == {"databasename", "tablename", "querystring"}
+    assert props["querystring"]["default"] == ""
 
 
 @pytest.mark.asyncio

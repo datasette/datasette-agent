@@ -87,6 +87,25 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_explains_show_in_datasette_querystrings(
+    datasette_instance,
+):
+    from datasette_agent.agent import _build_system_prompt
+
+    await datasette_instance.invoke_startup()
+    prompt = await _build_system_prompt(datasette_instance, {"id": "user"})
+    assert "show_in_datasette" in prompt
+    assert "without a leading `?`" in prompt
+    assert "`column=value`" in prompt
+    assert "`column__op=value`" in prompt
+    assert "`contains`" in prompt
+    assert "`gte`" in prompt
+    assert "`_sort=column`" in prompt
+    assert "`_search=terms`" in prompt
+    assert "`_facet=column`" in prompt
+
+
+@pytest.mark.asyncio
 async def test_system_prompt_hides_dbs_without_execute_sql(tmp_path):
     """The system prompt lists the databases the agent can use. If the
     actor lacks execute-sql on a database, naming it in the prompt is
@@ -799,6 +818,7 @@ async def test_default_tools_registered(datasette_instance):
     assert "list_databases_and_tables" in tool_names
     assert "describe_table" in tool_names
     assert "sql_query" in tool_names
+    assert "show_in_datasette" in tool_names
 
 
 @pytest.mark.asyncio
@@ -909,6 +929,7 @@ def test_agent_tools_command():
     assert "list_databases_and_tables" in result.output
     assert "describe_table" in result.output
     assert "sql_query" in result.output
+    assert "show_in_datasette" in result.output
     # Should show plugin grouping
     assert "agent:" in result.output
 
@@ -937,6 +958,7 @@ def test_agent_tools_command_json():
     assert "list_databases_and_tables" in tool_names
     assert "describe_table" in tool_names
     assert "sql_query" in tool_names
+    assert "show_in_datasette" in tool_names
     # Each tool should have name, description, input_schema, plugin
     for tool in data:
         assert "name" in tool

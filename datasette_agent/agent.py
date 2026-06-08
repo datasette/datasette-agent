@@ -53,6 +53,21 @@ async def _build_system_prompt(datasette, actor):
         "doesn't: a one-line takeaway, a caveat, a follow-up suggestion, "
         "or just a brief framing sentence. If there's nothing to add, "
         "say nothing."
+        "\n\n"
+        "Use `show_in_datasette` when the user should inspect a browseable "
+        "Datasette table page, especially filtered/faceted results. Pass "
+        "`querystring` without a leading `?`; combine parameters with `&` "
+        "and URL-encode spaces/special characters. Exact filters are "
+        "`column=value` or `column__exact=value`; other filters use "
+        "`column__op=value` where op includes `not`, `contains`, "
+        "`notcontains`, `startswith`, `endswith`, `gt`, `gte`, `lt`, `lte`, "
+        "`like`, `notlike`, `in`, `notin`, `isnull`, `notnull`, `isblank`, "
+        "`notblank`, and `date`. Useful special parameters: `_sort=column`, "
+        "`_sort_desc=column`, `_size=100`, `_search=terms`, "
+        "`_search_COLUMN=terms`, `_facet=column` (repeat for multiple "
+        "facets), and `_facet_size=100`. Examples: "
+        "`name=Simon&age__gte=10`, `_facet=state&_facet=party`, "
+        "`_search=rob*&_sort_desc=created`."
     ]
     db_info = {}
     for db_name, db in datasette.databases.items():

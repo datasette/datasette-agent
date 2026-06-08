@@ -170,6 +170,53 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
         return json.dumps({"error": str(e), "_edit_sql_url": edit_sql_url})
 
 
+async def _show_in_datasette(
+    datasette, actor, databasename: str, tablename: str, querystring: str = ""
+):
+    if databasename not in datasette.databases:
+        available = list(datasette.databases)
+        return json.dumps(
+            {
+                "error": f"Database '{databasename}' not found",
+                "available_databases": available,
+            }
+        )
+    if not await datasette.allowed(
+        action="view-table",
+        resource=TableResource(database=databasename, table=tablename),
+        actor=actor,
+    ):
+        return json.dumps({"error": "Permission denied"})
+    db = datasette.get_database(databasename)
+    table_names = await db.table_names()
+    if tablename not in table_names:
+        return json.dumps(
+            {
+                "error": f"Table '{tablename}' not found in database '{databasename}'",
+                "available_tables": table_names,
+            }
+        )
+
+    querystring = (querystring or "").lstrip("?")
+    url = datasette.urls.table(databasename, tablename)
+    if querystring:
+        url = f"{url}?{querystring}"
+    escaped_url = html.escape(url, quote=True)
+    return json.dumps(
+        {
+            "database": databasename,
+            "table": tablename,
+            "querystring": querystring,
+            "url": url,
+            "_html": (
+                '<p class="agent-sql-edit-link">'
+                f'<a href="{escaped_url}" target="_blank" rel="noopener">'
+                "Show in Datasette</a></p>"
+            ),
+        }
+    )
+
+
 def get_default_tools():
     return [
         AgentTool(
@@ -232,5 +279,37 @@ def get_default_tools():
                 "required": ["database", "sql"],
             },
             fn=_sql_query,
+        ),
+        AgentTool(
+            name="show_in_datasette",
+            description=(
+                "Show a Datasette table page to the user, optionally with "
+                "Datasette query string filters and facets such as "
+                "name=Simon, age__gte=10, or _facet=colname."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "databasename": {
+                        "type": "string",
+                        "description": "The database name",
+                    },
+                    "tablename": {
+                        "type": "string",
+                        "description": "The table name",
+                    },
+                    "querystring": {
+                        "type": "string",
+                        "default": "",
+                        "description": (
+                            "Optional Datasette table query string without "
+                            "the leading ?. Examples: name=Simon, "
+                            "age__gte=10&_facet=age."
+                        ),
+                    },
+                },
+                "required": ["databasename", "tablename"],
+            },
+            fn=_show_in_datasette,
         ),
     ]
