@@ -123,20 +123,59 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
     # AFTER the assistant message that called them — preserving logical
     # message order in agent_messages.
     pending_tool_messages = []
+    streamed_tool_calls = {}
+
+    def tool_call_stream_id(obj):
+        tool_call_id = getattr(obj, "tool_call_id", None)
+        if tool_call_id is not None:
+            return f"id:{tool_call_id}"
+        part_index = getattr(obj, "part_index", None)
+        if part_index is not None:
+            return f"part:{part_index}"
+        return None
+
+    def matching_streamed_tool_call_id(tool_call, require_unfinalized=True):
+        stream_id = tool_call_stream_id(tool_call)
+        if stream_id is not None:
+            return stream_id
+        matches = [
+            key
+            for key, state in streamed_tool_calls.items()
+            if state.get("name") == tool_call.name
+            and (not require_unfinalized or not state.get("finalized"))
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     async def before_call(tool, tool_call):
+        stream_id = matching_streamed_tool_call_id(tool_call)
+        if stream_id in streamed_tool_calls:
+            streamed_tool_calls[stream_id]["finalized"] = True
         await _send_sse(
             writer,
             "tool_call",
-            {"name": tool_call.name, "arguments": tool_call.arguments},
+            {
+                "id": stream_id,
+                "name": tool_call.name,
+                "arguments": tool_call.arguments,
+                "streamed": bool(stream_id and stream_id in streamed_tool_calls),
+            },
         )
 
     async def after_call(tool, tool_call, tool_result):
         output = tool_result.output or ""
+        stream_id = tool_call_stream_id(tool_result) or matching_streamed_tool_call_id(
+            tool_call, require_unfinalized=False
+        )
         await _send_sse(
             writer,
             "tool_result",
-            {"name": tool_result.name, "output": output},
+            {
+                "id": stream_id,
+                "name": tool_result.name,
+                "output": output,
+            },
         )
         # Persist the original output (with _html / sql) for UI + export.
         pending_tool_messages.append(
@@ -174,9 +213,35 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
                     await _send_sse(writer, "text_chunk", {"content": event.chunk})
                 elif event.type == "reasoning" and event.chunk:
                     await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
-                # tool_call_name / tool_call_args / tool_result events are
-                # surfaced via before_call / after_call once the chain
-                # framework invokes them, so no SSE handler needed here.
+                elif event.type == "tool_call_name":
+                    stream_id = tool_call_stream_id(event)
+                    if stream_id is None:
+                        stream_id = f"streamed:{len(streamed_tool_calls)}"
+                    state = streamed_tool_calls.setdefault(
+                        stream_id, {"name": "", "args": ""}
+                    )
+                    state["name"] += event.chunk
+                    if len(state["name"]) == len(event.chunk):
+                        await _send_sse(
+                            writer,
+                            "tool_call_start",
+                            {"id": stream_id, "name": state["name"]},
+                        )
+                elif event.type == "tool_call_args":
+                    stream_id = tool_call_stream_id(event)
+                    if stream_id is None:
+                        stream_id = f"streamed:{len(streamed_tool_calls)}"
+                    state = streamed_tool_calls.setdefault(
+                        stream_id, {"name": "", "args": ""}
+                    )
+                    state["args"] += event.chunk
+                    await _send_sse(
+                        writer,
+                        "tool_call_args_chunk",
+                        {"id": stream_id, "chunk": event.chunk},
+                    )
+                # tool_result events are surfaced via after_call once the
+                # chain framework invokes the local tool.
 
             await insert_response(db, conversation_id, response)
 

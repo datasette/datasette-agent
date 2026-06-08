@@ -368,6 +368,10 @@
   vertical-align: middle;
 }
 
+.agent-tool-call.streaming summary {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 0.3; }
   50% { opacity: 1; }

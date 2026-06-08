@@ -108,6 +108,7 @@ function appendMessage(role, content) {
 // Reasoning preview: keep the summary to a single-line rolling tail of the
 // most recent reasoning text — strips newlines and collapses whitespace.
 const REASONING_PREVIEW_CHARS = 80;
+const TOOL_ARGUMENT_PREVIEW_CHARS = 12000;
 
 function reasoningPreview(text) {
   const cleaned = text.replace(/\s+/g, " ").trim();
@@ -203,19 +204,76 @@ function getOrCreateToolGroup() {
   return group;
 }
 
-function appendToolCall(name, args) {
+function truncateMiddle(text, maxChars) {
+  if (!text || text.length <= maxChars) return text || "";
+  const marker = "\n\n... truncated ...\n\n";
+  const keep = Math.max(0, maxChars - marker.length);
+  const start = Math.ceil(keep / 2);
+  const end = Math.floor(keep / 2);
+  return text.slice(0, start) + marker + text.slice(text.length - end);
+}
+
+function formatToolArguments(args) {
+  const text = typeof args === "string" ? args : JSON.stringify(args, null, 2);
+  return truncateMiddle(text, TOOL_ARGUMENT_PREVIEW_CHARS);
+}
+
+function startToolCall(name, id, streaming = false) {
   const group = getOrCreateToolGroup();
   const details = document.createElement("details");
-  details.className = "agent-tool-call pending";
+  details.className = "agent-tool-call pending" + (streaming ? " streaming" : "");
   details.dataset.toolName = name;
+  if (id) details.dataset.toolCallId = id;
+  if (streaming) details.open = true;
   const summary = document.createElement("summary");
-  summary.textContent = "Tool: " + name;
+  summary.textContent = "Tool: " + name + (streaming ? " - receiving arguments..." : "");
   details.appendChild(summary);
   const pre = document.createElement("pre");
-  pre.textContent = JSON.stringify(args, null, 2);
   details.appendChild(pre);
   group.appendChild(details);
   scrollToBottomIfFollowing();
+  const state = {
+    details,
+    summary,
+    pre,
+    name,
+    rawArgs: "",
+    userToggled: false,
+    expectedOpen: details.open,
+  };
+  details.addEventListener("toggle", () => {
+    if (details.open !== state.expectedOpen) {
+      state.userToggled = true;
+    }
+  });
+  return state;
+}
+
+function appendToolCall(name, args, id = null) {
+  const state = startToolCall(name, id, false);
+  state.pre.textContent = formatToolArguments(args);
+  return state;
+}
+
+function appendToolCallArgsChunk(state, chunk) {
+  state.rawArgs += chunk;
+  state.pre.textContent = formatToolArguments(state.rawArgs);
+  state.summary.textContent =
+    "Tool: " + state.name + " - receiving arguments (" + state.rawArgs.length.toLocaleString() + " chars)";
+}
+
+function finishToolCall(state, name, args) {
+  if (!state) return;
+  state.name = name || state.name;
+  state.details.dataset.toolName = state.name;
+  state.details.classList.remove("streaming");
+  state.details.classList.add("pending");
+  state.pre.textContent = formatToolArguments(args);
+  state.summary.textContent = "Tool: " + state.name;
+  if (!state.userToggled) {
+    state.expectedOpen = false;
+    state.details.open = false;
+  }
 }
 
 function prettyPrintJson(text) {
@@ -238,11 +296,18 @@ function createSqlEditLink(url) {
   return editLink;
 }
 
-function appendToolResult(name, output) {
+function appendToolResult(name, output, id = null) {
   const messages = document.getElementById("messages");
 
   // Remove pending indicator from the matching tool call
-  const pendingCalls = messages.querySelectorAll('.agent-tool-call.pending[data-tool-name="' + name + '"]');
+  let pendingCalls = [];
+  if (id) {
+    pendingCalls = Array.from(messages.querySelectorAll(".agent-tool-call.pending"))
+      .filter(el => el.dataset.toolCallId === id);
+  }
+  if (pendingCalls.length === 0) {
+    pendingCalls = messages.querySelectorAll('.agent-tool-call.pending[data-tool-name="' + name + '"]');
+  }
   if (pendingCalls.length > 0) {
     pendingCalls[pendingCalls.length - 1].classList.remove("pending");
   }
@@ -300,6 +365,7 @@ async function sendMessage(conversationId, message) {
 
   let currentAssistant = null;
   let currentReasoning = null;
+  const streamingToolCalls = new Map();
   let hasToolActivity = false;
   let streamDone = false;
 
@@ -313,6 +379,7 @@ async function sendMessage(conversationId, message) {
   function stopPendingToolCalls() {
     document.querySelectorAll(".agent-tool-call.pending").forEach(el => {
       el.classList.remove("pending");
+      el.classList.remove("streaming");
     });
   }
 
@@ -385,6 +452,31 @@ async function sendMessage(conversationId, message) {
             setAssistantCopyText(currentAssistant.messageEl, currentAssistant.rawText);
             smd.parser_write(currentAssistant.parser, data.content);
             scrollToBottomIfFollowing();
+          } else if (eventType === "tool_call_start") {
+            closeReasoning();
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
+            hasToolActivity = true;
+            let state = data.id ? streamingToolCalls.get(data.id) : null;
+            if (state) {
+              state.name = data.name || state.name;
+              state.details.dataset.toolName = state.name;
+              state.summary.textContent = "Tool: " + state.name + " - receiving arguments...";
+            } else {
+              state = startToolCall(data.name || "tool", data.id, true);
+              if (data.id) streamingToolCalls.set(data.id, state);
+            }
+          } else if (eventType === "tool_call_args_chunk") {
+            hasToolActivity = true;
+            let state = data.id ? streamingToolCalls.get(data.id) : null;
+            if (!state) {
+              state = startToolCall("tool", data.id, true);
+              if (data.id) streamingToolCalls.set(data.id, state);
+            }
+            appendToolCallArgsChunk(state, data.chunk || "");
+            scrollToBottomIfFollowing();
           } else if (eventType === "tool_call") {
             closeReasoning();
             if (currentAssistant) {
@@ -392,10 +484,16 @@ async function sendMessage(conversationId, message) {
               currentAssistant = null;
             }
             hasToolActivity = true;
-            appendToolCall(data.name, data.arguments);
+            const state = data.id ? streamingToolCalls.get(data.id) : null;
+            if (state) {
+              finishToolCall(state, data.name, data.arguments);
+              streamingToolCalls.delete(data.id);
+            } else {
+              appendToolCall(data.name, data.arguments, data.id);
+            }
           } else if (eventType === "tool_result") {
             hasToolActivity = true;
-            appendToolResult(data.name, data.output);
+            appendToolResult(data.name, data.output, data.id);
           } else if (eventType === "done") {
             streamDone = true;
             closeReasoning();

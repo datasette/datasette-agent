@@ -734,6 +734,128 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tool_call_arguments_stream_before_tool_call(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from llm.parts import StreamEvent
+
+    from datasette_agent.agent import run_agent
+    from datasette_agent.schema import ensure_tables
+
+    ds = Datasette(
+        memory=True,
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    await ds.invoke_startup()
+    db = ds.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = "test-tool-args-stream"
+    now = "2026-05-19T00:00:00+00:00"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, now, now],
+    )
+
+    class FakeResponse:
+        async def astream_events(self):
+            yield StreamEvent(
+                type="tool_call_name",
+                chunk="app_create",
+                tool_call_id="call_1",
+            )
+            yield StreamEvent(
+                type="tool_call_args",
+                chunk='{"name":"Demo",',
+                tool_call_id="call_1",
+            )
+            yield StreamEvent(
+                type="tool_call_args",
+                chunk='"html":"<p>hello</p>"}',
+                tool_call_id="call_1",
+            )
+
+        def to_dict(self):
+            return {
+                "model": "fake",
+                "id": "fake-response",
+                "prompt": {},
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "name": "app_create",
+                                "arguments": {
+                                    "name": "Demo",
+                                    "html": "<p>hello</p>",
+                                },
+                                "tool_call_id": "call_1",
+                            }
+                        ],
+                    }
+                ],
+            }
+
+    class FakeChain:
+        def __init__(self, before_call, after_call):
+            self.before_call = before_call
+            self.after_call = after_call
+
+        async def responses(self):
+            yield FakeResponse()
+            tool_call = SimpleNamespace(
+                name="app_create",
+                arguments={"name": "Demo", "html": "<p>hello</p>"},
+                tool_call_id="call_1",
+            )
+            tool_result = SimpleNamespace(
+                name="app_create",
+                output='{"status":"ok"}',
+                tool_call_id="call_1",
+            )
+            await self.before_call(None, tool_call)
+            await self.after_call(None, tool_call, tool_result)
+
+    class FakeModel:
+        model_id = "fake"
+
+        def chain(self, *args, **kwargs):
+            return FakeChain(kwargs["before_call"], kwargs["after_call"])
+
+    class FakeLLM:
+        def __init__(self, datasette):
+            pass
+
+        async def model(self, purpose, actor):
+            return FakeModel()
+
+    class Writer:
+        def __init__(self):
+            self.chunks = []
+
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
+    writer = Writer()
+
+    await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
+
+    events = _parse_sse("".join(writer.chunks))
+    event_types = [event["event"] for event in events]
+    assert event_types.index("tool_call_start") < event_types.index("tool_call")
+    chunks = [
+        event["data"]["chunk"]
+        for event in events
+        if event["event"] == "tool_call_args_chunk"
+    ]
+    assert chunks == ['{"name":"Demo",', '"html":"<p>hello</p>"}']
+
+
+@pytest.mark.asyncio
 async def test_conversation_title_auto_set(datasette_instance, cookies):
     ds = datasette_instance
 
