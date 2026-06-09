@@ -1,9 +1,13 @@
+import inspect
+import json
 from dataclasses import dataclass
 from typing import Callable
 
 import llm as llm_library
 from datasette.utils import await_me_maybe
 from datasette.plugins import pm
+
+from .questions import ToolContext
 
 
 @dataclass
@@ -46,13 +50,106 @@ async def filter_tools_for_actor(datasette, actor, tools):
     return out
 
 
-def make_llm_tools(agent_tools, datasette, actor):
-    """Convert AgentTool instances to llm.Tool instances with context bound."""
+def tool_wants_context(agent_tool):
+    return "context" in inspect.signature(agent_tool.fn).parameters
+
+
+def make_tool_context(
+    agent_tool,
+    datasette,
+    actor,
+    *,
+    conversation_id,
+    arguments,
+    tool_call_id=None,
+    supports_questions=False,
+):
+    return ToolContext(
+        datasette=datasette,
+        actor=actor,
+        conversation_id=conversation_id,
+        tool_name=agent_tool.name,
+        arguments=arguments,
+        tool_call_id=tool_call_id,
+        supports_questions=supports_questions,
+    )
+
+
+async def execute_agent_tool(
+    agent_tool,
+    datasette,
+    actor,
+    *,
+    arguments,
+    conversation_id=None,
+    tool_call_id=None,
+    supports_questions=False,
+):
+    """Execute one AgentTool with the same semantics as the live chain
+    path: a fresh ToolContext per invocation for tools that declare
+    `context`, consumed-question bookkeeping on success, output coerced
+    to str. QuestionPending propagates to the caller.
+    """
+    kwargs = dict(arguments)
+    if tool_wants_context(agent_tool):
+        context = make_tool_context(
+            agent_tool,
+            datasette,
+            actor,
+            conversation_id=conversation_id,
+            arguments=dict(kwargs),
+            tool_call_id=tool_call_id,
+            supports_questions=supports_questions,
+        )
+        result = await agent_tool.fn(
+            datasette=datasette, actor=actor, context=context, **kwargs
+        )
+        # The call completed: its answered questions must not replay
+        # for a later identical call.
+        await context.mark_questions_consumed()
+    else:
+        result = await agent_tool.fn(datasette=datasette, actor=actor, **kwargs)
+    if result is not None and not isinstance(result, str):
+        result = json.dumps(result, default=repr)
+    return result
+
+
+def make_llm_tools(
+    agent_tools,
+    datasette,
+    actor,
+    *,
+    conversation_id=None,
+    supports_questions=False,
+):
+    """Convert AgentTool instances to llm.Tool instances with context bound.
+
+    Tools whose fn declares a `context` parameter receive a fresh
+    ToolContext per invocation - constructed inside the implementation
+    because tool calls can execute concurrently. The llm library passes
+    the ToolCall object via the reserved llm_tool_call parameter.
+    """
     llm_tools = []
     for agent_tool in agent_tools:
+        if tool_wants_context(agent_tool):
 
-        async def _impl(_agent_tool=agent_tool, **kwargs):
-            return await _agent_tool.fn(datasette=datasette, actor=actor, **kwargs)
+            async def _impl(_agent_tool=agent_tool, llm_tool_call=None, **kwargs):
+                return await execute_agent_tool(
+                    _agent_tool,
+                    datasette,
+                    actor,
+                    arguments=kwargs,
+                    conversation_id=conversation_id,
+                    tool_call_id=(
+                        llm_tool_call.tool_call_id if llm_tool_call else None
+                    ),
+                    supports_questions=supports_questions,
+                )
+
+        else:
+
+            async def _impl(_agent_tool=agent_tool, **kwargs):
+                return await _agent_tool.fn(datasette=datasette, actor=actor, **kwargs)
 
         llm_tools.append(
             llm_library.Tool(

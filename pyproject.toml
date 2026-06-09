@@ -16,6 +16,9 @@ dependencies = [
     "python-ulid",
 ]
 
+[tool.uv.sources]
+llm = { path = "/Users/simon/dev/llm", editable = true }
+
 [dependency-groups]
 dev = [
     "pytest",

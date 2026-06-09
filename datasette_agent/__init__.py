@@ -79,6 +79,10 @@ def register_routes():
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stream$",
             views.agent_stream,
         ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/question/(?P<question_id>[A-Za-z0-9]{26})$",
+            views.api_answer_question,
+        ),
     ]
 
 

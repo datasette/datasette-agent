@@ -738,3 +738,70 @@
   margin-bottom: 0.18em;
   padding-left: 1.25em;
 }
+
+/* ask_user() question forms */
+.agent-question {
+  align-self: flex-start;
+  max-width: 80%;
+  margin: 8px 0;
+  padding: 12px 16px;
+  background: #fff8e6;
+  border: 1px solid #e6c200;
+  border-radius: 8px;
+}
+
+.agent-question-prompt {
+  margin: 0 0 4px 0;
+  font-weight: 600;
+}
+
+.agent-question-tool {
+  margin: 0 0 8px 0;
+  font-size: 0.8em;
+  color: #666;
+}
+
+.agent-question-controls button {
+  padding: 6px 16px;
+  margin-right: 8px;
+  border: none;
+  border-radius: 4px;
+  background: #007bff;
+  color: white;
+  cursor: pointer;
+}
+
+.agent-question-controls button.agent-question-no {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.agent-question-controls label {
+  display: block;
+  margin-bottom: 6px;
+  cursor: pointer;
+}
+
+.agent-question-controls form button {
+  margin-top: 6px;
+}
+
+.agent-question-controls textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+}
+
+.agent-question.answered {
+  opacity: 0.6;
+}
+
+.agent-question.answered button,
+.agent-question.answered input,
+.agent-question.answered textarea {
+  cursor: default;
+}

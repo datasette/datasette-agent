@@ -143,6 +143,40 @@ return json.dumps({
 })
 ```
 
+### Asking the user questions from a tool
+
+A tool can pause mid-execution and ask the human user a question. Declare a `context` parameter on your handler and call `await context.ask_user(...)`:
+
+```python
+import json
+
+
+async def edit_files(datasette, actor, context, path):
+    ok = await context.ask_user(
+        "Is it OK to edit files in {}?".format(path)
+    )
+    if not ok:
+        return json.dumps({"cancelled": True})
+    mode = await context.ask_user(
+        "How should I apply this?", options=["dry-run", "apply"]
+    )
+    note = await context.ask_user("Any notes?", free_text=True)
+    # ... do the work ...
+    return json.dumps({"edited": path, "mode": mode, "note": note})
+```
+
+Three kinds of question are supported:
+
+- `await context.ask_user("Approve?")` - yes/no, returns a `bool`
+- `await context.ask_user("Which?", options=["a", "b"])` - multiple choice, returns the selected `str`
+- `await context.ask_user("Describe it", free_text=True)` - freeform, returns a `str`
+
+When `ask_user()` has no answer yet it suspends the agent turn: the question is rendered as a form in the chat UI, and persisted to the internal database so it survives a server restart - the form re-renders when the conversation page is reloaded. Once the user answers, the tool function is **re-executed from the top**; previously answered questions return their stored answers immediately and execution proceeds past the `ask_user()` call. Because of this replay model you should call `ask_user()` *before* performing side effects.
+
+The `context` object also exposes `context.actor`, `context.conversation_id`, `context.tool_name`, `context.arguments` and `context.tool_call_id`.
+
+In contexts with no human watching - background agents and `datasette agent chat` on the CLI - `ask_user()` raises `QuestionsNotSupported`, which surfaces to the model as a tool error so it can proceed without input. Tools that only declare `datasette` and `actor` are unaffected by all of this.
+
 ## Rendering custom HTML from tools
 
 Tool plugins can render rich HTML inline in the chat UI by returning a JSON object with an `_html` key. The HTML is rendered directly in the conversation. The remaining keys are returned to the LLM as the tool result, with any key whose name starts with `_` removed first.

@@ -141,7 +141,13 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                 )
                 tool_result.output = prepare_tool_output_for_model(output)
 
-            llm_tools = make_llm_tools(tools, datasette, actor)
+            # supports_questions stays False: nobody is watching a
+            # background agent to answer, so ask_user() tells the tool
+            # (via QuestionsNotSupported -> error result) to proceed
+            # without input rather than suspending forever.
+            llm_tools = make_llm_tools(
+                tools, datasette, actor, conversation_id=conversation_id
+            )
 
             chain_response = model.chain(
                 current_user_text,

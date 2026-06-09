@@ -6,9 +6,10 @@ from datasette.utils import tilde_decode
 from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
-from .agent import run_agent
+from .agent import resume_agent, run_agent
 from .export_markdown import format_conversation_markdown
 from .messages import flatten_for_render
+from .questions import question_row_to_dict
 from .schema import ensure_tables
 
 
@@ -98,6 +99,21 @@ async def agent_conversation(request, datasette):
         )
     ).first()
 
+    pending_question = (
+        await db.execute(
+            "SELECT * FROM agent_questions "
+            "WHERE conversation_id = ? AND status = 'pending' "
+            "ORDER BY created_at DESC LIMIT 1",
+            [conversation_id],
+        )
+    ).first()
+    pending_question_json = None
+    if pending_question is not None:
+        # < escaped so the JSON is safe inside a <script> block
+        pending_question_json = json.dumps(
+            question_row_to_dict(pending_question)
+        ).replace("<", "\\u003c")
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
@@ -108,6 +124,7 @@ async def agent_conversation(request, datasette):
                 "background_agent": (
                     dict(background_agent) if background_agent else None
                 ),
+                "pending_question_json": pending_question_json,
             },
             request=request,
         )
@@ -233,6 +250,89 @@ async def agent_stream(request, datasette):
             actor=request.actor,
             conversation_id=conversation_id,
             user_message=user_message,
+            writer=writer,
+        )
+
+    return AsgiStream(
+        stream_fn,
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Encoding": "none",
+        },
+        content_type="text/event-stream",
+    )
+
+
+async def api_answer_question(request, datasette):
+    """Record the user's answer to a pending ask_user() question, then
+    resume the suspended conversation, streaming SSE like agent_stream."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    question_id = request.url_vars["question_id"]
+    actor_id = _actor_id(request)
+
+    conversation = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if conversation is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if conversation["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    question = (
+        await db.execute(
+            "SELECT * FROM agent_questions WHERE id = ? AND conversation_id = ?",
+            [question_id, conversation_id],
+        )
+    ).first()
+    if question is None:
+        return Response.json({"error": "Question not found"}, status=404)
+    if question["status"] != "pending":
+        return Response.json({"error": "Question is not pending"}, status=400)
+
+    body = await request.post_body()
+    try:
+        answer = json.loads(body).get("answer")
+    except json.JSONDecodeError:
+        return Response.json({"error": "Invalid JSON body"}, status=400)
+
+    question_type = question["question_type"]
+    if question_type == "boolean":
+        if not isinstance(answer, bool):
+            return Response.json(
+                {"error": "Answer must be true or false"}, status=400
+            )
+    elif question_type == "choice":
+        options = json.loads(question["options_json"] or "[]")
+        if not isinstance(answer, str) or answer not in options:
+            return Response.json(
+                {"error": "Answer must be one of: {}".format(", ".join(options))},
+                status=400,
+            )
+    else:
+        if not isinstance(answer, str):
+            return Response.json({"error": "Answer must be a string"}, status=400)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute_write(
+        "UPDATE agent_questions SET status = 'answered', answer_json = ?, "
+        "answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
+        [json.dumps(answer), actor_id, now, question_id],
+    )
+
+    async def stream_fn(writer):
+        await resume_agent(
+            datasette=datasette,
+            actor=request.actor,
+            conversation_id=conversation_id,
             writer=writer,
         )
 
