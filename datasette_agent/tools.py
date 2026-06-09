@@ -85,10 +85,10 @@ async def execute_agent_tool(
     tool_call_id=None,
     supports_questions=False,
 ):
-    """Execute one AgentTool with the same semantics as the live chain
-    path: a fresh ToolContext per invocation for tools that declare
-    `context`, consumed-question bookkeeping on success, output coerced
-    to str. QuestionPending propagates to the caller.
+    """Execute one AgentTool: a fresh ToolContext per invocation for
+    tools that declare `context`, consumed-question bookkeeping on
+    success, output coerced to str. QuestionPending propagates to the
+    caller.
     """
     kwargs = dict(arguments)
     if tool_wants_context(agent_tool):

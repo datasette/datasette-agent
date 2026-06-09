@@ -17,11 +17,11 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-# llm-tool-call-parameter branch: ask_user() keys answer replay on the
-# tool_call_id passed via the new llm_tool_call parameter. Running
-# against an older llm makes every approval ask twice (live path keys
-# on args-hash, resume path on tool_call_id). Bump the llm>= floor to
-# the release that ships llm_tool_call, then remove this source entry.
+# Editable checkout: ask_user() relies on four unreleased llm features -
+# the llm_tool_call parameter, guaranteed tool_call_ids, llm.PauseChain
+# (QuestionPending subclasses it) and chain resume from histories ending
+# in unresolved tool calls. Bump the llm>= floor to the release that
+# ships all of these, then remove this source entry.
 llm = { path = "/Users/simon/dev/llm", editable = true }
 
 [dependency-groups]

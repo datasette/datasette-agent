@@ -19,20 +19,24 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
+import llm
 from ulid import ULID
 
 
-class QuestionPending(Exception):
+class QuestionPending(llm.PauseChain):
     """Raised by ask_user to suspend the current turn.
 
-    The llm library converts tool exceptions into error ToolResults but
-    preserves the original on tool_result.exception - the agent loop
-    detects this one there and suspends instead of continuing the chain.
+    As an llm.PauseChain subclass it propagates cleanly out of the
+    chain: concurrent sibling tool calls run to completion first, no
+    provider call is made with a placeholder result, and the agent
+    loop catches it to end the turn. Resuming the chain with the
+    persisted history re-executes the pending call, replaying answered
+    questions from the agent_questions table.
     """
 
     def __init__(self, question):
-        self.question = question
         super().__init__(question["prompt"])
+        self.question = question
 
 
 class QuestionsNotSupported(Exception):
@@ -65,62 +69,6 @@ def question_row_to_dict(row):
         "options": json.loads(row["options_json"]) if row["options_json"] else None,
         "html": row["html"],
     }
-
-
-def find_pending_tool_calls(message_rows):
-    """Given agent_messages rows (dicts with role + message_json, in id
-    order), return the tool calls from the LAST assistant message that have
-    no tool_result yet: [{name, arguments, tool_call_id}, ...].
-
-    A suspended turn always halts at its final assistant message - any
-    earlier tool calls already have their results persisted.
-    """
-    last_assistant_index = None
-    tool_calls = []
-    for i, row in enumerate(message_rows):
-        if row["role"] != "assistant":
-            continue
-        msg = json.loads(row["message_json"])
-        calls = [p for p in msg.get("parts", []) if p.get("type") == "tool_call"]
-        if calls:
-            last_assistant_index = i
-            tool_calls = calls
-    if last_assistant_index is None:
-        return []
-
-    results = []
-    for row in message_rows[last_assistant_index + 1 :]:
-        if row["role"] != "tool":
-            continue
-        msg = json.loads(row["message_json"])
-        results.extend(
-            p for p in msg.get("parts", []) if p.get("type") == "tool_result"
-        )
-
-    pending = []
-    unmatched_result_names = [
-        r.get("name") for r in results if not r.get("tool_call_id")
-    ]
-    result_ids = {r.get("tool_call_id") for r in results if r.get("tool_call_id")}
-    for call in tool_calls:
-        call_id = call.get("tool_call_id")
-        if call_id:
-            if call_id in result_ids:
-                continue
-        else:
-            # No id (some providers): match by name, consuming one
-            # result per call so duplicate calls pair up FIFO.
-            if call.get("name") in unmatched_result_names:
-                unmatched_result_names.remove(call.get("name"))
-                continue
-        pending.append(
-            {
-                "name": call.get("name"),
-                "arguments": call.get("arguments") or {},
-                "tool_call_id": call_id,
-            }
-        )
-    return pending
 
 
 class ToolContext:
