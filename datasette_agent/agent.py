@@ -213,9 +213,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
                 if event.type == "text":
                     await _send_sse(writer, "text_chunk", {"content": event.chunk})
                 elif event.type == "reasoning" and event.chunk:
-                    await _send_sse(
-                        writer, "reasoning_chunk", {"content": event.chunk}
-                    )
+                    await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
                 elif event.type == "tool_call_name":
                     stream_id = tool_call_stream_id(event)
                     if stream_id is None:
