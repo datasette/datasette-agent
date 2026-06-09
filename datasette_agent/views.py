@@ -307,9 +307,7 @@ async def api_answer_question(request, datasette):
     question_type = question["question_type"]
     if question_type == "boolean":
         if not isinstance(answer, bool):
-            return Response.json(
-                {"error": "Answer must be true or false"}, status=400
-            )
+            return Response.json({"error": "Answer must be true or false"}, status=400)
     elif question_type == "choice":
         options = json.loads(question["options_json"] or "[]")
         if not isinstance(answer, str) or answer not in options:

@@ -472,11 +472,7 @@ async def test_ask_user_suspends_turn(datasette_instance, cookies, ask_tool_plug
         cookies,
         conversation_id,
         json.dumps(
-            {
-                "tool_calls": [
-                    {"name": "approve_edit", "arguments": {"path": "/tmp"}}
-                ]
-            }
+            {"tool_calls": [{"name": "approve_edit", "arguments": {"path": "/tmp"}}]}
         ),
     )
     types = [e["event"] for e in events]
@@ -515,10 +511,7 @@ async def test_ask_user_suspends_turn(datasette_instance, cookies, ask_tool_plug
         json.loads(m["message_json"]) for m in messages if m["role"] == "assistant"
     ]
     tool_call_parts = [
-        p
-        for m in assistant_jsons
-        for p in m["parts"]
-        if p["type"] == "tool_call"
+        p for m in assistant_jsons for p in m["parts"] if p["type"] == "tool_call"
     ]
     assert any(p["name"] == "approve_edit" for p in tool_call_parts)
 
@@ -601,9 +594,7 @@ async def test_answer_resumes_tool_and_continues_chain(
     ds = datasette_instance
     conversation_id, question = await suspend_on_approve_edit(ds, cookies)
 
-    response = await answer_via_api(
-        ds, cookies, conversation_id, question["id"], True
-    )
+    response = await answer_via_api(ds, cookies, conversation_id, question["id"], True)
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
     events = _parse_sse(response.text)
@@ -623,9 +614,7 @@ async def test_answer_resumes_tool_and_continues_chain(
     db = ds.get_internal_database()
     # Question is consumed, answer recorded with who answered it
     q_row = (
-        await db.execute(
-            "SELECT * FROM agent_questions WHERE id = ?", [question["id"]]
-        )
+        await db.execute("SELECT * FROM agent_questions WHERE id = ?", [question["id"]])
     ).first()
     assert q_row["status"] == "consumed"
     assert json.loads(q_row["answer_json"]) is True
@@ -651,9 +640,7 @@ async def test_answer_resumes_tool_and_continues_chain(
 async def test_answer_false_reaches_tool(datasette_instance, cookies, ask_tool_plugin):
     ds = datasette_instance
     conversation_id, question = await suspend_on_approve_edit(ds, cookies)
-    response = await answer_via_api(
-        ds, cookies, conversation_id, question["id"], False
-    )
+    response = await answer_via_api(ds, cookies, conversation_id, question["id"], False)
     events = _parse_sse(response.text)
     tool_results = [e for e in events if e["event"] == "tool_result"]
     assert json.loads(tool_results[0]["data"]["output"])["approved"] is False
@@ -727,9 +714,7 @@ async def test_answer_validation(datasette_instance, cookies, ask_tool_plugin):
 
     # Get to the choice question
     response = await answer_via_api(ds, cookies, conversation_id, q0["id"], True)
-    q1 = [
-        e for e in _parse_sse(response.text) if e["event"] == "question"
-    ][0]["data"]
+    q1 = [e for e in _parse_sse(response.text) if e["event"] == "question"][0]["data"]
 
     # Choice question rejects answers not in options
     response = await answer_via_api(ds, cookies, conversation_id, q1["id"], "nope")
@@ -758,13 +743,9 @@ async def test_answer_permissions(datasette_instance, cookies, ask_tool_plugin):
     assert response.status_code == 404
 
     # Answering twice fails: the first answer resolves the question
-    response = await answer_via_api(
-        ds, cookies, conversation_id, question["id"], True
-    )
+    response = await answer_via_api(ds, cookies, conversation_id, question["id"], True)
     assert response.status_code == 200
-    response = await answer_via_api(
-        ds, cookies, conversation_id, question["id"], True
-    )
+    response = await answer_via_api(ds, cookies, conversation_id, question["id"], True)
     assert response.status_code == 400
 
 
@@ -825,9 +806,7 @@ async def test_ask_user_html_stored_and_raised(datasette_instance):
 
     context = await make_context(datasette_instance)
     with pytest.raises(QuestionPending) as exc_info:
-        await context.ask_user(
-            "Save this query?", html="<pre>select 1 + 1</pre>"
-        )
+        await context.ask_user("Save this query?", html="<pre>select 1 + 1</pre>")
     question = exc_info.value.question
     assert question["html"] == "<pre>select 1 + 1</pre>"
     rows = await get_questions(datasette_instance)
@@ -857,8 +836,6 @@ async def test_question_html_reaches_sse_and_page(
     question = [e for e in events if e["event"] == "question"][0]["data"]
     assert question["html"] == "<pre>rm -rf /tmp</pre>"
 
-    page = await ds.client.get(
-        "/-/agent/{}".format(conversation_id), cookies=cookies
-    )
+    page = await ds.client.get("/-/agent/{}".format(conversation_id), cookies=cookies)
     # The < is unicode-escaped inside the embedded JSON
     assert "\\u003cpre>rm -rf /tmp\\u003c/pre>" in page.text

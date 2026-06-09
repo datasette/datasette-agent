@@ -45,9 +45,8 @@ def _approval_html(database, name, title, sql, is_write, is_private):
         for label, value in rows
         if value
     )
-    return (
-        '<table class="agent-save-query-details">{}</table>'
-        "<pre>{}</pre>".format(details, html_module.escape(sql))
+    return '<table class="agent-save-query-details">{}</table>' "<pre>{}</pre>".format(
+        details, html_module.escape(sql)
     )
 
 
@@ -141,9 +140,7 @@ async def save_query(
     if store_response.status_code != 201:
         try:
             errors = store_response.json().get("errors") or []
-            message = "; ".join(errors) or "HTTP {}".format(
-                store_response.status_code
-            )
+            message = "; ".join(errors) or "HTTP {}".format(store_response.status_code)
         except (json.JSONDecodeError, ValueError):
             message = "HTTP {}".format(store_response.status_code)
         return _error("Could not save query: {}".format(message))

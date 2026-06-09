@@ -98,7 +98,9 @@ def find_pending_tool_calls(message_rows):
         )
 
     pending = []
-    unmatched_result_names = [r.get("name") for r in results if not r.get("tool_call_id")]
+    unmatched_result_names = [
+        r.get("name") for r in results if not r.get("tool_call_id")
+    ]
     result_ids = {r.get("tool_call_id") for r in results if r.get("tool_call_id")}
     for call in tool_calls:
         call_id = call.get("tool_call_id")
