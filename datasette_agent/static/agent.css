@@ -805,3 +805,17 @@
 .agent-question.answered textarea {
   cursor: default;
 }
+
+.agent-question-html {
+  margin-bottom: 8px;
+}
+
+.agent-question-html pre {
+  margin: 0;
+  padding: 8px;
+  background: #f6f6f6;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}

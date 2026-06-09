@@ -63,6 +63,7 @@ def question_row_to_dict(row):
         "question_type": row["question_type"],
         "prompt": row["prompt"],
         "options": json.loads(row["options_json"]) if row["options_json"] else None,
+        "html": row["html"],
     }
 
 
@@ -148,12 +149,16 @@ class ToolContext:
         self.call_key = call_key_for(tool_name, arguments, tool_call_id)
         self._ask_index = 0
 
-    async def ask_user(self, prompt, *, options=None, free_text=False):
+    async def ask_user(self, prompt, *, options=None, free_text=False, html=None):
         """Ask the user a question; returns their answer.
 
         - no kwargs: yes/no question, returns bool
         - options=[...]: multiple choice, returns the selected option
         - free_text=True: freeform question, returns str
+
+        html= is optional trusted HTML rendered above the question in
+        the UI - use it to show the user exactly what they are
+        approving (escape any interpolated content yourself).
 
         Raises QuestionPending if the answer is not yet available. The
         code before this call re-runs when the tool call is re-executed
@@ -213,12 +218,13 @@ class ToolContext:
             "question_type": question_type,
             "prompt": prompt,
             "options": options,
+            "html": html,
         }
         await db.execute_write(
             "INSERT INTO agent_questions "
             "(id, conversation_id, call_key, ask_index, tool_name, question_type, "
-            "prompt, options_json, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            "prompt, options_json, html, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
             [
                 question["id"],
                 self.conversation_id,
@@ -228,6 +234,7 @@ class ToolContext:
                 question_type,
                 prompt,
                 json.dumps(options) if options is not None else None,
+                html,
                 _utc_now(),
             ],
         )

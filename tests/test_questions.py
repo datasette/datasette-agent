@@ -369,6 +369,12 @@ def ask_tool_plugin():
             async def no_questions(datasette, actor, path):
                 return json.dumps({"looked_at": path})
 
+            async def approve_html(datasette, actor, context, path):
+                ok = await context.ask_user(
+                    "Run this command?", html="<pre>rm -rf {}</pre>".format(path)
+                )
+                return json.dumps({"approved": ok})
+
             async def multi_step(datasette, actor, context, path):
                 ok = await context.ask_user("Approve {}?".format(path))
                 if not ok:
@@ -399,6 +405,16 @@ def ask_tool_plugin():
                         "required": ["path"],
                     },
                     fn=no_questions,
+                ),
+                AgentTool(
+                    name="approve_html",
+                    description="Run a command (asks with html)",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                    fn=approve_html,
                 ),
                 AgentTool(
                     name="multi_step",
@@ -798,3 +814,51 @@ async def test_answered_question_disappears_from_page(
         "/-/agent/{}".format(conversation_id), cookies=cookies
     )
     assert 'id="pending-question-data"' not in response.text
+
+
+# ---- ask_user html= parameter ----
+
+
+@pytest.mark.asyncio
+async def test_ask_user_html_stored_and_raised(datasette_instance):
+    from datasette_agent.questions import QuestionPending
+
+    context = await make_context(datasette_instance)
+    with pytest.raises(QuestionPending) as exc_info:
+        await context.ask_user(
+            "Save this query?", html="<pre>select 1 + 1</pre>"
+        )
+    question = exc_info.value.question
+    assert question["html"] == "<pre>select 1 + 1</pre>"
+    rows = await get_questions(datasette_instance)
+    assert rows[0]["html"] == "<pre>select 1 + 1</pre>"
+
+    # Re-raise for the still-pending question keeps the html
+    again = await make_context(datasette_instance)
+    with pytest.raises(QuestionPending) as exc_info2:
+        await again.ask_user("Save this query?", html="<pre>select 1 + 1</pre>")
+    assert exc_info2.value.question["html"] == "<pre>select 1 + 1</pre>"
+
+
+@pytest.mark.asyncio
+async def test_question_html_reaches_sse_and_page(
+    datasette_instance, cookies, ask_tool_plugin
+):
+    ds = datasette_instance
+    conversation_id = await start_conversation(ds, cookies)
+    events = await send_message(
+        ds,
+        cookies,
+        conversation_id,
+        json.dumps(
+            {"tool_calls": [{"name": "approve_html", "arguments": {"path": "/tmp"}}]}
+        ),
+    )
+    question = [e for e in events if e["event"] == "question"][0]["data"]
+    assert question["html"] == "<pre>rm -rf /tmp</pre>"
+
+    page = await ds.client.get(
+        "/-/agent/{}".format(conversation_id), cookies=cookies
+    )
+    # The < is unicode-escaped inside the embedded JSON
+    assert "\\u003cpre>rm -rf /tmp\\u003c/pre>" in page.text

@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS agent_questions (
     question_type TEXT NOT NULL,
     prompt TEXT NOT NULL,
     options_json TEXT,
+    html TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     answer_json TEXT,
     answered_by TEXT,
@@ -85,3 +86,11 @@ CREATE TABLE IF NOT EXISTS agent_explorer_reports (
 
 async def ensure_tables(db):
     await db.execute_write_script(SCHEMA_SQL)
+    # Migration: agent_questions.html was added after the table first
+    # shipped; CREATE TABLE IF NOT EXISTS won't add it to existing DBs.
+    question_columns = [
+        row["name"]
+        for row in (await db.execute("PRAGMA table_info(agent_questions)")).rows
+    ]
+    if "html" not in question_columns:
+        await db.execute_write("ALTER TABLE agent_questions ADD COLUMN html TEXT")

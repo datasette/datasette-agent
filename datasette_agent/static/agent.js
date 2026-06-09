@@ -386,6 +386,13 @@ function renderQuestionForm(question) {
   container.className = "agent-question";
   container.dataset.questionId = question.id;
 
+  if (question.html) {
+    const htmlEl = document.createElement("div");
+    htmlEl.className = "agent-question-html";
+    htmlEl.insertAdjacentHTML("beforeend", question.html);
+    container.appendChild(htmlEl);
+  }
+
   const promptEl = document.createElement("p");
   promptEl.className = "agent-question-prompt";
   promptEl.textContent = question.prompt;
