@@ -12,17 +12,12 @@ requires-python = ">=3.10"
 dependencies = [
     "datasette>=1.0a30",
     "datasette-llm>=0.1a7",
-    "llm>=0.32a2",
+    # ask_user() requires 0.32a3: the llm_tool_call parameter, guaranteed
+    # tool_call_ids, llm.PauseChain and chain resume from histories
+    # ending in unresolved tool calls.
+    "llm>=0.32a3",
     "python-ulid",
 ]
-
-[tool.uv.sources]
-# Editable checkout: ask_user() relies on four unreleased llm features -
-# the llm_tool_call parameter, guaranteed tool_call_ids, llm.PauseChain
-# (QuestionPending subclasses it) and chain resume from histories ending
-# in unresolved tool calls. Bump the llm>= floor to the release that
-# ships all of these, then remove this source entry.
-llm = { path = "/Users/simon/dev/llm", editable = true }
 
 [dependency-groups]
 dev = [
