@@ -28,6 +28,13 @@ async def _build_system_prompt(datasette, actor):
         "list_databases_and_tables or describe_table if you already have the "
         "information you need from this prompt or the conversation history. "
         "Only describe a table when you need column details you haven't seen yet.\n\n"
+        "When calling a tool, pass the arguments directly as a flat JSON object matching "
+        "the tool's parameters. Always explicitly specify the 'database' parameter for any "
+        "database tools (e.g., sql_query, describe_table) based on the available databases "
+        "listed below. For sql_query, provide your SQL in the 'sql' parameter. "
+        "Do NOT wrap tool arguments inside a 'kwargs' key (e.g., "
+        "do not use {\"kwargs\": {\"param\": \"value\"}}).\n\n"
+
         "Your output will be rendered as markdown. "
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
