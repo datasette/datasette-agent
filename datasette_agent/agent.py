@@ -15,6 +15,7 @@ from .messages import (
     prepare_tool_output_for_model,
     strip_internal_keys,
 )
+from .questions import QuestionPending
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
@@ -83,36 +84,33 @@ async def _send_sse(writer, event, data):
     await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def run_agent(datasette, actor, conversation_id, user_message, writer):
+async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
+    """Run one model.chain() over the conversation's persisted history,
+    streaming SSE events and persisting messages.
+
+    Returns the pending question dict if a tool suspended on ask_user()
+    (QuestionPending is an llm.PauseChain, so it propagates here from
+    the chain), else None. The caller sends the final done/question
+    events. If the history ends in unresolved tool calls - a turn that
+    previously suspended - the chain re-executes them through the
+    normal tool machinery before calling the model.
+
+    prompt_text is passed through to chain() for adapters that read
+    prompt.prompt directly (e.g. echo); the persisted history passed as
+    messages= is authoritative and must already contain the
+    corresponding user row.
+    """
     db = datasette.get_internal_database()
-    await ensure_tables(db)
-
-    current_conversation_id.set(conversation_id)
-
-    # Drain any pending notifications and prepend their text to the user
-    # turn so the model sees them on this turn.
-    notifications = (
-        await db.execute(
-            "SELECT id, content FROM agent_pending_notifications "
-            "WHERE conversation_id = ? ORDER BY id",
-            [conversation_id],
-        )
-    ).rows
-    if notifications:
-        prefix_parts = [row["content"] for row in notifications]
-        for nid in [row["id"] for row in notifications]:
-            await db.execute_write(
-                "DELETE FROM agent_pending_notifications WHERE id = ?",
-                [nid],
-            )
-        user_message = "\n".join(prefix_parts) + "\n\n" + user_message
-
-    # Persist the user turn as a MessageDict.
-    await insert_message(db, conversation_id, make_user_message_dict(user_message))
 
     agent_tools = await get_agent_tools(datasette)
     agent_tools = await filter_tools_for_actor(datasette, actor, agent_tools)
-    llm_tools = make_llm_tools(agent_tools, datasette, actor)
+    llm_tools = make_llm_tools(
+        agent_tools,
+        datasette,
+        actor,
+        conversation_id=conversation_id,
+        supports_questions=True,
+    )
 
     system_prompt = await _build_system_prompt(datasette, actor)
     prior_messages = await load_messages(db, conversation_id)
@@ -131,6 +129,11 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
     # message order in agent_messages.
     pending_tool_messages = []
     streamed_tool_calls = {}
+
+    async def flush_tool_messages():
+        for tool_msg in pending_tool_messages:
+            await insert_message(db, conversation_id, tool_msg)
+        pending_tool_messages.clear()
 
     def tool_call_stream_id(obj):
         tool_call_id = getattr(obj, "tool_call_id", None)
@@ -191,17 +194,17 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         # Strip user-only keys and safely cap JSON before the model sees it.
         tool_result.output = prepare_tool_output_for_model(output)
 
-    try:
-        chain_response = model.chain(
-            user_message,
-            messages=prior_messages,
-            system=system_prompt,
-            tools=llm_tools,
-            stream=True,
-            before_call=before_call,
-            after_call=after_call,
-        )
+    chain_response = model.chain(
+        prompt_text,
+        messages=prior_messages,
+        system=system_prompt,
+        tools=llm_tools,
+        stream=True,
+        before_call=before_call,
+        after_call=after_call,
+    )
 
+    try:
         async for response in chain_response.responses():
             # Flush tool results from the PRIOR response before persisting
             # this one. after_call fires between chain.responses() yields,
@@ -211,9 +214,7 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             # assistant row — otherwise the next turn rebuilds messages= in
             # an order OpenAI rejects ("tool_calls must be followed by
             # tool messages").
-            for tool_msg in pending_tool_messages:
-                await insert_message(db, conversation_id, tool_msg)
-            pending_tool_messages.clear()
+            await flush_tool_messages()
 
             async for event in response.astream_events():
                 if event.type == "text":
@@ -252,11 +253,62 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
 
             await insert_response(db, conversation_id, response)
 
-        # Final flush: tool results from the last response in the chain
-        # (chain_limit hit or terminal tool call) would otherwise be lost.
-        for tool_msg in pending_tool_messages:
-            await insert_message(db, conversation_id, tool_msg)
-        pending_tool_messages.clear()
+    except QuestionPending as ex:
+        # A tool is waiting on ask_user(). PauseChain semantics
+        # guarantee sibling tool calls completed (their results are
+        # buffered via after_call) and no provider call was made with
+        # the unfinished turn. No tool_result row is persisted for the
+        # paused call - that missing row is what marks it pending, so
+        # resuming the chain re-executes it.
+        await flush_tool_messages()
+        return ex.question
+
+    # Final flush: tool results from the last response in the chain
+    # (chain_limit hit or terminal tool call) would otherwise be lost.
+    await flush_tool_messages()
+
+    return None
+
+
+async def _finish_turn(writer, question):
+    if question is not None:
+        await _send_sse(writer, "question", question)
+        await _send_sse(writer, "done", {"question_pending": True})
+    else:
+        await _send_sse(writer, "done", {})
+
+
+async def run_agent(datasette, actor, conversation_id, user_message, writer):
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    current_conversation_id.set(conversation_id)
+
+    # Drain any pending notifications and prepend their text to the user
+    # turn so the model sees them on this turn.
+    notifications = (
+        await db.execute(
+            "SELECT id, content FROM agent_pending_notifications "
+            "WHERE conversation_id = ? ORDER BY id",
+            [conversation_id],
+        )
+    ).rows
+    if notifications:
+        prefix_parts = [row["content"] for row in notifications]
+        for nid in [row["id"] for row in notifications]:
+            await db.execute_write(
+                "DELETE FROM agent_pending_notifications WHERE id = ?",
+                [nid],
+            )
+        user_message = "\n".join(prefix_parts) + "\n\n" + user_message
+
+    try:
+        # Persist the user turn as a MessageDict.
+        await insert_message(db, conversation_id, make_user_message_dict(user_message))
+
+        question = await _run_chain(
+            datasette, actor, conversation_id, writer, user_message
+        )
 
         # Auto-set title from the first user message if not yet set.
         row = (
@@ -274,8 +326,31 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
                 [title, conversation_id],
             )
 
-        await _send_sse(writer, "done", {})
+        await _finish_turn(writer, question)
 
+    except Exception as e:
+        await _send_sse(writer, "error", {"message": str(e)})
+
+
+async def resume_agent(datasette, actor, conversation_id, writer):
+    """Resume a conversation suspended on ask_user().
+
+    The persisted history ends in an assistant message with unresolved
+    tool calls, so the llm chain re-executes them through the normal
+    tool machinery before calling the model; answered questions replay
+    from the agent_questions table instead of suspending again. May
+    suspend again if a tool asks a further question.
+    """
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+
+    current_conversation_id.set(conversation_id)
+
+    try:
+        question = await _run_chain(
+            datasette, actor, conversation_id, writer, prompt_text=None
+        )
+        await _finish_turn(writer, question)
     except Exception as e:
         await _send_sse(writer, "error", {"message": str(e)})
 

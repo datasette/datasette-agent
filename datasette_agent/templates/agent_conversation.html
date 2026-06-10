@@ -84,6 +84,10 @@
   {% endif %}
 </div>
 
+{% if pending_question_json %}
+<script type="application/json" id="pending-question-data">{{ pending_question_json | safe }}</script>
+{% endif %}
+
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
 <script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
 {% if not background_agent %}

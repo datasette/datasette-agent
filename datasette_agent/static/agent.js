@@ -353,15 +353,128 @@ function appendToolResult(name, output, id = null) {
   scrollToBottomIfFollowing();
 }
 
-async function sendMessage(conversationId, message) {
+// True while an ask_user() question is awaiting an answer — keeps the
+// chat input disabled across the suspended turn.
+let questionPending = false;
+
+function setInputEnabled(enabled) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
-  sendBtn.disabled = true;
-  input.disabled = true;
+  if (sendBtn) sendBtn.disabled = !enabled;
+  if (input) input.disabled = !enabled;
+  if (enabled && input) input.focus();
+}
 
-  // Show user message
+async function sendMessage(conversationId, message) {
   appendMessage("user", message);
-  input.value = "";
+  const input = document.getElementById("message-input");
+  if (input) input.value = "";
+  await streamAgentEvents("/-/agent/" + conversationId + "/stream", {message});
+}
+
+async function answerQuestion(conversationId, questionId, answer) {
+  questionPending = false;
+  await streamAgentEvents(
+    "/-/agent/" + conversationId + "/question/" + questionId,
+    {answer}
+  );
+}
+
+function renderQuestionForm(question) {
+  const messages = document.getElementById("messages");
+  const container = document.createElement("div");
+  container.className = "agent-question";
+  container.dataset.questionId = question.id;
+
+  if (question.html) {
+    const htmlEl = document.createElement("div");
+    htmlEl.className = "agent-question-html";
+    htmlEl.insertAdjacentHTML("beforeend", question.html);
+    container.appendChild(htmlEl);
+  }
+
+  const promptEl = document.createElement("p");
+  promptEl.className = "agent-question-prompt";
+  promptEl.textContent = question.prompt;
+  container.appendChild(promptEl);
+
+  const toolEl = document.createElement("p");
+  toolEl.className = "agent-question-tool";
+  toolEl.textContent = "Asked by tool: " + question.tool_name;
+  container.appendChild(toolEl);
+
+  const controls = document.createElement("div");
+  controls.className = "agent-question-controls";
+  container.appendChild(controls);
+
+  function submit(answer) {
+    container.classList.add("answered");
+    container.querySelectorAll("button, input, textarea").forEach(el => {
+      el.disabled = true;
+    });
+    const conversationId =
+      document.querySelector(".agent-chat").dataset.conversationId;
+    answerQuestion(conversationId, question.id, answer);
+  }
+
+  if (question.question_type === "boolean") {
+    const yes = document.createElement("button");
+    yes.type = "button";
+    yes.textContent = "Yes";
+    yes.addEventListener("click", () => submit(true));
+    const no = document.createElement("button");
+    no.type = "button";
+    no.className = "agent-question-no";
+    no.textContent = "No";
+    no.addEventListener("click", () => submit(false));
+    controls.appendChild(yes);
+    controls.appendChild(no);
+  } else if (question.question_type === "choice") {
+    const form = document.createElement("form");
+    (question.options || []).forEach((option, i) => {
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "agent-question-" + question.id;
+      radio.value = option;
+      if (i === 0) radio.checked = true;
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(" " + option));
+      form.appendChild(label);
+    });
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "submit";
+    submitBtn.textContent = "Answer";
+    form.appendChild(submitBtn);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const selected = form.querySelector("input:checked");
+      if (selected) submit(selected.value);
+    });
+    controls.appendChild(form);
+  } else {
+    const form = document.createElement("form");
+    const textarea = document.createElement("textarea");
+    textarea.rows = 3;
+    form.appendChild(textarea);
+    const submitBtn = document.createElement("button");
+    submitBtn.type = "submit";
+    submitBtn.textContent = "Answer";
+    form.appendChild(submitBtn);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submit(textarea.value);
+    });
+    controls.appendChild(form);
+    textarea.focus();
+  }
+
+  messages.appendChild(container);
+  scrollToBottom();
+}
+
+async function streamAgentEvents(url, payload) {
+  setInputEnabled(false);
 
   let currentAssistant = null;
   let currentReasoning = null;
@@ -384,10 +497,10 @@ async function sendMessage(conversationId, message) {
   }
 
   try {
-    const response = await fetch("/-/agent/" + conversationId + "/stream", {
+    const response = await fetch(url, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message}),
+      body: JSON.stringify(payload),
     });
 
     const reader = response.body.getReader();
@@ -494,6 +607,15 @@ async function sendMessage(conversationId, message) {
           } else if (eventType === "tool_result") {
             hasToolActivity = true;
             appendToolResult(data.name, data.output, data.id);
+          } else if (eventType === "question") {
+            closeReasoning();
+            stopPendingToolCalls();
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
+            questionPending = true;
+            renderQuestionForm(data);
           } else if (eventType === "done") {
             streamDone = true;
             closeReasoning();
@@ -539,9 +661,9 @@ async function sendMessage(conversationId, message) {
     }
     appendMessage("assistant", "Connection error: " + err.message);
   } finally {
-    sendBtn.disabled = false;
-    input.disabled = false;
-    input.focus();
+    if (!questionPending) {
+      setInputEnabled(true);
+    }
   }
 }
 
@@ -577,6 +699,21 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
     summary.textContent = "Thinking: " + reasoningPreview(raw);
   }
 });
+
+// Render a pending ask_user() question left over from a suspended turn
+// (page reload, or the server restarted while the question was open).
+(function initPendingQuestion() {
+  const dataEl = document.getElementById("pending-question-data");
+  if (!dataEl) return;
+  try {
+    const question = JSON.parse(dataEl.textContent);
+    questionPending = true;
+    setInputEnabled(false);
+    renderQuestionForm(question);
+  } catch (err) {
+    console.error("Failed to render pending question:", err);
+  }
+})();
 
 // Wire up form
 document.getElementById("chat-form").addEventListener("submit", (e) => {

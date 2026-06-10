@@ -31,6 +31,12 @@ The "Explore with AI agent" entries that appear in the database and table action
 
 Visit `/-/agent/background` to launch background agents directly. Each one is given a goal and runs toward it without further input. The listing includes a Stop button for cancelling agents that are still running.
 
+### Saving queries
+
+The agent has a built-in `save_query` tool that saves SQL it has written as a [Datasette stored query](https://docs.datasette.io/en/latest/sql_queries.html). The query can be read-only or write SQL - Datasette analyzes it to decide which, and named `:parameters` become form fields on the saved query page.
+
+Saving always requires human approval: the agent shows you the full SQL plus the proposed name, database and visibility, and nothing is stored until you click Yes. Validation and persistence run through Datasette's own `/-/queries/analyze` and `/-/queries/store` endpoints as the requesting actor, so the actor needs `execute-sql` and `store-query` on the target database (plus the relevant row permissions for write queries) - the same rules as the query creation web UI. Saved queries default to private.
+
 ### Permissions
 
 This plugin registers three independent permissions:
@@ -142,6 +148,42 @@ return json.dumps({
     "summary": "Widget rendered successfully",
 })
 ```
+
+### Asking the user questions from a tool
+
+A tool can pause mid-execution and ask the human user a question. Declare a `context` parameter on your handler and call `await context.ask_user(...)`:
+
+```python
+import json
+
+
+async def edit_files(datasette, actor, context, path):
+    ok = await context.ask_user(
+        "Is it OK to edit files in {}?".format(path)
+    )
+    if not ok:
+        return json.dumps({"cancelled": True})
+    mode = await context.ask_user(
+        "How should I apply this?", options=["dry-run", "apply"]
+    )
+    note = await context.ask_user("Any notes?", free_text=True)
+    # ... do the work ...
+    return json.dumps({"edited": path, "mode": mode, "note": note})
+```
+
+Three kinds of question are supported:
+
+- `await context.ask_user("Approve?")` - yes/no, returns a `bool`
+- `await context.ask_user("Which?", options=["a", "b"])` - multiple choice, returns the selected `str`
+- `await context.ask_user("Describe it", free_text=True)` - freeform, returns a `str`
+
+Pass `html=` to display trusted HTML above the question - use this to show the user exactly what they are approving, for example the full SQL of a query inside a `<pre>` tag. Escape any interpolated content yourself (e.g. with `html.escape()`); the string is rendered as-is in the chat UI.
+
+When `ask_user()` has no answer yet it suspends the agent turn: the question is rendered as a form in the chat UI, and persisted to the internal database so it survives a server restart - the form re-renders when the conversation page is reloaded. Once the user answers, the tool function is **re-executed from the top**; previously answered questions return their stored answers immediately and execution proceeds past the `ask_user()` call. Because of this replay model you should call `ask_user()` *before* performing side effects.
+
+The `context` object also exposes `context.actor`, `context.conversation_id`, `context.tool_name`, `context.arguments` and `context.tool_call_id`.
+
+In contexts with no human watching - background agents and `datasette agent chat` on the CLI - `ask_user()` raises `QuestionsNotSupported`, which surfaces to the model as a tool error so it can proceed without input. Tools that only declare `datasette` and `actor` are unaffected by all of this.
 
 ## Rendering custom HTML from tools
 

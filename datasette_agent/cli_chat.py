@@ -34,7 +34,11 @@ async def run_chat(datasette, initial_prompt=None):
 
     agent_tools = await get_agent_tools(datasette)
     agent_tools = await filter_tools_for_actor(datasette, actor, agent_tools)
-    llm_tools = make_llm_tools(agent_tools, datasette, actor)
+    # supports_questions stays False: the CLI has no answer UI, so
+    # ask_user() raises QuestionsNotSupported instead of suspending.
+    llm_tools = make_llm_tools(
+        agent_tools, datasette, actor, conversation_id=conversation_id
+    )
 
     llm_instance = LLM(datasette)
     model = await llm_instance.model(purpose="agent", actor=actor)

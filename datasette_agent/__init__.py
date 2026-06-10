@@ -79,6 +79,10 @@ def register_routes():
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stream$",
             views.agent_stream,
         ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/question/(?P<question_id>[A-Za-z0-9]{26})$",
+            views.api_answer_question,
+        ),
     ]
 
 
@@ -489,6 +493,7 @@ def register_commands(cli):
 @hookimpl
 def register_agent_tools(datasette):
     from .background_tools import get_background_tools
+    from .query_tools import get_query_tools
     from .sql_tools import get_default_tools
 
-    return get_default_tools() + get_background_tools()
+    return get_default_tools() + get_query_tools() + get_background_tools()
