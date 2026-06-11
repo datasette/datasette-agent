@@ -240,6 +240,7 @@ def _agent_jump_section_script(datasette):
                     font: inherit;
                     line-height: 1.4;
                     min-height: 4.75rem;
+                    overflow-x: hidden;
                     padding: 0.625rem 0.75rem;
                     resize: vertical;
                     width: 100%;
