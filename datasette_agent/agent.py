@@ -34,8 +34,7 @@ async def _build_system_prompt(datasette, actor):
         "database tools (e.g., sql_query, describe_table) based on the available databases "
         "listed below. For sql_query, provide your SQL in the 'sql' parameter. "
         "Do NOT wrap tool arguments inside a 'kwargs' key (e.g., "
-        "do not use {\"kwargs\": {\"param\": \"value\"}}).\n\n"
-
+        'do not use {"kwargs": {"param": "value"}}).\n\n'
         "Your output will be rendered as markdown. "
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
