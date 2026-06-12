@@ -194,22 +194,30 @@ async def test_jump_section_script_added_for_users_with_permission(
 
     response = await datasette_instance.client.get("/", cookies=cookies)
     assert response.status_code == 200
-    assert "makeJumpSections" in response.text
-    assert f'const pluginVersion = "{__version__}";' in response.text
-    assert "version: pluginVersion" in response.text
-    assert "datasette-agent-jump-start" in response.text
-    assert "datasette-agent-jump-hint" in response.text
-    assert "Press Enter to start. Shift+Enter adds a new line." in response.text
-    assert 'event.key === "Enter" && !event.shiftKey' in response.text
-    assert "/-/agent/api/conversations" in response.text
+    assert '"/-/static-plugins/datasette-agent/agent-jump.js"' in response.text
+    assert "window.datasetteAgentJumpConfig = " in response.text
+    assert f'"pluginVersion": "{__version__}"' in response.text
+    assert '"createConversationUrl": "/-/agent/api/conversations"' in response.text
+    assert '"conversationBaseUrl": "/-/agent/"' in response.text
+
+    script_response = await datasette_instance.client.get(
+        "/-/static-plugins/datasette-agent/agent-jump.js"
+    )
+    assert script_response.status_code == 200
+    assert "makeJumpSections" in script_response.text
+    assert "version: pluginVersion" in script_response.text
+    assert "datasette-agent-jump-start" in script_response.text
+    assert "datasette-agent-jump-hint" in script_response.text
+    assert "Press Enter to start. Shift+Enter adds a new line." in script_response.text
+    assert 'event.key === "Enter" && !event.shiftKey' in script_response.text
 
 
 @pytest.mark.asyncio
 async def test_jump_section_script_hidden_without_permission(datasette_instance):
     response = await datasette_instance.client.get("/")
     assert response.status_code == 200
-    assert "makeJumpSections" not in response.text
-    assert "datasette-agent-jump-start" not in response.text
+    assert "agent-jump.js" not in response.text
+    assert "datasetteAgentJumpConfig" not in response.text
 
 
 @pytest.mark.asyncio
