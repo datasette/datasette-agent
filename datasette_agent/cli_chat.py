@@ -70,7 +70,6 @@ async def run_chat(datasette, initial_prompt=None):
     conversation = model.conversation()
 
     first = True
-    first_message = True
     one_shot = initial_prompt is not None
     while True:
         if first and initial_prompt:
@@ -86,18 +85,13 @@ async def run_chat(datasette, initial_prompt=None):
 
         await insert_message(db, conversation_id, make_user_message_dict(user_message))
 
-        chain_kwargs = {}
-        if first_message:
-            chain_kwargs["system"] = system_prompt
-            first_message = False
-
         chain_response = conversation.chain(
             user_message,
+            system=system_prompt,
             stream=True,
             tools=llm_tools,
             before_call=before_call,
             after_call=after_call,
-            **chain_kwargs,
         )
 
         print()
