@@ -10,11 +10,8 @@ classifiers=[
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "datasette>=1.0a30",
+    "datasette>=1.0a33",
     "datasette-llm>=0.1a7",
-    # ask_user() requires 0.32a3: the llm_tool_call parameter, guaranteed
-    # tool_call_ids, llm.PauseChain and chain resume from histories
-    # ending in unresolved tool calls.
     "llm>=0.32a3",
     "python-ulid",
 ]

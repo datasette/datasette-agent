@@ -66,8 +66,63 @@ def _get_sql_tool():
     raise AssertionError("sql_query tool not found")
 
 
+def _get_execute_write_tool():
+    from datasette_agent.sql_tools import get_default_tools
+
+    for tool in get_default_tools():
+        if tool.name == "execute_write_sql":
+            return tool
+    raise AssertionError("execute_write_sql tool not found")
+
+
 def _expected_sql_edit_url(ds, database, sql):
     return ds.urls.database(database) + "/-/query?" + urlencode({"sql": sql})
+
+
+async def _make_tool_context(datasette, arguments, tool_call_id="call_write_1"):
+    from datasette_agent.questions import ToolContext
+    from datasette_agent.schema import ensure_tables
+
+    await datasette.invoke_startup()
+    await ensure_tables(datasette.get_internal_database())
+    return ToolContext(
+        datasette=datasette,
+        actor={"id": "user"},
+        conversation_id="01TESTWRITE00000000000000",
+        tool_name="execute_write_sql",
+        arguments=arguments,
+        tool_call_id=tool_call_id,
+        supports_questions=True,
+    )
+
+
+async def _answer_question(datasette, question_id, answer):
+    await datasette.get_internal_database().execute_write(
+        "UPDATE agent_questions SET status = 'answered', answer_json = ? WHERE id = ?",
+        [json.dumps(answer), question_id],
+    )
+
+
+def _write_datasette(tmp_path, permissions=None, memory_name="execute_write_tool"):
+    permissions = permissions or {
+        "datasette-agent": {"id": "user"},
+        "view-database": {"id": "user"},
+        "execute-write-sql": {"id": "user"},
+        "insert-row": {"id": "user"},
+        "update-row": {"id": "user"},
+        "delete-row": {"id": "user"},
+        "view-table": {"id": "user"},
+        "drop-table": {"id": "user"},
+    }
+    ds = Datasette(
+        memory=True,
+        default_deny=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={"permissions": permissions},
+        internal=str(tmp_path / "internal.db"),
+    )
+    ds.add_memory_database(memory_name, name="data")
+    return ds
 
 
 @pytest.mark.asyncio
@@ -351,3 +406,291 @@ async def test_list_databases_hides_dbs_without_execute_sql(tmp_path):
     names = {d["database_name"] for d in result["databases"]}
     assert "public" in names
     assert "private" not in names
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_tool_is_registered():
+    tool = _get_execute_write_tool()
+    assert tool.name == "execute_write_sql"
+    props = tool.input_schema["properties"]
+    assert props["statements"]["type"] == "array"
+    assert set(tool.input_schema["required"]) == {"database", "statements"}
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_approves_and_executes_batch(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_batch")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)")
+    await db.execute_write(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)"
+    )
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [
+            {
+                "sql": "insert into authors (id, name) values (:id, :name)",
+                "params": {"id": 1, "name": "Ada"},
+            },
+            {
+                "sql": (
+                    "insert into books (id, title, author_id) "
+                    "values (:id, :title, :author_id)"
+                ),
+                "params": {"id": 1, "title": "Notes", "author_id": 1},
+            },
+        ],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    question = exc_info.value.question
+    assert question["question_type"] == "boolean"
+    assert "2 write SQL statements" in question["prompt"]
+    assert "insert into authors" in question["html"]
+    assert "insert into books" in question["html"]
+    assert "insert-row" in question["html"]
+
+    await _answer_question(ds, question["id"], True)
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is True
+    assert data["statements_executed"] == 2
+    assert [
+        row["name"] for row in (await db.execute("select * from authors")).rows
+    ] == ["Ada"]
+    assert [row["title"] for row in (await db.execute("select * from books")).rows] == [
+        "Notes"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_declined_does_not_execute(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_declined")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": {"id": 1, "body": "Nope"},
+            }
+        ],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    await _answer_question(ds, exc_info.value.question["id"], False)
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert data["cancelled"] is True
+    assert (await db.execute("select count(*) as count from notes")).first()[
+        "count"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_permission_denied_skips_question(tmp_path):
+    ds = _write_datasette(
+        tmp_path,
+        permissions={
+            "datasette-agent": {"id": "user"},
+            "view-database": {"id": "user"},
+            "execute-write-sql": {"id": "user"},
+        },
+        memory_name="execute_write_sql_denied",
+    )
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "insert into notes (body) values ('Denied')"}],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert "insert-row" in data["error"]
+    question_count = (
+        await ds.get_internal_database().execute(
+            "SELECT count(*) AS count FROM agent_questions"
+        )
+    ).first()["count"]
+    assert question_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_read_only_sql_skips_question(tmp_path):
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_read_only")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "select 1"}],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert "read-only" in data["error"]
+    question_count = (
+        await ds.get_internal_database().execute(
+            "SELECT count(*) AS count FROM agent_questions"
+        )
+    ).first()["count"]
+    assert question_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_drop_table_warning_includes_row_count(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_drop")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE victims (id INTEGER PRIMARY KEY)")
+    await db.execute_write("INSERT INTO victims (id) VALUES (1), (2)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "drop table victims"}],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    html = exc_info.value.question["html"]
+    assert "agent-write-sql-danger" in html
+    assert "DANGER" in html
+    assert "victims" in html
+    assert "2 rows" in html
+    assert "drop-table" in html
+
+    await _answer_question(ds, exc_info.value.question["id"], False)
+    context = await _make_tool_context(ds, arguments)
+    await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+    assert await db.table_exists("victims")
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_stops_after_first_endpoint_failure(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_partial")
+    db = ds.get_database("data")
+    await db.execute_write(
+        "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT UNIQUE)"
+    )
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": {"id": 1, "body": "same"},
+            },
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": {"id": 2, "body": "same"},
+            },
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": {"id": 3, "body": "later"},
+            },
+        ],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+    await _answer_question(ds, exc_info.value.question["id"], True)
+
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert data["failed_statement"] == 2
+    assert data["executed_count"] == 1
+    assert data["partial"] is True
+    assert "UNIQUE constraint failed" in data["error"]
+    rows = (await db.execute("select id, body from notes order by id")).dicts()
+    assert rows == [{"id": 1, "body": "same"}]
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_posts_to_execute_write_with_actor(
+    tmp_path, monkeypatch
+):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_actor")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "insert into notes (body) values ('Captured')"}],
+    }
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True, "message": "Query executed", "rowcount": 1}
+
+    async def fake_post(path, **kwargs):
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return FakeResponse()
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    await _answer_question(ds, exc_info.value.question["id"], True)
+    monkeypatch.setattr(ds.client, "post", fake_post)
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is True
+    assert captured["path"] == "/data/-/execute-write"
+    assert captured["kwargs"]["actor"] == {"id": "user"}
+    assert captured["kwargs"]["json"] == {
+        "sql": "insert into notes (body) values ('Captured')",
+        "params": {},
+    }
