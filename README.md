@@ -37,6 +37,12 @@ The agent has a built-in `save_query` tool that saves SQL it has written as a [D
 
 Saving always requires human approval: the agent shows you the full SQL plus the proposed name, database and visibility, and nothing is stored until you click Yes. Validation and persistence run through Datasette's own `/-/queries/analyze` and `/-/queries/store` endpoints as the requesting actor, so the actor needs `execute-sql` and `store-query` on the target database (plus the relevant row permissions for write queries) - the same rules as the query creation web UI. Saved queries default to private.
 
+### Executing write SQL
+
+The agent also has a built-in `execute_write_sql` tool that can run one or more ordered write SQL statements against a mutable database. It analyzes each statement first and asks the user for explicit approval in chat before anything runs.
+
+The approval prompt shows the SQL, parameters, required permissions and destructive-operation warnings. Execution runs through Datasette's own `/-/execute-write` endpoint as the requesting actor, so the actor needs `execute-write-sql` on the target database plus the Datasette write permissions for the operations being performed. Statements run in order; if one fails, later statements are skipped and earlier successes are not rolled back. Use `sql_query` for read-only SQL.
+
 ### Permissions
 
 This plugin registers three independent permissions:
@@ -252,7 +258,7 @@ To see all registered agent tools, grouped by plugin:
 datasette agent tools
 ```
 
-Output:
+Output includes:
 
 ```
 agent:
@@ -262,6 +268,8 @@ agent:
     Get column names, types, and foreign keys for a table
   sql_query
     Execute a read-only SQL query against a database
+  execute_write_sql
+    Execute ordered write SQL statements against a database
 ```
 
 Add `--json` for machine-readable output:
