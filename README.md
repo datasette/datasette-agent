@@ -185,11 +185,13 @@ Three kinds of question are supported:
 
 Pass `html=` to display trusted HTML above the question - use this to show the user exactly what they are approving, for example the full SQL of a query inside a `<pre>` tag. Escape any interpolated content yourself (e.g. with `html.escape()`); the string is rendered as-is in the chat UI.
 
+Pass `text=` to provide a plain-text version for terminal contexts such as `datasette agent chat`. If `text=` is provided without `html=`, the web chat displays the text too, HTML-escaped inside a `<pre>` block. The CLI displays `text=` when available; if only `html=` was provided, it prints that HTML directly.
+
 When `ask_user()` has no answer yet it suspends the agent turn: the question is rendered as a form in the chat UI, and persisted to the internal database so it survives a server restart - the form re-renders when the conversation page is reloaded. Once the user answers, the tool function is **re-executed from the top**; previously answered questions return their stored answers immediately and execution proceeds past the `ask_user()` call. Because of this replay model you should call `ask_user()` *before* performing side effects.
 
 The `context` object also exposes `context.actor`, `context.conversation_id`, `context.tool_name`, `context.arguments` and `context.tool_call_id`.
 
-In contexts with no human watching - background agents and `datasette agent chat` on the CLI - `ask_user()` raises `QuestionsNotSupported`, which surfaces to the model as a tool error so it can proceed without input. Tools that only declare `datasette` and `actor` are unaffected by all of this.
+In contexts with no human watching - for example background agents, or CLI chat when terminal input is unavailable - `ask_user()` raises `QuestionsNotSupported`, which surfaces to the model as a tool error so it can proceed without input. Tools that only declare `datasette` and `actor` are unaffected by all of this.
 
 ## Rendering custom HTML from tools
 
@@ -249,6 +251,11 @@ Options:
 
 - `-p`, `--prompt` — Send a single prompt and exit (non-interactive mode)
 - `-m`, `--model` — LLM model to use
+- `--root` — Run as the Datasette root actor, allowing all permissions
+- `--yes` — Automatically approve yes/no confirmation prompts
+- `--unsafe` — Equivalent to `--root --yes`
+
+By default the CLI runs as an actor called `cli` and respects Datasette permissions. Tools that ask for approval show a terminal prompt; for example, `execute_write_sql` shows a plain-text version of the SQL, parameters, permissions and warnings before asking for confirmation. Use `--yes` to skip yes/no confirmations, `--root` to run with root permissions, or `--unsafe` to do both.
 
 ### Listing available tools
 

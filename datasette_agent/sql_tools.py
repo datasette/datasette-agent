@@ -369,6 +369,61 @@ def _approval_html(database, analyzed_statements):
     )
 
 
+def _approval_text(database, analyzed_statements):
+    lines = ["Database: {}".format(database)]
+    drop_impacts = [
+        impact
+        for statement in analyzed_statements
+        for impact in statement["drop_table_impacts"]
+    ]
+    if drop_impacts:
+        lines.append("")
+        lines.append(
+            "DANGER: this batch will drop table{}".format(
+                "" if len(drop_impacts) == 1 else "s"
+            )
+        )
+        for impact in drop_impacts:
+            if impact["row_count"] is not None:
+                count = "{} row{}".format(
+                    impact["row_count"], "" if impact["row_count"] == 1 else "s"
+                )
+            else:
+                count = impact["row_count_error"] or "row count unavailable"
+            lines.append(
+                "- {}.{} will be dropped: {}".format(
+                    impact["database"], impact["table"], count
+                )
+            )
+
+    lines.append("")
+    lines.append(
+        "Statements execute in order. If one statement fails, later statements "
+        "will not be executed."
+    )
+    for statement in analyzed_statements:
+        lines.append("")
+        lines.append("Statement {}:".format(statement["index"]))
+        lines.append(statement["sql"])
+        if statement["params"]:
+            lines.append("Parameters:")
+            for key, value in statement["params"].items():
+                lines.append("- {}: {}".format(key, value))
+        if statement["analysis_rows"]:
+            lines.append("Operations:")
+            for row in statement["analysis_rows"]:
+                permissions = ", ".join(row["required_permissions"]) or "none"
+                lines.append(
+                    "- {} {}.{} (permissions: {})".format(
+                        row["operation"],
+                        row["database"] or database,
+                        row["table"] or "",
+                        permissions,
+                    )
+                )
+    return "\n".join(lines)
+
+
 async def _post_execute_write(datasette, actor, database, sql, params):
     payload = {"sql": sql, "params": params}
     path = datasette.urls.database(database) + "/-/execute-write"
@@ -564,6 +619,7 @@ async def _execute_write_sql(datasette, actor, context, database: str, statement
             database,
         ),
         html=_approval_html(database, analyzed_statements),
+        text=_approval_text(database, analyzed_statements),
     )
     if not approved:
         return json.dumps(

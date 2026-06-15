@@ -322,7 +322,20 @@ def register_commands(cli):
     @click.argument("files", nargs=-1, type=click.Path(exists=False))
     @click.option("-p", "--prompt", help="Initial prompt to send")
     @click.option("-m", "--model", "model_id", help="LLM model to use")
-    def chat(files, prompt, model_id):
+    @click.option(
+        "--root",
+        "use_root",
+        is_flag=True,
+        help="Run as Datasette root actor, allowing all permissions",
+    )
+    @click.option(
+        "--yes",
+        "auto_approve",
+        is_flag=True,
+        help="Auto-approve yes/no confirmation prompts",
+    )
+    @click.option("--unsafe", is_flag=True, help="Equivalent to --root --yes")
+    def chat(files, prompt, model_id, use_root, auto_approve, unsafe):
         "Interactive chat session with the agent"
         from datasette.app import Datasette
         from .cli_chat import run_chat
@@ -344,7 +357,20 @@ def register_commands(cli):
             metadata = {"plugins": {"datasette-llm": {"default_model": model_id}}}
 
         ds = Datasette(db_files, metadata=metadata, **kwargs)
-        asyncio.run(run_chat(ds, initial_prompt=prompt))
+        if unsafe:
+            use_root = True
+            auto_approve = True
+        actor = {"id": "root"} if use_root else {"id": "cli"}
+        if use_root:
+            ds.root_enabled = True
+        asyncio.run(
+            run_chat(
+                ds,
+                initial_prompt=prompt,
+                actor=actor,
+                auto_approve=auto_approve,
+            )
+        )
 
 
 @hookimpl

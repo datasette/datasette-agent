@@ -1130,6 +1130,152 @@ def test_chat_command_shows_tool_calls(tmp_path):
     assert result.exit_code == 0
 
 
+def test_chat_command_root_option_uses_root_actor(monkeypatch):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    captured = {}
+
+    async def fake_run_chat(
+        datasette, initial_prompt=None, actor=None, auto_approve=False
+    ):
+        captured["root_enabled"] = datasette.root_enabled
+        captured["initial_prompt"] = initial_prompt
+        captured["actor"] = actor
+        captured["auto_approve"] = auto_approve
+
+    monkeypatch.setattr("datasette_agent.cli_chat.run_chat", fake_run_chat)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "chat", ":memory:", "--root"])
+    assert result.exit_code == 0
+    assert captured == {
+        "root_enabled": True,
+        "initial_prompt": None,
+        "actor": {"id": "root"},
+        "auto_approve": False,
+    }
+
+
+def test_chat_command_yes_option_auto_approves_without_root(monkeypatch):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    captured = {}
+
+    async def fake_run_chat(
+        datasette, initial_prompt=None, actor=None, auto_approve=False
+    ):
+        captured["root_enabled"] = datasette.root_enabled
+        captured["actor"] = actor
+        captured["auto_approve"] = auto_approve
+
+    monkeypatch.setattr("datasette_agent.cli_chat.run_chat", fake_run_chat)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "chat", ":memory:", "--yes"])
+    assert result.exit_code == 0
+    assert captured == {
+        "root_enabled": False,
+        "actor": {"id": "cli"},
+        "auto_approve": True,
+    }
+
+
+def test_chat_command_unsafe_combines_root_and_yes(monkeypatch):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    captured = {}
+
+    async def fake_run_chat(
+        datasette, initial_prompt=None, actor=None, auto_approve=False
+    ):
+        captured["root_enabled"] = datasette.root_enabled
+        captured["actor"] = actor
+        captured["auto_approve"] = auto_approve
+
+    monkeypatch.setattr("datasette_agent.cli_chat.run_chat", fake_run_chat)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "chat", ":memory:", "--unsafe"])
+    assert result.exit_code == 0
+    assert captured == {
+        "root_enabled": True,
+        "actor": {"id": "root"},
+        "auto_approve": True,
+    }
+
+
+def test_chat_command_unsafe_can_execute_write_sql(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    db_path = str(tmp_path / "content.db")
+    sqlite3.connect(db_path).close()
+    prompt = json.dumps(
+        {
+            "tool_calls": [
+                {
+                    "name": "execute_write_sql",
+                    "arguments": {
+                        "database": "content",
+                        "statements": [
+                            {
+                                "sql": (
+                                    "CREATE TABLE possums "
+                                    "(id INTEGER PRIMARY KEY, name TEXT)"
+                                )
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["agent", "chat", db_path, "-m", "echo", "--unsafe", "-p", prompt]
+    )
+
+    assert result.exit_code == 0
+    conn = sqlite3.connect(db_path)
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "possums" in tables
+
+
+@pytest.mark.asyncio
+async def test_terminal_question_displays_raw_html_without_text(monkeypatch, capsys):
+    from datasette_agent.cli_chat import _ask_user_in_terminal
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+
+    answer = await _ask_user_in_terminal(
+        {
+            "question_type": "boolean",
+            "prompt": "Approve?",
+            "html": "<table><tr><td>Ugly but visible</td></tr></table>",
+            "text": None,
+        }
+    )
+
+    assert answer is True
+    assert (
+        "<table><tr><td>Ugly but visible</td></tr></table>" in capsys.readouterr().out
+    )
+
+
 def _parse_sse(text):
     """Parse SSE text into a list of {event, data} dicts."""
     events = []

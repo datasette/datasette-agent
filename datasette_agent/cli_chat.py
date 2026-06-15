@@ -11,11 +11,45 @@ from .messages import (
     make_user_message_dict,
     prepare_tool_output_for_model,
 )
+from .questions import QuestionsNotSupported
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
-async def run_chat(datasette, initial_prompt=None):
+async def _ask_user_in_terminal(question):
+    body = question.get("text")
+    if body is None:
+        body = question.get("html")
+    if body:
+        print()
+        print(body)
+        print()
+
+    question_type = question["question_type"]
+    prompt = question["prompt"]
+    try:
+        if question_type == "boolean":
+            answer = input("{} [y/N] ".format(prompt))
+            return answer.strip().lower() in {"y", "yes"}
+        if question_type == "choice":
+            options = question.get("options") or []
+            for i, option in enumerate(options, 1):
+                print("  {}. {}".format(i, option))
+            while True:
+                answer = input("{} ".format(prompt)).strip()
+                if answer.isdigit() and 1 <= int(answer) <= len(options):
+                    return options[int(answer) - 1]
+                if answer in options:
+                    return answer
+                print("Enter one of: {}".format(", ".join(options)))
+        if question_type == "text":
+            return input("{} ".format(prompt))
+    except (EOFError, KeyboardInterrupt) as ex:
+        raise QuestionsNotSupported("No terminal input available") from ex
+    raise QuestionsNotSupported("Unsupported question type: {}".format(question_type))
+
+
+async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=False):
     await datasette.invoke_startup()
     db = datasette.get_internal_database()
     await ensure_tables(db)
@@ -24,20 +58,25 @@ async def run_chat(datasette, initial_prompt=None):
 
     conversation_id = str(ULID())
     now = datetime.now(timezone.utc).isoformat()
+    actor = actor or {"id": "cli"}
+    actor_id = str(actor["id"]) if actor and actor.get("id") is not None else None
     await db.execute_write(
         "INSERT INTO agent_conversations (id, actor_id, title, model_id, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        [conversation_id, "cli", None, None, now, now],
+        [conversation_id, actor_id, None, None, now, now],
     )
-
-    actor = {"id": "cli"}
 
     agent_tools = await get_agent_tools(datasette)
     agent_tools = await filter_tools_for_actor(datasette, actor, agent_tools)
-    # supports_questions stays False: the CLI has no answer UI, so
-    # ask_user() raises QuestionsNotSupported instead of suspending.
+    # supports_questions stays False: CLI questions are answered directly
+    # through the callback rather than persisted for web replay.
     llm_tools = make_llm_tools(
-        agent_tools, datasette, actor, conversation_id=conversation_id
+        agent_tools,
+        datasette,
+        actor,
+        conversation_id=conversation_id,
+        auto_approve=auto_approve,
+        ask_user_callback=_ask_user_in_terminal,
     )
 
     llm_instance = LLM(datasette)

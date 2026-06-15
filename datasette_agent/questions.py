@@ -16,6 +16,8 @@ acceptable - they would ask identical questions).
 """
 
 import hashlib
+import html as html_module
+import inspect
 import json
 from datetime import datetime, timezone
 
@@ -88,6 +90,8 @@ class ToolContext:
         arguments,
         tool_call_id=None,
         supports_questions=True,
+        auto_approve=False,
+        ask_user_callback=None,
     ):
         self.datasette = datasette
         self.actor = actor
@@ -96,10 +100,14 @@ class ToolContext:
         self.arguments = arguments
         self.tool_call_id = tool_call_id
         self.supports_questions = supports_questions
+        self.auto_approve = auto_approve
+        self.ask_user_callback = ask_user_callback
         self.call_key = call_key_for(tool_name, arguments, tool_call_id)
         self._ask_index = 0
 
-    async def ask_user(self, prompt, *, options=None, free_text=False, html=None):
+    async def ask_user(
+        self, prompt, *, options=None, free_text=False, html=None, text=None
+    ):
         """Ask the user a question; returns their answer.
 
         - no kwargs: yes/no question, returns bool
@@ -109,6 +117,8 @@ class ToolContext:
         html= is optional trusted HTML rendered above the question in
         the UI - use it to show the user exactly what they are
         approving (escape any interpolated content yourself).
+        text= is an optional terminal-friendly version; if html= is not
+        provided, text= is escaped and rendered above the web question.
 
         Raises QuestionPending if the answer is not yet available. The
         code before this call re-runs when the tool call is re-executed
@@ -123,6 +133,27 @@ class ToolContext:
             question_type = "text"
         else:
             question_type = "boolean"
+
+        if self.auto_approve and question_type == "boolean":
+            return True
+
+        if html is None and text is not None:
+            html = "<pre>{}</pre>".format(html_module.escape(text))
+
+        if self.ask_user_callback is not None:
+            result = self.ask_user_callback(
+                {
+                    "tool_name": self.tool_name,
+                    "question_type": question_type,
+                    "prompt": prompt,
+                    "options": options,
+                    "html": html,
+                    "text": text,
+                }
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            return result
 
         if not self.supports_questions:
             raise QuestionsNotSupported(
