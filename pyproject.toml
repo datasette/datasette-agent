@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = [
     "datasette>=1.0a37",
     "datasette-llm>=0.1a7",
-    "llm>=0.32rc3",
+    "llm>=0.32rc2",
     "python-ulid",
 ]
 
