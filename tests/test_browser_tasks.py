@@ -199,6 +199,12 @@ async def test_consumed_tasks_do_not_replay(datasette_instance):
     with pytest.raises(BrowserTaskPending):
         await later_context.browser_task("<p>work</p>")
 
+    # The consumed row survives as the audit record of what ran
+    rows = await get_tasks(datasette_instance)
+    assert len(rows) == 2
+    statuses = sorted(r["status"] for r in rows)
+    assert statuses == ["consumed", "pending"]
+
 
 @pytest.mark.asyncio
 async def test_different_call_keys_do_not_share_results(datasette_instance):
@@ -244,7 +250,10 @@ async def test_browser_task_callback(datasette_instance):
     outcome = await context.browser_task(
         "<p>work</p>", payload={"x": 1}, label="Working", timeout_ms=5000
     )
-    assert outcome == {"ok": True, "result": "from-callback"}
+    # The callback envelope is normalized exactly like the HTTP path:
+    # outcome: "completed" is merged in, so tools cannot tell the two
+    # executors apart.
+    assert outcome == {"ok": True, "result": "from-callback", "outcome": "completed"}
     assert captured["tool_name"] == "run_in_browser"
     assert captured["html"] == "<p>work</p>"
     assert captured["payload"] == {"x": 1}
@@ -261,7 +270,41 @@ async def test_browser_task_async_callback(datasette_instance):
 
     context = await make_context(datasette_instance, browser_task_callback=callback)
     outcome = await context.browser_task("<p>work</p>")
-    assert outcome == {"ok": False, "error": {"message": "nope"}}
+    assert outcome == {
+        "ok": False,
+        "error": {"message": "nope"},
+        "outcome": "completed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_browser_task_callback_explicit_outcome_preserved(datasette_instance):
+    async def callback(task):
+        return {"ok": False, "error": {"message": "gone"}, "outcome": "cancelled"}
+
+    context = await make_context(datasette_instance, browser_task_callback=callback)
+    outcome = await context.browser_task("<p>work</p>")
+    assert outcome["outcome"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_task_id_placeholder_substituted_in_html(datasette_instance):
+    from datasette_agent.browser_tasks import BrowserTaskPending
+
+    context = await make_context(datasette_instance)
+    with pytest.raises(BrowserTaskPending) as exc_info:
+        await context.browser_task(
+            '<div data-task="__DATASETTE_TASK_ID__"><script>go()</script></div>'
+        )
+    task = exc_info.value.task
+    # The html handed to the frontend carries the real task id, so task
+    # HTML can learn its own id textually instead of walking the DOM
+    assert '<div data-task="{}">'.format(task["id"]) in task["html"]
+    assert "__DATASETTE_TASK_ID__" not in task["html"]
+    # The stored row keeps the placeholder - substitution happens at
+    # render time
+    rows = await get_tasks(datasette_instance)
+    assert "__DATASETTE_TASK_ID__" in rows[0]["html"]
 
 
 @pytest.mark.asyncio
@@ -540,6 +583,10 @@ async def test_claim_returns_payload_exactly_once(
     ).first()
     assert row["status"] == "running"
     assert row["claimed_at"]
+    # claimed_by records who claimed; completed_by stays empty until a
+    # completion actually happens - two facts, two columns
+    assert row["claimed_by"] == "user"
+    assert row["completed_by"] is None
 
     # Second claim (history replay, duplicate tab) stands down
     response = await claim_via_api(ds, cookies, conversation_id, task["id"])
@@ -924,6 +971,119 @@ async def test_conversation_page_converts_overdue_tasks(
         )
     ).first()
     assert row["status"] == "expired"
+
+
+# ---- resume endpoint ----
+
+
+async def resume_via_api(datasette, cookies, conversation_id):
+    return await datasette.client.post(
+        "/-/agent/{}/resume".format(conversation_id),
+        content=json.dumps({}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_unsticks_expired_task(
+    datasette_instance, cookies, browser_tool_plugin
+):
+    """A task that expires while no page is open leaves the turn
+    suspended; the resume endpoint runs the lazy-expiry sweep and
+    resumes the chain so the tool sees the expired envelope."""
+    ds = datasette_instance
+    conversation_id, task = await suspend_on_browser_task(ds, cookies)
+    await backdate_task(ds, task["id"], seconds=60)
+
+    response = await resume_via_api(ds, cookies, conversation_id)
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
+    events = _parse_sse(response.text)
+    tool_results = [e for e in events if e["event"] == "tool_result"]
+    assert len(tool_results) == 1
+    output = json.loads(tool_results[0]["data"]["output"])
+    assert output["ok"] is False
+    assert output["outcome"] == "expired"
+    assert events[-1] == {"event": "done", "data": {}}
+
+
+@pytest.mark.asyncio
+async def test_resume_refuses_while_task_still_pending(
+    datasette_instance, cookies, browser_tool_plugin
+):
+    ds = datasette_instance
+    conversation_id, task = await suspend_on_browser_task(ds, cookies)
+
+    response = await resume_via_api(ds, cookies, conversation_id)
+    assert response.status_code == 409
+    assert response.json()["state"] == "pending"
+
+    # The task is untouched and still claimable
+    response = await claim_via_api(ds, cookies, conversation_id, task["id"])
+    assert response.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_resume_refuses_when_not_suspended(
+    datasette_instance, cookies, browser_tool_plugin
+):
+    ds = datasette_instance
+    conversation_id = await start_conversation(ds, cookies)
+    await send_message(ds, cookies, conversation_id, "hello")
+
+    response = await resume_via_api(ds, cookies, conversation_id)
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_resume_permissions(datasette_instance, cookies, browser_tool_plugin):
+    ds = datasette_instance
+    conversation_id, task = await suspend_on_browser_task(ds, cookies)
+
+    other_cookies = {"ds_actor": ds.client.actor_cookie({"id": "other"})}
+    response = await resume_via_api(ds, other_cookies, conversation_id)
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_conversation_page_flags_resume_needed(
+    datasette_instance, cookies, browser_tool_plugin
+):
+    """When the page-load expiry sweep leaves a suspended turn with no
+    live pending work, the page carries a flag so the frontend can
+    auto-resume instead of stranding the conversation."""
+    ds = datasette_instance
+    conversation_id, task = await suspend_on_browser_task(ds, cookies)
+    await backdate_task(ds, task["id"], seconds=60)
+
+    response = await ds.client.get(
+        "/-/agent/{}".format(conversation_id), cookies=cookies
+    )
+    assert response.status_code == 200
+    assert 'data-needs-resume="1"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_conversation_page_no_resume_flag_normally(
+    datasette_instance, cookies, browser_tool_plugin
+):
+    ds = datasette_instance
+
+    # A conversation with a live pending task does not auto-resume
+    conversation_id, task = await suspend_on_browser_task(ds, cookies)
+    response = await ds.client.get(
+        "/-/agent/{}".format(conversation_id), cookies=cookies
+    )
+    assert "data-needs-resume" not in response.text
+
+    # Nor does a conversation that is not suspended at all
+    conversation_id2 = await start_conversation(ds, cookies)
+    await send_message(ds, cookies, conversation_id2, "hello")
+    response = await ds.client.get(
+        "/-/agent/{}".format(conversation_id2), cookies=cookies
+    )
+    assert "data-needs-resume" not in response.text
 
 
 # ---- context injection defaults ----
