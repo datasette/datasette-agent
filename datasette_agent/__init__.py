@@ -83,6 +83,18 @@ def register_routes():
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/question/(?P<question_id>[A-Za-z0-9]{26})$",
             views.api_answer_question,
         ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/claim$",
+            views.api_claim_task,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/complete$",
+            views.api_complete_task,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/cancel$",
+            views.api_cancel_task,
+        ),
     ]
 
 

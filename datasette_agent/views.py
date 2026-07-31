@@ -7,6 +7,14 @@ from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
 from .agent import resume_agent, run_agent
+from .browser_tasks import (
+    MAX_RESULT_BYTES,
+    cancel_task,
+    claim_task,
+    complete_task,
+    expire_overdue_tasks,
+    task_row_to_dict,
+)
 from .export_markdown import format_conversation_markdown
 from .messages import flatten_for_render
 from .questions import question_row_to_dict
@@ -114,6 +122,23 @@ async def agent_conversation(request, datasette):
             question_row_to_dict(pending_question)
         ).replace("<", "\\u003c")
 
+    # Lazy expiry: convert overdue browser tasks before deciding what
+    # is still pending.
+    await expire_overdue_tasks(db, conversation_id)
+    pending_tasks = (
+        await db.execute(
+            "SELECT * FROM agent_browser_tasks "
+            "WHERE conversation_id = ? AND status IN ('pending', 'running') "
+            "ORDER BY created_at",
+            [conversation_id],
+        )
+    ).rows
+    pending_tasks_json = None
+    if pending_tasks:
+        pending_tasks_json = json.dumps(
+            [task_row_to_dict(t) for t in pending_tasks]
+        ).replace("<", "\\u003c")
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
@@ -125,6 +150,7 @@ async def agent_conversation(request, datasette):
                     dict(background_agent) if background_agent else None
                 ),
                 "pending_question_json": pending_question_json,
+                "pending_tasks_json": pending_tasks_json,
             },
             request=request,
         )
@@ -342,6 +368,150 @@ async def api_answer_question(request, datasette):
         },
         content_type="text/event-stream",
     )
+
+
+async def _task_request_checks(request, datasette):
+    """Shared preamble for the browser-task endpoints: POST only,
+    conversation ownership, task lookup. Returns (db, task_row,
+    error_response) - exactly one of task_row/error_response is set.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return None, None, Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    task_id = request.url_vars["task_id"]
+    actor_id = _actor_id(request)
+
+    conversation = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if conversation is None:
+        return None, None, Response.json({"error": "Not found"}, status=404)
+    if conversation["actor_id"] != actor_id:
+        return None, None, Response.json({"error": "Forbidden"}, status=403)
+
+    task = (
+        await db.execute(
+            "SELECT * FROM agent_browser_tasks WHERE id = ? AND conversation_id = ?",
+            [task_id, conversation_id],
+        )
+    ).first()
+    if task is None:
+        return None, None, Response.json({"error": "Task not found"}, status=404)
+    return db, task, None
+
+
+def _resume_stream(request, datasette, conversation_id):
+    """Stream the resumed turn back on this response, exactly as the
+    question-answer endpoint does - the completing tab is the tab
+    watching the conversation, so it receives the resumed turn's
+    events on the same connection.
+    """
+
+    async def stream_fn(writer):
+        await resume_agent(
+            datasette=datasette,
+            actor=request.actor,
+            conversation_id=conversation_id,
+            writer=writer,
+        )
+
+    return AsgiStream(
+        stream_fn,
+        headers={
+            "Cache-Control": "no-cache",
+            "Content-Encoding": "none",
+        },
+        content_type="text/event-stream",
+    )
+
+
+async def api_claim_task(request, datasette):
+    """Atomically claim a pending browser task: pending -> running.
+
+    The claim succeeds exactly once and is the only way the payload is
+    ever handed out - history replay, duplicate tabs, and re-renders
+    all hit "already claimed" and do nothing.
+    """
+    db, task, error = await _task_request_checks(request, datasette)
+    if error is not None:
+        return error
+
+    claimed, state = await claim_task(db, task["id"], _actor_id(request))
+    if claimed is None:
+        return Response.json({"ok": False, "state": state})
+    return Response.json(
+        {
+            "ok": True,
+            "task": {
+                "id": claimed["id"],
+                "payload": (
+                    json.loads(claimed["payload_json"])
+                    if claimed["payload_json"]
+                    else None
+                ),
+                "timeout_ms": claimed["timeout_ms"],
+            },
+        }
+    )
+
+
+async def api_complete_task(request, datasette):
+    """Store the result envelope a browser task posted, then resume the
+    suspended conversation, streaming SSE like the answer endpoint."""
+    db, task, error = await _task_request_checks(request, datasette)
+    if error is not None:
+        return error
+
+    body = await request.post_body()
+    if len(body) > MAX_RESULT_BYTES:
+        return Response.json(
+            {
+                "ok": False,
+                "error": {
+                    "code": "result_too_large",
+                    "message": "Result exceeds {} bytes - post a trimmed result".format(
+                        MAX_RESULT_BYTES
+                    ),
+                },
+            },
+            status=400,
+        )
+    try:
+        envelope = json.loads(body)
+    except json.JSONDecodeError:
+        return Response.json({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("ok"), bool):
+        return Response.json(
+            {"error": 'Body must be a JSON object with a boolean "ok"'}, status=400
+        )
+
+    state = await complete_task(db, task["id"], envelope, _actor_id(request))
+    if state is not None:
+        return Response.json({"ok": False, "state": state}, status=400)
+
+    return _resume_stream(request, datasette, task["conversation_id"])
+
+
+async def api_cancel_task(request, datasette):
+    """User-initiated skip: pending/running -> cancelled, then resume.
+    The escape hatch that stops a hung task bricking the conversation -
+    the tool resumes with a failure result."""
+    db, task, error = await _task_request_checks(request, datasette)
+    if error is not None:
+        return error
+
+    state = await cancel_task(db, task["id"], _actor_id(request))
+    if state is not None:
+        return Response.json({"ok": False, "state": state}, status=400)
+
+    return _resume_stream(request, datasette, task["conversation_id"])
 
 
 async def agent_background_index(request, datasette):

@@ -70,6 +70,27 @@ CREATE TABLE IF NOT EXISTS agent_questions (
 CREATE INDEX IF NOT EXISTS idx_agent_questions_conversation
     ON agent_questions(conversation_id, status);
 
+CREATE TABLE IF NOT EXISTS agent_browser_tasks (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES agent_conversations(id),
+    call_key TEXT NOT NULL,
+    task_index INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    label TEXT,
+    html TEXT NOT NULL,
+    payload_json TEXT,
+    timeout_ms INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    claimed_at TEXT,
+    completed_at TEXT,
+    completed_by TEXT,
+    UNIQUE (conversation_id, call_key, task_index)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_conversation
+    ON agent_browser_tasks(conversation_id, status);
+
 CREATE TABLE IF NOT EXISTS agent_explorer_reports (
     id TEXT PRIMARY KEY,
     agent_id TEXT REFERENCES agent_background_agents(id),

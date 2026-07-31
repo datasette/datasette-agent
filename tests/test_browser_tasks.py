@@ -259,9 +259,7 @@ async def test_browser_task_async_callback(datasette_instance):
     async def callback(task):
         return {"ok": False, "error": {"message": "nope"}}
 
-    context = await make_context(
-        datasette_instance, browser_task_callback=callback
-    )
+    context = await make_context(datasette_instance, browser_task_callback=callback)
     outcome = await context.browser_task("<p>work</p>")
     assert outcome == {"ok": False, "error": {"message": "nope"}}
 
@@ -538,9 +536,7 @@ async def test_claim_returns_payload_exactly_once(
 
     db = ds.get_internal_database()
     row = (
-        await db.execute(
-            "SELECT * FROM agent_browser_tasks WHERE id = ?", [task["id"]]
-        )
+        await db.execute("SELECT * FROM agent_browser_tasks WHERE id = ?", [task["id"]])
     ).first()
     assert row["status"] == "running"
     assert row["claimed_at"]
@@ -629,9 +625,7 @@ async def test_complete_resumes_tool_and_continues_chain(
 
     db = ds.get_internal_database()
     row = (
-        await db.execute(
-            "SELECT * FROM agent_browser_tasks WHERE id = ?", [task["id"]]
-        )
+        await db.execute("SELECT * FROM agent_browser_tasks WHERE id = ?", [task["id"]])
     ).first()
     # The tool call completed, so its tasks were marked consumed
     assert row["status"] == "consumed"
@@ -646,8 +640,7 @@ async def test_complete_resumes_tool_and_continues_chain(
     # Chain continued: assistant message follows the tool result
     messages = (
         await db.execute(
-            "SELECT role FROM agent_messages "
-            "WHERE conversation_id = ? ORDER BY id",
+            "SELECT role FROM agent_messages " "WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows

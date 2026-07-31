@@ -357,6 +357,14 @@ function appendToolResult(name, output, id = null) {
 // chat input disabled across the suspended turn.
 let questionPending = false;
 
+// True while a browser_task() is executing in this page — same
+// input-disabled semantics as questionPending.
+let browserTaskPending = false;
+
+function currentConversationId() {
+  return document.querySelector(".agent-chat").dataset.conversationId;
+}
+
 function setInputEnabled(enabled) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
@@ -472,6 +480,116 @@ function renderQuestionForm(question) {
   messages.appendChild(container);
   scrollToBottom();
 }
+
+// ---- Browser tasks ----
+//
+// Tool-initiated units of work executed by this page. Task HTML is
+// trusted server-authored markup whose scripts run — the sanctioned
+// script-execution path, same mechanism appendToolResult uses for
+// _html. The payload is only ever delivered through the one-shot
+// claim endpoint, so history replay, duplicate tabs and re-renders
+// execute nothing.
+
+const browserTaskElements = new Map(); // task id -> {statusEl, htmlEl, task}
+
+function taskUrl(taskId, action) {
+  return (
+    "/-/agent/" + currentConversationId() + "/task/" + taskId + "/" + action
+  );
+}
+
+// One-shot: resolves {ok: true, payload, timeoutMs} once per task,
+// ever. Every later or concurrent claim resolves {ok: false, state}.
+async function claimTask(taskId) {
+  const response = await fetch(taskUrl(taskId, "claim"), {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: "{}",
+  });
+  const data = await response.json();
+  if (data.ok) {
+    return {
+      ok: true,
+      payload: data.task.payload,
+      timeoutMs: data.task.timeout_ms,
+    };
+  }
+  return {ok: false, state: data.state};
+}
+
+function finishBrowserTaskUI(taskId, outcome) {
+  const entry = browserTaskElements.get(taskId);
+  if (!entry) return;
+  // The task has left pending: tear down its live HTML and leave an
+  // inert one-line record.
+  if (entry.htmlEl) entry.htmlEl.remove();
+  entry.statusEl.classList.remove("running");
+  entry.statusEl.textContent =
+    (entry.task.label || "Browser task") + " — " + outcome;
+  browserTaskElements.delete(taskId);
+}
+
+// Post the result envelope ({ok, result?, error?}) for a task. The
+// complete endpoint resumes the suspended turn and streams it back on
+// the same response, so the transcript continues rendering seamlessly.
+async function completeTask(taskId, envelope) {
+  finishBrowserTaskUI(taskId, envelope && envelope.ok ? "completed" : "failed");
+  browserTaskPending = false;
+  await streamAgentEvents(taskUrl(taskId, "complete"), envelope);
+}
+
+async function cancelTask(taskId) {
+  finishBrowserTaskUI(taskId, "skipped");
+  browserTaskPending = false;
+  await streamAgentEvents(taskUrl(taskId, "cancel"), {});
+}
+
+function renderBrowserTask(task) {
+  const messages = document.getElementById("messages");
+
+  const statusEl = document.createElement("div");
+  statusEl.className = "agent-browser-task running";
+  statusEl.dataset.taskId = task.id;
+  const spinner = document.createElement("span");
+  spinner.className = "agent-browser-task-spinner";
+  statusEl.appendChild(spinner);
+  const labelEl = document.createElement("span");
+  labelEl.className = "agent-browser-task-label";
+  labelEl.textContent = task.label || "Working in your browser…";
+  statusEl.appendChild(labelEl);
+  const toolEl = document.createElement("span");
+  toolEl.className = "agent-browser-task-tool";
+  toolEl.textContent = "(" + task.tool_name + ")";
+  statusEl.appendChild(toolEl);
+  const skip = document.createElement("button");
+  skip.type = "button";
+  skip.className = "agent-browser-task-skip";
+  skip.textContent = "Skip this step";
+  skip.addEventListener("click", () => cancelTask(task.id));
+  statusEl.appendChild(skip);
+  messages.appendChild(statusEl);
+
+  const htmlEl = document.createElement("div");
+  htmlEl.className = "agent-browser-task-html";
+  htmlEl.insertAdjacentHTML("beforeend", task.html);
+  // Append first so scripts can find sibling elements in the DOM
+  messages.appendChild(htmlEl);
+  browserTaskElements.set(task.id, {statusEl, htmlEl, task});
+  // Re-create script elements so they execute (innerHTML doesn't run scripts)
+  htmlEl.querySelectorAll("script").forEach(oldScript => {
+    const newScript = document.createElement("script");
+    for (const attr of oldScript.attributes) {
+      newScript.setAttribute(attr.name, attr.value);
+    }
+    newScript.textContent = oldScript.textContent;
+    oldScript.replaceWith(newScript);
+  });
+  scrollToBottom();
+}
+
+// Public API for task HTML — call these instead of fetching endpoints
+// by hand or scraping form markup.
+window.datasetteAgent = {claimTask, completeTask, cancelTask};
 
 async function streamAgentEvents(url, payload) {
   setInputEnabled(false);
@@ -616,6 +734,15 @@ async function streamAgentEvents(url, payload) {
             }
             questionPending = true;
             renderQuestionForm(data);
+          } else if (eventType === "browser_task") {
+            closeReasoning();
+            stopPendingToolCalls();
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
+            browserTaskPending = true;
+            renderBrowserTask(data);
           } else if (eventType === "done") {
             streamDone = true;
             closeReasoning();
@@ -661,7 +788,7 @@ async function streamAgentEvents(url, payload) {
     }
     appendMessage("assistant", "Connection error: " + err.message);
   } finally {
-    if (!questionPending) {
+    if (!questionPending && !browserTaskPending) {
       setInputEnabled(true);
     }
   }
@@ -712,6 +839,24 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
     renderQuestionForm(question);
   } catch (err) {
     console.error("Failed to render pending question:", err);
+  }
+})();
+
+// Render pending browser tasks left over from a suspended turn (page
+// reload, or the server restarted while a task was in flight). They
+// render, attempt to claim, and quietly stand down if another tab
+// already claimed — the one-shot claim endpoint decides.
+(function initPendingTasks() {
+  const dataEl = document.getElementById("pending-tasks-data");
+  if (!dataEl) return;
+  try {
+    const tasks = JSON.parse(dataEl.textContent);
+    if (!tasks.length) return;
+    browserTaskPending = true;
+    setInputEnabled(false);
+    tasks.forEach(renderBrowserTask);
+  } catch (err) {
+    console.error("Failed to render pending browser tasks:", err);
   }
 })();
 

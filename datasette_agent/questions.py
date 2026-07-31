@@ -24,6 +24,15 @@ from datetime import datetime, timezone
 import llm
 from ulid import ULID
 
+from .browser_tasks import (
+    MAX_TIMEOUT_MS,
+    BrowserTaskPending,
+    BrowserTasksNotSupported,
+    expire_task,
+    task_is_overdue,
+    task_row_to_dict,
+)
+
 
 class QuestionPending(llm.PauseChain):
     """Raised by ask_user to suspend the current turn.
@@ -92,6 +101,8 @@ class ToolContext:
         supports_questions=True,
         auto_approve=False,
         ask_user_callback=None,
+        supports_browser_tasks=True,
+        browser_task_callback=None,
     ):
         self.datasette = datasette
         self.actor = actor
@@ -102,8 +113,11 @@ class ToolContext:
         self.supports_questions = supports_questions
         self.auto_approve = auto_approve
         self.ask_user_callback = ask_user_callback
+        self.supports_browser_tasks = supports_browser_tasks
+        self.browser_task_callback = browser_task_callback
         self.call_key = call_key_for(tool_name, arguments, tool_call_id)
         self._ask_index = 0
+        self._task_index = 0
 
     async def ask_user(
         self, prompt, *, options=None, free_text=False, html=None, text=None
@@ -228,5 +242,121 @@ class ToolContext:
         await db.execute_write(
             "UPDATE agent_questions SET status = 'consumed' "
             "WHERE conversation_id = ? AND call_key = ? AND status = 'answered'",
+            [self.conversation_id, self.call_key],
+        )
+
+    async def browser_task(self, html, *, payload=None, label=None, timeout_ms=60_000):
+        """Hand the user's browser a unit of work; returns its result.
+
+        html is trusted server-authored HTML rendered into the chat
+        page - its scripts run. payload is JSON delivered to the
+        executing page exactly once, through the one-shot claim; put
+        per-run secrets there, never in html. The return value is the
+        envelope the page posted - {"ok": True, "result": ...} or
+        {"ok": False, "error": {...}} - with an "outcome" key of
+        "completed", "expired" or "cancelled". Failures come back as
+        data, not exceptions.
+
+        Raises BrowserTaskPending if the result is not yet available.
+        The code before this call re-runs when the tool call is
+        re-executed after the task finishes, so run it before
+        performing side effects.
+        """
+        timeout_ms = max(1, min(int(timeout_ms), MAX_TIMEOUT_MS))
+
+        if self.browser_task_callback is not None:
+            result = self.browser_task_callback(
+                {
+                    "tool_name": self.tool_name,
+                    "html": html,
+                    "payload": payload,
+                    "label": label,
+                    "timeout_ms": timeout_ms,
+                }
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+
+        if not self.supports_browser_tasks:
+            raise BrowserTasksNotSupported(
+                "browser_task() is not available in this context - proceed "
+                "without it, or report that a connected browser is required"
+            )
+
+        task_index = self._task_index
+        self._task_index += 1
+
+        db = self.datasette.get_internal_database()
+        existing = (
+            await db.execute(
+                "SELECT * FROM agent_browser_tasks "
+                "WHERE conversation_id = ? AND call_key = ? AND task_index = ?",
+                [self.conversation_id, self.call_key, task_index],
+            )
+        ).first()
+        if existing is not None:
+            status = existing["status"]
+            if status in ("pending", "running") and task_is_overdue(existing):
+                # Lazy expiry: the deadline passed with no completion
+                # (crashed or closed tab). Convert and fall through to
+                # the terminal-replay path.
+                await expire_task(db, existing["id"])
+                existing = (
+                    await db.execute(
+                        "SELECT * FROM agent_browser_tasks WHERE id = ?",
+                        [existing["id"]],
+                    )
+                ).first()
+                status = existing["status"]
+            if status in ("completed", "expired", "cancelled"):
+                return json.loads(existing["result_json"])
+            if status in ("pending", "running"):
+                # Re-raising for an already-pending task (e.g. a second
+                # suspended tool call re-executed on resume) must not
+                # insert a duplicate row.
+                raise BrowserTaskPending(task_row_to_dict(existing))
+            # status == 'consumed': an earlier identical call finished
+            # with this row; fall through is impossible because the
+            # UNIQUE constraint holds - run fresh under a new id would
+            # collide, so replace the consumed row.
+            await db.execute_write(
+                "DELETE FROM agent_browser_tasks WHERE id = ?", [existing["id"]]
+            )
+
+        task_id = str(ULID())
+        await db.execute_write(
+            "INSERT INTO agent_browser_tasks "
+            "(id, conversation_id, call_key, task_index, tool_name, label, "
+            "html, payload_json, timeout_ms, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            [
+                task_id,
+                self.conversation_id,
+                self.call_key,
+                task_index,
+                self.tool_name,
+                label,
+                html,
+                json.dumps(payload) if payload is not None else None,
+                timeout_ms,
+                _utc_now(),
+            ],
+        )
+        row = (
+            await db.execute(
+                "SELECT * FROM agent_browser_tasks WHERE id = ?", [task_id]
+            )
+        ).first()
+        raise BrowserTaskPending(task_row_to_dict(row))
+
+    async def mark_browser_tasks_consumed(self):
+        """Call once the tool call has completed: its finished tasks
+        must not replay for a later identical call."""
+        db = self.datasette.get_internal_database()
+        await db.execute_write(
+            "UPDATE agent_browser_tasks SET status = 'consumed' "
+            "WHERE conversation_id = ? AND call_key = ? "
+            "AND status IN ('completed', 'expired', 'cancelled')",
             [self.conversation_id, self.call_key],
         )
