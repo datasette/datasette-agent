@@ -7,7 +7,7 @@ import llm as llm_library
 from datasette.utils import await_me_maybe
 from datasette.plugins import pm
 
-from .questions import ToolContext
+from .tool_context import ToolContext
 
 
 @dataclass
