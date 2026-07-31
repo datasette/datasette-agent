@@ -30,6 +30,12 @@ MAX_TIMEOUT_MS = 600_000  # 10 minutes
 # result.
 MAX_RESULT_BYTES = 512 * 1024
 
+# Tool-authored task HTML may embed this placeholder anywhere; it is
+# substituted with the real task id whenever the html is prepared for
+# rendering. This is the sanctioned way for task HTML to learn its own
+# id - a textual contract, no DOM-walking of the runtime's markup.
+TASK_ID_PLACEHOLDER = "__DATASETTE_TASK_ID__"
+
 
 class BrowserTaskPending(llm.PauseChain):
     """Raised by browser_task to suspend the current turn.
@@ -62,6 +68,10 @@ def task_row_to_dict(row):
     Deliberately excludes payload_json - per-run secrets are only ever
     handed out through the one-shot claim endpoint, never embedded in
     anything that gets rendered or persisted as markup.
+
+    TASK_ID_PLACEHOLDER occurrences in the html are substituted with
+    the real task id here, at render time; the stored row keeps the
+    placeholder.
     """
     return {
         "id": row["id"],
@@ -70,9 +80,10 @@ def task_row_to_dict(row):
         "task_index": row["task_index"],
         "tool_name": row["tool_name"],
         "label": row["label"],
-        "html": row["html"],
+        "html": (row["html"] or "").replace(TASK_ID_PLACEHOLDER, row["id"]),
         "timeout_ms": row["timeout_ms"],
         "status": row["status"],
+        "created_at": row["created_at"],
     }
 
 
@@ -150,7 +161,7 @@ async def claim_task(db, task_id, actor_id):
         return None, row["status"]
     result = await db.execute_write(
         "UPDATE agent_browser_tasks SET status = 'running', claimed_at = ?, "
-        "completed_by = ? WHERE id = ? AND status = 'pending'",
+        "claimed_by = ? WHERE id = ? AND status = 'pending'",
         [_utc_now(), actor_id, task_id],
     )
     if result.rowcount != 1:

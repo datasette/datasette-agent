@@ -95,6 +95,10 @@ def register_routes():
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/cancel$",
             views.api_cancel_task,
         ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/resume$",
+            views.api_resume_conversation,
+        ),
     ]
 
 

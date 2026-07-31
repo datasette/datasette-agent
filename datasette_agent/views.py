@@ -139,6 +139,13 @@ async def agent_conversation(request, datasette):
             [task_row_to_dict(t) for t in pending_tasks]
         ).replace("<", "\\u003c")
 
+    # A task that expired while no page was open leaves the turn
+    # suspended with nothing to complete or cancel; flag the page so
+    # the frontend auto-resumes instead of stranding the conversation.
+    needs_resume = False
+    if not pending_tasks and pending_question is None:
+        needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
@@ -151,6 +158,7 @@ async def agent_conversation(request, datasette):
                 ),
                 "pending_question_json": pending_question_json,
                 "pending_tasks_json": pending_tasks_json,
+                "needs_resume": needs_resume,
             },
             request=request,
         )
@@ -370,6 +378,70 @@ async def api_answer_question(request, datasette):
     )
 
 
+async def _history_suspended(db, conversation_id):
+    """True when the persisted history ends in an assistant message
+    with tool calls and no tool results after it - the shape a turn
+    suspended on ask_user() or browser_task() leaves behind."""
+    row = (
+        await db.execute(
+            "SELECT role, message_json FROM agent_messages "
+            "WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+            [conversation_id],
+        )
+    ).first()
+    if row is None or row["role"] != "assistant":
+        return False
+    try:
+        parts = json.loads(row["message_json"]).get("parts", [])
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    return any(p.get("type") == "tool_call" for p in parts)
+
+
+async def _conversation_resume_state(db, conversation_id):
+    """Classify whether a suspended conversation is safe to resume with
+    no completion in hand.
+
+    Returns None when it is: the history is suspended, no browser task
+    is still live, no question awaits an answer, and at least one
+    finished (non-consumed) task exists for the re-executed tool call
+    to replay - evidence the suspension came from a browser task
+    rather than a turn actively streaming in another tab. Otherwise
+    returns the blocking state.
+    """
+    live = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_browser_tasks "
+            "WHERE conversation_id = ? AND status IN ('pending', 'running')",
+            [conversation_id],
+        )
+    ).first()
+    if live["c"]:
+        return "pending"
+    question = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_questions "
+            "WHERE conversation_id = ? AND status = 'pending'",
+            [conversation_id],
+        )
+    ).first()
+    if question["c"]:
+        return "question_pending"
+    finished = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_browser_tasks "
+            "WHERE conversation_id = ? "
+            "AND status IN ('completed', 'expired', 'cancelled')",
+            [conversation_id],
+        )
+    ).first()
+    if not finished["c"]:
+        return "not_suspended"
+    if not await _history_suspended(db, conversation_id):
+        return "not_suspended"
+    return None
+
+
 async def _task_request_checks(request, datasette):
     """Shared preamble for the browser-task endpoints: POST only,
     conversation ownership, task lookup. Returns (db, task_row,
@@ -464,7 +536,14 @@ async def api_claim_task(request, datasette):
 
 async def api_complete_task(request, datasette):
     """Store the result envelope a browser task posted, then resume the
-    suspended conversation, streaming SSE like the answer endpoint."""
+    suspended conversation, streaming SSE like the answer endpoint.
+
+    Completing from 'pending' - without claiming first - is allowed by
+    design, for hosts that skip claiming (callback executors, future
+    headless runners). It is safe because the endpoint is actor-bound
+    and the payload is still only obtainable through the one-shot
+    claim.
+    """
     db, task, error = await _task_request_checks(request, datasette)
     if error is not None:
         return error
@@ -512,6 +591,48 @@ async def api_cancel_task(request, datasette):
         return Response.json({"ok": False, "state": state}, status=400)
 
     return _resume_stream(request, datasette, task["conversation_id"])
+
+
+async def api_resume_conversation(request, datasette):
+    """Resume a turn suspended with no live pending work - e.g. a
+    browser task that expired while no page was open, leaving nothing
+    to complete or cancel.
+
+    Runs the lazy-expiry sweep first, then refuses unless the
+    conversation is verifiably stuck: 409 while a task or question is
+    still genuinely pending (the frontend deadline watcher re-arms on
+    this - it can never steal a claim by poking here), 400 when the
+    history is not suspended. On success streams the resumed turn as
+    SSE like the answer endpoint.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    conversation = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if conversation is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if conversation["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    await expire_overdue_tasks(db, conversation_id)
+    state = await _conversation_resume_state(db, conversation_id)
+    if state in ("pending", "question_pending"):
+        return Response.json({"ok": False, "state": state}, status=409)
+    if state is not None:
+        return Response.json({"ok": False, "state": state}, status=400)
+
+    return _resume_stream(request, datasette, conversation_id)
 
 
 async def agent_background_index(request, datasette):

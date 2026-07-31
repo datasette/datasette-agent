@@ -377,7 +377,17 @@ async function sendMessage(conversationId, message) {
   appendMessage("user", message);
   const input = document.getElementById("message-input");
   if (input) input.value = "";
-  await streamAgentEvents("/-/agent/" + conversationId + "/stream", {message});
+  const result = await streamAgentEvents(
+    "/-/agent/" + conversationId + "/stream",
+    {message}
+  );
+  if (result && result.ok === false && result.status) {
+    const detail =
+      result.data && typeof result.data.error === "string"
+        ? result.data.error
+        : "HTTP " + result.status;
+    appendMessage("assistant", "Error: " + detail);
+  }
 }
 
 async function answerQuestion(conversationId, questionId, answer) {
@@ -498,6 +508,10 @@ function taskUrl(taskId, action) {
   );
 }
 
+function resumeUrl() {
+  return "/-/agent/" + currentConversationId() + "/resume";
+}
+
 // One-shot: resolves {ok: true, payload, timeoutMs} once per task,
 // ever. Every later or concurrent claim resolves {ok: false, state}.
 async function claimTask(taskId) {
@@ -514,6 +528,18 @@ async function claimTask(taskId) {
       timeoutMs: data.task.timeout_ms,
     };
   }
+  if (data.state === "running") {
+    // Another tab holds the claim - say so instead of leaving a bare
+    // spinner. The deadline watcher still guards against that tab
+    // never finishing.
+    const entry = browserTaskElements.get(taskId);
+    if (entry) {
+      const label = entry.statusEl.querySelector(".agent-browser-task-label");
+      if (label && !label.textContent.includes("another tab")) {
+        label.textContent += " (running in another tab)";
+      }
+    }
+  }
   return {ok: false, state: data.state};
 }
 
@@ -522,6 +548,7 @@ function finishBrowserTaskUI(taskId, outcome) {
   if (!entry) return;
   // The task has left pending: tear down its live HTML and leave an
   // inert one-line record.
+  if (entry.expiryTimer) clearTimeout(entry.expiryTimer);
   if (entry.htmlEl) entry.htmlEl.remove();
   entry.statusEl.classList.remove("running");
   entry.statusEl.textContent =
@@ -535,13 +562,61 @@ function finishBrowserTaskUI(taskId, outcome) {
 async function completeTask(taskId, envelope) {
   finishBrowserTaskUI(taskId, envelope && envelope.ok ? "completed" : "failed");
   browserTaskPending = false;
-  await streamAgentEvents(taskUrl(taskId, "complete"), envelope);
+  const result = await streamAgentEvents(taskUrl(taskId, "complete"), envelope);
+  if (result && result.ok === false && result.status) {
+    // Benign lost race: the user hit Skip (or the deadline passed)
+    // while the harness was finishing, and that transition already
+    // resumed the turn. Nothing to render. If the server expired the
+    // task just now, resume so the tool sees the expired envelope.
+    if (result.data && result.data.state === "expired") {
+      await streamAgentEvents(resumeUrl(), {});
+    }
+  }
 }
 
 async function cancelTask(taskId) {
   finishBrowserTaskUI(taskId, "skipped");
   browserTaskPending = false;
-  await streamAgentEvents(taskUrl(taskId, "cancel"), {});
+  const result = await streamAgentEvents(taskUrl(taskId, "cancel"), {});
+  if (result && result.ok === false && result.status) {
+    if (result.data && result.data.state === "expired") {
+      await streamAgentEvents(resumeUrl(), {});
+    }
+  }
+}
+
+// Deadline watcher: when a rendered task's server deadline passes
+// without a terminal transition (claiming tab crashed, closed, or
+// never existed), poke the resume endpoint. The server runs its
+// lazy-expiry sweep and only resumes once nothing is left pending, so
+// this can never steal a claim; 409 means not overdue by the server's
+// clock yet - re-arm and try again.
+function taskDeadlineDelayMs(task) {
+  let start = Date.now();
+  if (task.created_at) {
+    const parsed = Date.parse(task.created_at);
+    if (!isNaN(parsed)) start = parsed;
+  }
+  return Math.max(0, start + task.timeout_ms - Date.now()) + 3000;
+}
+
+async function watchTaskDeadline(taskId) {
+  const entry = browserTaskElements.get(taskId);
+  if (!entry) return;
+  browserTaskPending = false;
+  const result = await streamAgentEvents(resumeUrl(), {});
+  if (result && result.ok) {
+    finishBrowserTaskUI(taskId, "timed out");
+  } else if (
+    result &&
+    result.data &&
+    result.data.state === "pending" &&
+    browserTaskElements.has(taskId)
+  ) {
+    browserTaskPending = true;
+    setInputEnabled(false);
+    entry.expiryTimer = setTimeout(() => watchTaskDeadline(taskId), 5000);
+  }
 }
 
 function renderBrowserTask(task) {
@@ -571,10 +646,20 @@ function renderBrowserTask(task) {
 
   const htmlEl = document.createElement("div");
   htmlEl.className = "agent-browser-task-html";
+  // The container carries the task id (and the server substitutes
+  // __DATASETTE_TASK_ID__ into the html itself), so task HTML can
+  // learn its own id via currentScript.closest("[data-task-id]") or
+  // the textual placeholder - never by walking runtime markup.
+  htmlEl.dataset.taskId = task.id;
   htmlEl.insertAdjacentHTML("beforeend", task.html);
   // Append first so scripts can find sibling elements in the DOM
   messages.appendChild(htmlEl);
-  browserTaskElements.set(task.id, {statusEl, htmlEl, task});
+  const entry = {statusEl, htmlEl, task, expiryTimer: null};
+  browserTaskElements.set(task.id, entry);
+  entry.expiryTimer = setTimeout(
+    () => watchTaskDeadline(task.id),
+    taskDeadlineDelayMs(task)
+  );
   // Re-create script elements so they execute (innerHTML doesn't run scripts)
   htmlEl.querySelectorAll("script").forEach(oldScript => {
     const newScript = document.createElement("script");
@@ -620,6 +705,18 @@ async function streamAgentEvents(url, payload) {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(payload),
     });
+
+    // A non-OK response is a JSON error body, not an event stream —
+    // return it to the caller instead of feeding it to the SSE reader
+    // (which would render "Connection error" for what may be a benign
+    // lost race).
+    if (!response.ok) {
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (err) {}
+      return {ok: false, status: response.status, data};
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -778,6 +875,7 @@ async function streamAgentEvents(url, payload) {
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
     }
+    return {ok: true};
   } catch (err) {
     streamDone = true;
     closeReasoning();
@@ -787,6 +885,7 @@ async function streamAgentEvents(url, payload) {
       smd.parser_end(currentAssistant.parser);
     }
     appendMessage("assistant", "Connection error: " + err.message);
+    return {ok: false, error: err};
   } finally {
     if (!questionPending && !browserTaskPending) {
       setInputEnabled(true);
@@ -858,6 +957,16 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   } catch (err) {
     console.error("Failed to render pending browser tasks:", err);
   }
+})();
+
+// If the server flagged the conversation as suspended with no live
+// pending work (a task expired while no page was open), resume it so
+// the tool sees its expired envelope instead of the turn staying
+// stuck until the user happens to send a message.
+(function initAutoResume() {
+  const chat = document.querySelector(".agent-chat");
+  if (!chat || chat.dataset.needsResume !== "1") return;
+  streamAgentEvents(resumeUrl(), {});
 })();
 
 // Wire up form

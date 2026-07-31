@@ -84,12 +84,14 @@ CREATE TABLE IF NOT EXISTS agent_browser_tasks (
     result_json TEXT,
     created_at TEXT NOT NULL,
     claimed_at TEXT,
+    claimed_by TEXT,
     completed_at TEXT,
-    completed_by TEXT,
-    UNIQUE (conversation_id, call_key, task_index)
+    completed_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_conversation
     ON agent_browser_tasks(conversation_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_call
+    ON agent_browser_tasks(conversation_id, call_key, task_index);
 
 CREATE TABLE IF NOT EXISTS agent_explorer_reports (
     id TEXT PRIMARY KEY,

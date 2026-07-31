@@ -276,6 +276,11 @@ class ToolContext:
             )
             if inspect.isawaitable(result):
                 result = await result
+            # Normalize exactly like the HTTP complete path merges in
+            # outcome: "completed" - tools cannot tell executors apart.
+            if isinstance(result, dict):
+                result = dict(result)
+                result.setdefault("outcome", "completed")
             return result
 
         if not self.supports_browser_tasks:
@@ -288,10 +293,15 @@ class ToolContext:
         self._task_index += 1
 
         db = self.datasette.get_internal_database()
+        # Consumed rows are audit records of earlier identical calls -
+        # skip them (so a later identical call runs fresh) but never
+        # delete them. The latest non-consumed row is this call's task.
         existing = (
             await db.execute(
                 "SELECT * FROM agent_browser_tasks "
-                "WHERE conversation_id = ? AND call_key = ? AND task_index = ?",
+                "WHERE conversation_id = ? AND call_key = ? AND task_index = ? "
+                "AND status != 'consumed' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
                 [self.conversation_id, self.call_key, task_index],
             )
         ).first()
@@ -311,18 +321,10 @@ class ToolContext:
                 status = existing["status"]
             if status in ("completed", "expired", "cancelled"):
                 return json.loads(existing["result_json"])
-            if status in ("pending", "running"):
-                # Re-raising for an already-pending task (e.g. a second
-                # suspended tool call re-executed on resume) must not
-                # insert a duplicate row.
-                raise BrowserTaskPending(task_row_to_dict(existing))
-            # status == 'consumed': an earlier identical call finished
-            # with this row; fall through is impossible because the
-            # UNIQUE constraint holds - run fresh under a new id would
-            # collide, so replace the consumed row.
-            await db.execute_write(
-                "DELETE FROM agent_browser_tasks WHERE id = ?", [existing["id"]]
-            )
+            # Re-raising for an already-pending task (e.g. a second
+            # suspended tool call re-executed on resume) must not
+            # insert a duplicate row.
+            raise BrowserTaskPending(task_row_to_dict(existing))
 
         task_id = str(ULID())
         await db.execute_write(
