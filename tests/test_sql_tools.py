@@ -80,7 +80,7 @@ def _expected_sql_edit_url(ds, database, sql):
 
 
 async def _make_tool_context(datasette, arguments, tool_call_id="call_write_1"):
-    from datasette_agent.questions import ToolContext
+    from datasette_agent.tool_context import ToolContext
     from datasette_agent.schema import ensure_tables
 
     await datasette.invoke_startup()

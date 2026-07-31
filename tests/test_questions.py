@@ -25,7 +25,7 @@ def datasette_instance(tmp_path):
 
 
 async def make_context(datasette, **kwargs):
-    from datasette_agent.questions import ToolContext
+    from datasette_agent.tool_context import ToolContext
     from datasette_agent.schema import ensure_tables
 
     await datasette.invoke_startup()

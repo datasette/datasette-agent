@@ -15,6 +15,7 @@ from .messages import (
     prepare_tool_output_for_model,
     strip_internal_keys,
 )
+from .browser_tasks import BrowserTaskPending
 from .questions import QuestionPending
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
@@ -87,12 +88,14 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages.
 
-    Returns the pending question dict if a tool suspended on ask_user()
-    (QuestionPending is an llm.PauseChain, so it propagates here from
-    the chain), else None. The caller sends the final done/question
-    events. If the history ends in unresolved tool calls - a turn that
-    previously suspended - the chain re-executes them through the
-    normal tool machinery before calling the model.
+    Returns ("question", question_dict) if a tool suspended on
+    ask_user(), ("browser_task", task_dict) if it suspended on
+    browser_task() (both are llm.PauseChain, so they propagate here
+    from the chain), else None. The caller sends the final
+    done/question/browser_task events. If the history ends in
+    unresolved tool calls - a turn that previously suspended - the
+    chain re-executes them through the normal tool machinery before
+    calling the model.
 
     prompt_text is passed through to chain() for adapters that read
     prompt.prompt directly (e.g. echo); the persisted history passed as
@@ -109,6 +112,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         actor,
         conversation_id=conversation_id,
         supports_questions=True,
+        supports_browser_tasks=True,
     )
 
     system_prompt = await _build_system_prompt(datasette, actor)
@@ -260,7 +264,13 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         # paused call - that missing row is what marks it pending, so
         # resuming the chain re-executes it.
         await flush_tool_messages()
-        return ex.question
+        return ("question", ex.question)
+
+    except BrowserTaskPending as ex:
+        # A tool is waiting on browser_task() - same PauseChain
+        # semantics as QuestionPending above.
+        await flush_tool_messages()
+        return ("browser_task", ex.task)
 
     # Final flush: tool results from the last response in the chain
     # (chain_limit hit or terminal tool call) would otherwise be lost.
@@ -269,10 +279,11 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     return None
 
 
-async def _finish_turn(writer, question):
-    if question is not None:
-        await _send_sse(writer, "question", question)
-        await _send_sse(writer, "done", {"question_pending": True})
+async def _finish_turn(writer, pending):
+    if pending is not None:
+        event, data = pending
+        await _send_sse(writer, event, data)
+        await _send_sse(writer, "done", {"{}_pending".format(event): True})
     else:
         await _send_sse(writer, "done", {})
 
@@ -305,7 +316,7 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         # Persist the user turn as a MessageDict.
         await insert_message(db, conversation_id, make_user_message_dict(user_message))
 
-        question = await _run_chain(
+        pending = await _run_chain(
             datasette, actor, conversation_id, writer, user_message
         )
 
@@ -325,20 +336,21 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
                 [title, conversation_id],
             )
 
-        await _finish_turn(writer, question)
+        await _finish_turn(writer, pending)
 
     except Exception as e:
         await _send_sse(writer, "error", {"message": str(e)})
 
 
 async def resume_agent(datasette, actor, conversation_id, writer):
-    """Resume a conversation suspended on ask_user().
+    """Resume a conversation suspended on ask_user() or browser_task().
 
     The persisted history ends in an assistant message with unresolved
     tool calls, so the llm chain re-executes them through the normal
-    tool machinery before calling the model; answered questions replay
-    from the agent_questions table instead of suspending again. May
-    suspend again if a tool asks a further question.
+    tool machinery before calling the model; answered questions and
+    finished browser tasks replay from their tables instead of
+    suspending again. May suspend again if a tool asks a further
+    question or issues a further task.
     """
     db = datasette.get_internal_database()
     await ensure_tables(db)
@@ -346,10 +358,10 @@ async def resume_agent(datasette, actor, conversation_id, writer):
     current_conversation_id.set(conversation_id)
 
     try:
-        question = await _run_chain(
+        pending = await _run_chain(
             datasette, actor, conversation_id, writer, prompt_text=None
         )
-        await _finish_turn(writer, question)
+        await _finish_turn(writer, pending)
     except Exception as e:
         await _send_sse(writer, "error", {"message": str(e)})
 

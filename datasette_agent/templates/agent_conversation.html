@@ -7,7 +7,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
   <div class="agent-header">
     <a href="/-/agent">&larr; Back</a>
     <h1>{{ conversation.title or "Chat" }}</h1>
@@ -86,6 +86,10 @@
 
 {% if pending_question_json %}
 <script type="application/json" id="pending-question-data">{{ pending_question_json | safe }}</script>
+{% endif %}
+
+{% if pending_tasks_json %}
+<script type="application/json" id="pending-tasks-data">{{ pending_tasks_json | safe }}</script>
 {% endif %}
 
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>

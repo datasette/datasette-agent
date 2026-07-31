@@ -821,6 +821,51 @@
   white-space: pre-wrap;
 }
 
+/* browser_task() status line */
+.agent-browser-task {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 80%;
+  margin: 8px 0;
+  padding: 10px 14px;
+  background: #eef4ff;
+  border: 1px solid #b8ccf0;
+  border-radius: 8px;
+  font-size: 0.9em;
+  color: #333;
+}
+
+.agent-browser-task-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid #b8ccf0;
+  border-top-color: #007bff;
+  border-radius: 50%;
+  animation: agent-browser-task-spin 0.9s linear infinite;
+}
+
+@keyframes agent-browser-task-spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-browser-task-tool {
+  font-size: 0.85em;
+  color: #666;
+}
+
+.agent-browser-task-skip {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 4px;
+  background: #e0e0e0;
+  color: #333;
+  cursor: pointer;
+}
+
 .agent-write-sql-confirmation {
   max-width: 100%;
   box-sizing: border-box;
