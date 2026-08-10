@@ -1,5 +1,6 @@
 import html
 import json
+import time
 from collections.abc import Mapping
 from urllib.parse import urlencode
 
@@ -542,8 +543,10 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
     db = datasette.get_database(database)
     query_path = datasette.urls.database(database) + "/-/query"
     edit_sql_url = f"{query_path}?{urlencode({'sql': sql})}"
+    start = time.perf_counter()
     try:
         result = await db.execute(sql, truncate=True)
+        query_ms = round((time.perf_counter() - start) * 1000, 2)
         rows = [dict(row) for row in result.rows]
 
         if display == "user":
@@ -554,6 +557,7 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
                 "columns": result.columns,
                 "row_count": len(rows),
                 "truncated": result.truncated,
+                "query_ms": query_ms,
                 "_html": _render_rows_html(result.columns, rows, result.truncated),
                 "_rows": rows,
                 "_edit_sql_url": edit_sql_url,
@@ -563,6 +567,7 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
                 "columns": result.columns,
                 "rows": rows,
                 "truncated": result.truncated,
+                "query_ms": query_ms,
                 "_html": _render_rows_html(result.columns, rows, result.truncated),
                 "_edit_sql_url": edit_sql_url,
             }
@@ -571,12 +576,16 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
                 "columns": result.columns,
                 "rows": rows,
                 "truncated": result.truncated,
+                "query_ms": query_ms,
                 "_edit_sql_url": edit_sql_url,
             }
 
         return json.dumps(payload)
     except Exception as e:
-        return json.dumps({"error": str(e), "_edit_sql_url": edit_sql_url})
+        query_ms = round((time.perf_counter() - start) * 1000, 2)
+        return json.dumps(
+            {"error": str(e), "query_ms": query_ms, "_edit_sql_url": edit_sql_url}
+        )
 
 
 async def _execute_write_sql(datasette, actor, context, database: str, statements):

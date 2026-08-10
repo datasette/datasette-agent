@@ -307,6 +307,30 @@ async def test_sql_query_invalid_display_falls_back_to_model(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("display", [None, "model", "both", "user"])
+async def test_sql_query_includes_query_ms(datasette_with_data, display):
+    """Every display mode reports how long the query took in milliseconds,
+    and the field survives prepare_tool_output_for_model stripping."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    kwargs = {} if display is None else {"display": display}
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items order by id",
+        **kwargs,
+    )
+    data = json.loads(out)
+    assert isinstance(data["query_ms"], (int, float))
+    assert data["query_ms"] >= 0
+    stripped = json.loads(prepare_tool_output_for_model(out))
+    assert stripped["query_ms"] == data["query_ms"]
+
+
+@pytest.mark.asyncio
 async def test_sql_query_error_includes_edit_sql_url(datasette_with_data):
     await _seed_items(datasette_with_data)
     tool = _get_sql_tool()
@@ -319,6 +343,7 @@ async def test_sql_query_error_includes_edit_sql_url(datasette_with_data):
     )
     data = json.loads(out)
     assert "error" in data
+    assert isinstance(data["query_ms"], (int, float))
     assert data["_edit_sql_url"] == _expected_sql_edit_url(
         datasette_with_data, "data", sql
     )
