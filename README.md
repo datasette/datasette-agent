@@ -31,6 +31,19 @@ The "Explore with AI agent" entries that appear in the database and table action
 
 Visit `/-/agent/background` to launch background agents directly. Each one is given a goal and runs toward it without further input. The listing includes a Stop button for cancelling agents that are still running.
 
+### Custom system prompt
+
+You can layer your own instructions on top of the agent's built-in system prompt by setting a `system_prompt` value in the plugin's configuration, for example in `datasette.yml`:
+
+```yaml
+plugins:
+  datasette-agent:
+    system_prompt: |
+      You are a sales analytics assistant. Always use USD for revenue reporting.
+```
+
+The text is appended to the built-in system prompt (which covers tool usage, markdown escaping, etc), so your custom prompt is added without losing the default behaviour. The custom prompt applies to the chat assistant and to background agents. It does not apply to the `datasette agent chat` CLI command, which does not read `datasette.yml`.
+
 ### Saving queries
 
 The agent has a built-in `save_query` tool that saves SQL it has written as a [Datasette stored query](https://docs.datasette.io/en/latest/sql_queries.html). The query can be read-only or write SQL - Datasette analyzes it to decide which, and named `:parameters` become form fields on the saved query page.

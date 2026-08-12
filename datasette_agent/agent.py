@@ -21,6 +21,11 @@ from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
+def _custom_system_prompt(datasette):
+    config = datasette.plugin_config("datasette-agent") or {}
+    return config.get("system_prompt") or None
+
+
 async def _build_system_prompt(datasette, actor):
     parts = [
         "You are a helpful data analysis assistant. "
@@ -62,6 +67,9 @@ async def _build_system_prompt(datasette, actor):
         "or just a brief framing sentence. If there's nothing to add, "
         "say nothing."
     ]
+    custom = _custom_system_prompt(datasette)
+    if custom:
+        parts.append("\n" + custom)
     db_info = {}
     for db_name, db in datasette.databases.items():
         if not await datasette.allowed(
@@ -369,6 +377,7 @@ async def resume_agent(datasette, actor, conversation_id, writer):
 # Re-exports for background_agent.py / cli_chat.py compatibility.
 __all__ = [
     "_build_system_prompt",
+    "_custom_system_prompt",
     "insert_message",
     "insert_response",
     "load_messages",
