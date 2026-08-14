@@ -17,19 +17,36 @@
   <div class="agent-messages" id="messages">
     {% set in_tool_group = namespace(value=false) %}
     {% for msg in messages %}
-      {% if msg.role in ("tool_call", "tool_result") %}
+      {% if msg.role == "tool" %}
         {% if not in_tool_group.value %}
         <div class="agent-tool-group">
           {% set in_tool_group.value = true %}
         {% endif %}
-        {% if msg.role == "tool_call" %}
-        <details class="agent-tool-call">
-          <summary>Tool: {{ msg.tool_name }}</summary>
-          <pre>{{ msg.tool_arguments }}</pre>
-        </details>
-        {% elif msg.role == "tool_result" %}
         {% set html_content = msg.tool_output | agent_extract_html %}
         {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
+        <details class="agent-tool-call{% if msg.tool_output is not none %} done{% else %} waiting{% endif %}">
+          <summary>
+            <span class="agent-tool-name">Tool: {{ msg.tool_name }}</span>
+            {% if msg.tool_output is none %}
+            <span class="agent-tool-status">Waiting</span>
+            {% endif %}
+          </summary>
+          {% if msg.tool_arguments is not none %}
+          <div class="agent-tool-payload agent-tool-request">
+            <h4>Request</h4>
+            <pre>{{ msg.tool_arguments | agent_pretty_json }}</pre>
+          </div>
+          {% endif %}
+          {% if msg.tool_output is not none %}
+          <div class="agent-tool-payload agent-tool-response">
+            <h4>Response</h4>
+            <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
+            {% if edit_sql_url and not html_content %}
+            <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </details>
         {% if html_content %}
         </div>
         {% set in_tool_group.value = false %}
@@ -41,14 +58,6 @@
         </div>
         <div class="agent-tool-group">
         {% set in_tool_group.value = true %}
-        {% endif %}
-        <details class="agent-tool-result">
-          <summary>Result: {{ msg.tool_name }}</summary>
-          <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
-          {% if edit_sql_url and not html_content %}
-          <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
-          {% endif %}
-        </details>
         {% endif %}
       {% else %}
         {% if in_tool_group.value %}

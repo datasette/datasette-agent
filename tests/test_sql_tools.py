@@ -374,6 +374,18 @@ async def test_render_rows_html_truncated_marker():
     assert "truncated" in html.lower()
 
 
+def test_sql_result_cells_preserve_whitespace():
+    """Leading spaces in formatted SQL values must survive browser layout."""
+    import re
+    from importlib.resources import files
+
+    css = files("datasette_agent").joinpath("static/agent.css").read_text()
+    cell_rule = re.search(r"\.agent-sql-result tbody td\s*\{(.*?)\}", css, re.S)
+
+    assert cell_rule is not None
+    assert "white-space: pre;" in cell_rule.group(1)
+
+
 @pytest.mark.asyncio
 async def test_render_rows_html_escapes_html_in_cells():
     """Cell values may contain user-controlled strings; the helper must

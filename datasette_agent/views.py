@@ -16,7 +16,7 @@ from .browser_tasks import (
     task_row_to_dict,
 )
 from .export_markdown import format_conversation_markdown
-from .messages import flatten_for_render
+from .messages import combine_tool_messages_for_render, flatten_for_render
 from .questions import question_row_to_dict
 from .schema import ensure_tables
 
@@ -151,7 +151,9 @@ async def agent_conversation(request, datasette):
             "agent_conversation.html",
             {
                 "conversation": dict(row),
-                "messages": flatten_for_render(messages),
+                "messages": combine_tool_messages_for_render(
+                    flatten_for_render(messages)
+                ),
                 "conversation_id": conversation_id,
                 "background_agent": (
                     dict(background_agent) if background_agent else None
