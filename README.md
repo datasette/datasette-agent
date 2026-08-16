@@ -43,6 +43,22 @@ The agent also has a built-in `execute_write_sql` tool that can run one or more 
 
 The approval prompt shows the SQL, parameters, required permissions and destructive-operation warnings. Execution runs through Datasette's own `/-/execute-write` endpoint as the requesting actor, so the actor needs `execute-write-sql` on the target database plus the Datasette write permissions for the operations being performed. Statements run in order; if one fails, later statements are skipped and earlier successes are not rolled back. Use `sql_query` for read-only SQL.
 
+### Running Python in the browser
+
+The agent has a built-in `execute_python` tool that runs Python code in a [Pyodide](https://pyodide.org/) interpreter (CPython compiled to WebAssembly) inside the user's browser, for data analysis and cleaning tasks that SQL alone can't handle. Nothing is installed server-side: the first call in a conversation lazily downloads Pyodide 314.0.4 (Python 3.14) from the jsDelivr CDN, and later calls reuse the same interpreter, so variables and imports persist across tool calls. A page reload starts a fresh session - the tool reports `fresh_session: true` so the model knows to re-run its setup.
+
+Inside the interpreter an awaitable `execute_sql(database, sql, params=None)` function runs read-only SQL and returns a list of row dicts:
+
+```python
+rows = await execute_sql("mydb", "select * from sales where region = :r", {"r": "EU"})
+```
+
+Queries execute through Datasette's regular `/{database}/-/query.json` endpoint - the same read-only route the `sql_query` tool links to - fetched by the chat page with the user's own cookies, so the user's `execute-sql` permissions and Datasette's SELECT-only validation apply, and results truncate at the server's row limit exactly like other API access. Pyodide's bundled scientific packages (pandas, numpy, scipy, matplotlib and friends) load from the CDN automatically on import, `micropip` can install pure-Python packages from PyPI, and matplotlib figures are captured as PNGs and rendered into the chat.
+
+The Python code itself is untrusted - the model wrote it - so it runs inside a hidden iframe with `sandbox="allow-scripts"` and **without** `allow-same-origin`. The frame has an opaque origin: `document.cookie` throws, its `fetch()` carries no credentials and cannot reach the Datasette server at all (CORS blocks credential-less cross-origin reads), and it cannot touch the chat page's DOM, open windows or navigate anywhere. Its only capabilities beyond pure computation are the postMessage SQL bridge described above and anonymous requests to CORS-enabled hosts such as the Pyodide CDN and PyPI.
+
+The tool requires a connected browser: in background agents and CLI chat it returns an error explaining it is unavailable. Because Pyodide shares the page's thread, a runaway loop can wedge the tab until the browser-task deadline expires the task; the interpreter is then restarted on the next call.
+
 ### Permissions
 
 This plugin registers three independent permissions:

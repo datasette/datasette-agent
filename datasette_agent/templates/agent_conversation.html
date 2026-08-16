@@ -92,6 +92,7 @@
 <script type="application/json" id="pending-tasks-data">{{ pending_tasks_json | safe }}</script>
 {% endif %}
 
+<script src="/-/static-plugins/datasette-agent/pyodide-runtime.js"></script>
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
 <script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
 {% if not background_agent %}
