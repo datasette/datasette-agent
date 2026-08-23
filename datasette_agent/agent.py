@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 
+import llm
 from datasette.resources import DatabaseResource
 from datasette_llm import LLM
 
@@ -199,7 +200,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
 
     chain_response = model.chain(
         prompt_text,
-        messages=prior_messages,
+        messages=[llm.system(system_prompt), *prior_messages],
         system=system_prompt,
         tools=llm_tools,
         stream=True,
