@@ -574,6 +574,44 @@
   white-space: nowrap;
 }
 
+.agent-new-chat-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-width: 600px;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.agent-new-chat-options select {
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.agent-new-chat-hint {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+/* Model pinned to a conversation, shown in the chat header */
+.agent-model-badge {
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #555;
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
 .agent-conversations {
   list-style: none;
   padding: 0;

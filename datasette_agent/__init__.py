@@ -39,6 +39,7 @@ def register_routes():
     return [
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
+        (r"^/-/agent/api/models$", views.api_models),
         (r"^/-/agent/background$", views.agent_background_index),
         (r"^/-/agent/api/background$", views.api_create_background_agent),
         (
@@ -219,6 +220,7 @@ def _agent_jump_config_script(datasette):
 
     config = {
         "createConversationUrl": datasette.urls.path("/-/agent/api/conversations"),
+        "modelsUrl": datasette.urls.path("/-/agent/api/models"),
         "conversationBaseUrl": datasette.urls.path("/-/agent/"),
         "pluginVersion": __version__,
     }

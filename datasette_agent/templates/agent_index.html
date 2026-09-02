@@ -14,6 +14,22 @@
     <textarea id="new-message" placeholder="Ask a question about your data..." rows="3"></textarea>
     <button type="submit">Start chat</button>
   </div>
+  {% if models|length > 1 %}
+  <div class="agent-new-chat-options">
+    <label for="new-model">Model</label>
+    <select id="new-model" name="model">
+      {% for model in models %}
+      <option value="{{ model }}"{% if model == default_model %} selected{% endif %}>{{ model }}</option>
+      {% endfor %}
+    </select>
+    <span class="agent-new-chat-hint">The model cannot be changed once the chat has started.</span>
+  </div>
+  {% elif models %}
+  <div class="agent-new-chat-options">
+    <input type="hidden" id="new-model" name="model" value="{{ models[0] }}">
+    <span class="agent-new-chat-hint">Model: <code>{{ models[0] }}</code></span>
+  </div>
+  {% endif %}
 </form>
 
 {% if conversations %}
@@ -29,6 +45,17 @@
 {% endif %}
 
 <script>
+const MODEL_STORAGE_KEY = "datasette-agent-model";
+const modelSelect = document.getElementById("new-model");
+// Preselect the model used last time, if it is still on offer.
+if (modelSelect && modelSelect.tagName === "SELECT") {
+  try {
+    const remembered = localStorage.getItem(MODEL_STORAGE_KEY);
+    if (remembered && [...modelSelect.options].some((o) => o.value === remembered)) {
+      modelSelect.value = remembered;
+    }
+  } catch (e) {}
+}
 document.getElementById("new-message").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
@@ -42,13 +69,23 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
   const btn = e.target.querySelector("button");
   btn.disabled = true;
   btn.textContent = "Starting...";
+  const body = {message};
+  if (modelSelect && modelSelect.value) {
+    body.model = modelSelect.value;
+    try {
+      localStorage.setItem(MODEL_STORAGE_KEY, modelSelect.value);
+    } catch (e) {}
+  }
   try {
     const resp = await fetch("/-/agent/api/conversations", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({message}),
+      body: JSON.stringify(body),
     });
     const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.error || "HTTP " + resp.status);
+    }
     // Store the initial message to send after redirect
     sessionStorage.setItem("agent_pending_message", message);
     window.location.href = "/-/agent/" + data.conversation_id;

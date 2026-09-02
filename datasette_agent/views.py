@@ -17,6 +17,7 @@ from .browser_tasks import (
 )
 from .export_markdown import format_conversation_markdown
 from .messages import flatten_for_render
+from .models import get_agent_models
 from .questions import question_row_to_dict
 from .schema import ensure_tables
 
@@ -49,29 +50,78 @@ async def agent_index(request, datasette):
                 "WHERE actor_id IS NULL ORDER BY updated_at DESC",
             )
         ).rows
+    models, default_model = await get_agent_models(datasette, request.actor)
     return Response.html(
         await datasette.render_template(
             "agent_index.html",
-            {"conversations": conversations},
+            {
+                "conversations": conversations,
+                "models": models,
+                "default_model": default_model,
+            },
             request=request,
         )
     )
 
 
+async def api_models(request, datasette):
+    """List the models this actor can start an agent conversation with.
+
+    Backs the model picker in the jump section rendered on every
+    Datasette page - that markup is built client-side, so it fetches
+    the list lazily instead of every page carrying it inline.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    models, default_model = await get_agent_models(datasette, request.actor)
+    return Response.json({"models": models, "default_model": default_model})
+
+
 async def api_create_conversation(request, datasette):
+    """Create an empty conversation, optionally pinned to a model.
+
+    ``{"model": "..."}`` in the JSON body picks the model for the whole
+    conversation; it must be one of the ids from ``api_models`` for this
+    actor. Omit it to use the datasette-llm default, resolved on the
+    first turn. The model cannot be changed once the conversation
+    exists.
+    """
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
+
+    body = await request.post_body()
+    data = {}
+    if body:
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return Response.json({"error": "Invalid JSON body"}, status=400)
+        if not isinstance(data, dict):
+            return Response.json({"error": "Body must be a JSON object"}, status=400)
+
+    model_id = data.get("model")
+    if model_id is not None:
+        if not isinstance(model_id, str) or not model_id:
+            return Response.json(
+                {"error": "model must be a non-empty string"}, status=400
+            )
+        available, _ = await get_agent_models(datasette, request.actor)
+        if model_id not in available:
+            return Response.json(
+                {"error": "Model not available: {}".format(model_id)}, status=400
+            )
+
     db = datasette.get_internal_database()
     await ensure_tables(db)
     conversation_id = str(ULID())
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
-        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [conversation_id, _actor_id(request), None, now, now],
+        "INSERT INTO agent_conversations "
+        "(id, actor_id, title, model_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [conversation_id, _actor_id(request), None, model_id, now, now],
     )
-    return Response.json({"conversation_id": conversation_id})
+    return Response.json({"conversation_id": conversation_id, "model_id": model_id})
 
 
 async def agent_conversation(request, datasette):

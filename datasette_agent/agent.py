@@ -16,6 +16,7 @@ from .messages import (
     strip_internal_keys,
 )
 from .browser_tasks import BrowserTaskPending
+from .models import AGENT_PURPOSE
 from .questions import QuestionPending
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
@@ -118,8 +119,24 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     system_prompt = await _build_system_prompt(datasette, actor)
     prior_messages = await load_messages(db, conversation_id)
 
+    # A conversation is pinned to one model for its whole life. The
+    # model is chosen when the conversation is created (or, for
+    # conversations created without an explicit choice, resolved from
+    # the datasette-llm default on the first turn) and written back to
+    # the row so every later turn reuses it - even if the configured
+    # default changes in between.
+    conversation_row = (
+        await db.execute(
+            "SELECT model_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    stored_model_id = conversation_row["model_id"] if conversation_row else None
+
     llm_instance = LLM(datasette)
-    model = await llm_instance.model(purpose="agent", actor=actor)
+    model = await llm_instance.model(
+        model_id=stored_model_id, purpose=AGENT_PURPOSE, actor=actor
+    )
 
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
