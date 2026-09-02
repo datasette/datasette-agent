@@ -392,7 +392,13 @@ def register_commands(cli):
 @hookimpl
 def register_agent_tools(datasette):
     from .background_tools import get_background_tools
+    from .conversation_tools import get_conversation_tools
     from .query_tools import get_query_tools
     from .sql_tools import get_default_tools
 
-    return get_default_tools() + get_query_tools() + get_background_tools()
+    return (
+        get_default_tools()
+        + get_query_tools()
+        + get_background_tools()
+        + get_conversation_tools()
+    )

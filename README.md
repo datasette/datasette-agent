@@ -43,6 +43,16 @@ The agent also has a built-in `execute_write_sql` tool that can run one or more 
 
 The approval prompt shows the SQL, parameters, required permissions and destructive-operation warnings. Execution runs through Datasette's own `/-/execute-write` endpoint as the requesting actor, so the actor needs `execute-write-sql` on the target database plus the Datasette write permissions for the operations being performed. Statements run in order; if one fails, later statements are skipped and earlier successes are not rolled back. Use `sql_query` for read-only SQL.
 
+### Searching and reading previous conversations
+
+Two chat-only tools let the agent pull context out of your earlier conversations when you say something like "remember we were talking about pelicans yesterday?". Neither is available to background agents.
+
+`search_conversations` searches your other conversations - user messages, assistant replies, tool calls and tool results - for up to five terms at once. Every call asks you to approve the terms first, and the result deliberately reveals very little: each matching conversation's title, ID, start and end dates, message count and one short snippet around the first match for each term. The per-call approval and the tiny snippets stop the agent from reconstructing a conversation it has not been granted access to by running hundreds of searches.
+
+`read_conversation` reads one of your conversations by ID, including tool calls and results. The first read of a given conversation asks you to grant access; once you do, the grant lasts for the rest of the current chat and further reads of that conversation do not ask again. The agent reads a page of messages at a time (`start` and `limit`, with a capped output size and a `next_start` pointer) or passes `search` to find every occurrence of a term inside the conversation with a few hundred characters of context around each match, so it can load just the parts it needs rather than the whole transcript.
+
+Both tools only ever see conversations owned by the current actor, and never the conversation they are being called from. Grants are stored in the `agent_conversation_grants` table in the internal database.
+
 ### Permissions
 
 This plugin registers three independent permissions:

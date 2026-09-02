@@ -16,6 +16,7 @@ from .messages import (
     strip_internal_keys,
 )
 from .browser_tasks import BrowserTaskPending
+from .conversation_tools import CONVERSATION_TOOLS_PROMPT
 from .questions import QuestionPending
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
@@ -116,6 +117,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     )
 
     system_prompt = await _build_system_prompt(datasette, actor)
+    if any(tool.name == "search_conversations" for tool in agent_tools):
+        system_prompt += CONVERSATION_TOOLS_PROMPT
     prior_messages = await load_messages(db, conversation_id)
 
     llm_instance = LLM(datasette)

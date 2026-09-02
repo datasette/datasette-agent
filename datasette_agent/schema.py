@@ -93,6 +93,14 @@ CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_conversation
 CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_call
     ON agent_browser_tasks(conversation_id, call_key, task_index);
 
+CREATE TABLE IF NOT EXISTS agent_conversation_grants (
+    conversation_id TEXT NOT NULL REFERENCES agent_conversations(id),
+    granted_conversation_id TEXT NOT NULL REFERENCES agent_conversations(id),
+    actor_id TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, granted_conversation_id)
+);
+
 CREATE TABLE IF NOT EXISTS agent_explorer_reports (
     id TEXT PRIMARY KEY,
     agent_id TEXT REFERENCES agent_background_agents(id),

@@ -821,6 +821,31 @@
   white-space: pre-wrap;
 }
 
+/* search_conversations results and read_conversation approval */
+.agent-conversation-search {
+  margin: 0;
+  padding-left: 1.25em;
+}
+
+.agent-conversation-search > li {
+  margin-bottom: 0.5em;
+}
+
+.agent-conversation-search small {
+  color: #666;
+}
+
+.agent-conversation-search ul {
+  margin: 0.25em 0 0 0;
+  padding-left: 1.25em;
+  font-size: 0.9em;
+}
+
+.agent-read-conversation-details th {
+  text-align: left;
+  padding-right: 1em;
+}
+
 /* browser_task() status line */
 .agent-browser-task {
   align-self: flex-start;

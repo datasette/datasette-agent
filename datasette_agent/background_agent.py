@@ -12,10 +12,19 @@ from .messages import (
     make_user_message_dict,
     prepare_tool_output_for_model,
 )
+from .conversation_tools import CONVERSATION_TOOL_NAMES
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
 MAX_ITERATIONS = 50
+
+# Tools that only make sense with a human in the chat: spawning further
+# agents, and the conversation search/read tools whose approval prompts
+# nobody would be there to answer.
+EXCLUDED_TOOL_NAMES = (
+    "spawn_background_agent",
+    "check_background_agent",
+) + CONVERSATION_TOOL_NAMES
 
 
 def _make_mark_finished_tool(finished_state):
@@ -78,11 +87,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
 
     if tools is None:
         tools = await get_agent_tools(datasette)
-    tools = [
-        t
-        for t in tools
-        if t.name not in ("spawn_background_agent", "check_background_agent")
-    ]
+    tools = [t for t in tools if t.name not in EXCLUDED_TOOL_NAMES]
 
     finished_state = {"called": False, "message": None, "error": None}
     mark_finished_tool = _make_mark_finished_tool(finished_state)
