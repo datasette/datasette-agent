@@ -374,6 +374,18 @@ async def test_render_rows_html_truncated_marker():
     assert "truncated" in html.lower()
 
 
+def test_sql_result_cells_preserve_whitespace():
+    """Leading spaces in formatted SQL values must survive browser layout."""
+    import re
+    from importlib.resources import files
+
+    css = files("datasette_agent").joinpath("static/agent.css").read_text()
+    cell_rule = re.search(r"\.agent-sql-result tbody td\s*\{(.*?)\}", css, re.S)
+
+    assert cell_rule is not None
+    assert "white-space: pre;" in cell_rule.group(1)
+
+
 @pytest.mark.asyncio
 async def test_render_rows_html_escapes_html_in_cells():
     """Cell values may contain user-controlled strings; the helper must
@@ -443,10 +455,13 @@ async def test_execute_write_sql_tool_is_registered():
 
 
 @pytest.mark.asyncio
-async def test_execute_write_sql_approves_and_executes_batch(tmp_path):
+@pytest.mark.parametrize("legacy_params", [False, True])
+async def test_execute_write_sql_approves_and_executes_batch(tmp_path, legacy_params):
     from datasette_agent.questions import QuestionPending
 
-    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_batch")
+    ds = _write_datasette(
+        tmp_path, memory_name="execute_write_sql_batch_{}".format(legacy_params)
+    )
     db = ds.get_database("data")
     await db.execute_write("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)")
     await db.execute_write(
@@ -458,18 +473,31 @@ async def test_execute_write_sql_approves_and_executes_batch(tmp_path):
         "statements": [
             {
                 "sql": "insert into authors (id, name) values (:id, :name)",
-                "params": {"id": 1, "name": "Ada"},
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "name", "value": "Ada"},
+                ],
             },
             {
                 "sql": (
                     "insert into books (id, title, author_id) "
                     "values (:id, :title, :author_id)"
                 ),
-                "params": {"id": 1, "title": "Notes", "author_id": 1},
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "title", "value": "Notes"},
+                    {"name": "author_id", "value": 1},
+                ],
             },
         ],
     }
 
+    if legacy_params:
+        for statement in arguments["statements"]:
+            statement["params"] = {
+                param["name"]: param["value"] for param in statement["params"]
+            }
+    saved_arguments = json.dumps(arguments)
     context = await _make_tool_context(ds, arguments)
     with pytest.raises(QuestionPending) as exc_info:
         await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
@@ -482,6 +510,8 @@ async def test_execute_write_sql_approves_and_executes_batch(tmp_path):
     assert "insert-row" in question["html"]
 
     await _answer_question(ds, question["id"], True)
+    assert json.dumps(arguments) == saved_arguments
+    arguments = json.loads(saved_arguments)
     context = await _make_tool_context(ds, arguments)
     out = await tool.fn(
         datasette=ds, actor={"id": "user"}, context=context, **arguments
@@ -511,7 +541,10 @@ async def test_execute_write_sql_declined_does_not_execute(tmp_path):
         "statements": [
             {
                 "sql": "insert into notes (id, body) values (:id, :body)",
-                "params": {"id": 1, "body": "Nope"},
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "body", "value": "Nope"},
+                ],
             }
         ],
     }
@@ -640,15 +673,24 @@ async def test_execute_write_sql_stops_after_first_endpoint_failure(tmp_path):
         "statements": [
             {
                 "sql": "insert into notes (id, body) values (:id, :body)",
-                "params": {"id": 1, "body": "same"},
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "body", "value": "same"},
+                ],
             },
             {
                 "sql": "insert into notes (id, body) values (:id, :body)",
-                "params": {"id": 2, "body": "same"},
+                "params": [
+                    {"name": "id", "value": 2},
+                    {"name": "body", "value": "same"},
+                ],
             },
             {
                 "sql": "insert into notes (id, body) values (:id, :body)",
-                "params": {"id": 3, "body": "later"},
+                "params": [
+                    {"name": "id", "value": 3},
+                    {"name": "body", "value": "later"},
+                ],
             },
         ],
     }
@@ -719,3 +761,130 @@ async def test_execute_write_sql_posts_to_execute_write_with_actor(
         "sql": "insert into notes (body) values ('Captured')",
         "params": {},
     }
+
+
+@pytest.mark.parametrize("legacy_params", [False, True])
+def test_normalize_write_parameter_types(legacy_params):
+    from datasette_agent.sql_tools import _normalize_statements
+
+    values = {"text": "Ada", "integer": 3, "real": 1.5, "boolean": True, "null": None}
+    result = _normalize_statements(
+        [
+            {
+                "sql": "insert into example values (:text, :integer, :real, :boolean, :null)",
+                "params": (
+                    values
+                    if legacy_params
+                    else [
+                        {"name": name, "value": value} for name, value in values.items()
+                    ]
+                ),
+            }
+        ]
+    )
+    assert result[0]["provided_params"] == values
+
+
+@pytest.mark.parametrize(
+    "params, error",
+    [
+        ("id=1", "params must be an array or object"),
+        (None, "params must be an array or object"),
+        ({"id": []}, "must be a string, number, boolean or null"),
+        (
+            [{"name": "id", "value": 1}, {"name": "id", "value": 2}],
+            "duplicate parameter: id",
+        ),
+        ([{"name": "id"}], "must include a non-empty name and value"),
+        ([{"name": "", "value": 1}], "must include a non-empty name and value"),
+        ([{"name": 123, "value": 1}], "must include a non-empty name and value"),
+        ([1], "must include a non-empty name and value"),
+        ([{"name": "id", "value": []}], "must be a string, number, boolean or null"),
+        ([{"name": "id", "value": {}}], "must be a string, number, boolean or null"),
+    ],
+)
+def test_normalize_write_parameters_rejects_invalid_entries(params, error):
+    from datasette_agent.sql_tools import _normalize_statements
+
+    with pytest.raises(ValueError, match=error):
+        _normalize_statements(
+            [{"sql": "insert into example values (:id)", "params": params}]
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["model", "both", "user"])
+@pytest.mark.parametrize("legacy_params", [False, True])
+async def test_sql_query_bound_parameters(datasette_with_data, display, legacy_params):
+    await _seed_items(datasette_with_data)
+    values = {
+        "text": "O'Reilly & friends",
+        "integer": 3,
+        "real": 1.5,
+        "boolean": True,
+        "null": None,
+    }
+    params = (
+        values
+        if legacy_params
+        else [{"name": name, "value": value} for name, value in values.items()]
+    )
+    original_params = json.dumps(params)
+    out = await _get_sql_tool().fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select :text as text, :integer as integer_value, :real as real_value, "
+        ":boolean as boolean_value, :null as null_value from items where qty = :integer",
+        display=display,
+        params=params,
+    )
+    data = json.loads(out)
+    assert data["_rows" if display == "user" else "rows"] == [
+        {
+            "text": "O'Reilly & friends",
+            "integer_value": 3,
+            "real_value": 1.5,
+            "boolean_value": 1,
+            "null_value": None,
+        }
+    ]
+    assert json.dumps(params) == original_params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params, error",
+    [
+        (
+            [{"name": "id", "value": 1}, {"name": "id", "value": 2}],
+            "duplicate parameter",
+        ),
+        ([{"name": "id", "value": []}], "must be a string, number, boolean or null"),
+        ([{"name": "id"}], "must include a non-empty name and value"),
+        ([], "binding parameter"),
+    ],
+)
+async def test_sql_query_invalid_parameters(datasette_with_data, params, error):
+    await _seed_items(datasette_with_data)
+    out = await _get_sql_tool().fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items where id = :id",
+        params=params,
+    )
+    assert error in json.loads(out)["error"]
+
+
+def test_sql_tools_share_parameter_schema():
+    query_schema = _get_sql_tool().input_schema
+    write_schema = _get_execute_write_tool().input_schema
+    params_schema = query_schema["properties"]["params"]
+    assert (
+        params_schema
+        == write_schema["properties"]["statements"]["items"]["properties"]["params"]
+    )
+    assert params_schema["type"] == "array"
+    assert "params" not in query_schema["required"]
+    assert "additionalProperties" not in json.dumps(params_schema)

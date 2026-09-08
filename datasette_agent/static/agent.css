@@ -284,7 +284,9 @@
   max-width: 28em;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  /* SQL text values can use leading or repeated spaces as meaningful
+     formatting (for example, an indented recursive tree). */
+  white-space: pre;
 }
 
 .agent-sql-result tbody tr:nth-child(even) td {
@@ -339,8 +341,7 @@
   max-width: 85%;
 }
 
-.agent-tool-call,
-.agent-tool-result {
+.agent-tool-call {
   font-size: 0.85rem;
   border: 1px solid #ddd;
   border-radius: 4px;
@@ -350,26 +351,38 @@
   padding: 0.25rem 0.5rem;
 }
 
-.agent-tool-call summary,
-.agent-tool-result summary {
+.agent-tool-call summary {
   cursor: pointer;
   color: #666;
 }
 
-.agent-tool-call.pending summary::after {
+.agent-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-left: 0.55em;
+  font-size: 0.78em;
+  font-weight: 600;
+  color: #777;
+  vertical-align: middle;
+}
+
+.agent-tool-status::before {
+  display: inline-block;
+}
+
+.agent-tool-call.pending .agent-tool-status::before {
   content: "";
   display: inline-block;
   width: 0.6em;
   height: 0.6em;
-  margin-left: 0.5em;
   border-radius: 50%;
   background: #999;
   animation: pulse 1s ease-in-out infinite;
-  vertical-align: middle;
 }
 
-.agent-tool-call.streaming summary {
-  animation: pulse 1.6s ease-in-out infinite;
+.agent-tool-call.waiting .agent-tool-status::before {
+  content: "\2026";
 }
 
 @keyframes pulse {
@@ -501,9 +514,26 @@
   font-size: 0.9em;
 }
 
-.agent-tool-call pre,
-.agent-tool-result pre {
-  margin: 0.5rem 0 0;
+.agent-tool-payload {
+  margin-top: 0.5rem;
+}
+
+.agent-tool-payload + .agent-tool-payload {
+  padding-top: 0.5rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.agent-tool-payload h4 {
+  margin: 0 0 0.25rem;
+  color: #666;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-tool-payload pre {
+  margin: 0;
   font-size: 0.8rem;
   overflow-x: auto;
   max-height: 200px;

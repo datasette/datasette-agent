@@ -218,24 +218,50 @@ function formatToolArguments(args) {
   return truncateMiddle(text, TOOL_ARGUMENT_PREVIEW_CHARS);
 }
 
+function createToolPayload(label, className) {
+  const section = document.createElement("div");
+  section.className = "agent-tool-payload " + className;
+  const heading = document.createElement("h4");
+  heading.textContent = label;
+  section.appendChild(heading);
+  const pre = document.createElement("pre");
+  section.appendChild(pre);
+  return {section, pre};
+}
+
+function setToolName(state, name) {
+  state.name = name || state.name;
+  state.details.dataset.toolName = state.name;
+  state.nameEl.textContent = "Tool: " + state.name;
+}
+
 function startToolCall(name, id, streaming = false) {
   const group = getOrCreateToolGroup();
   const details = document.createElement("details");
   details.className = "agent-tool-call pending" + (streaming ? " streaming" : "");
   details.dataset.toolName = name;
   if (id) details.dataset.toolCallId = id;
-  if (streaming) details.open = true;
   const summary = document.createElement("summary");
-  summary.textContent = "Tool: " + name + (streaming ? " - receiving arguments..." : "");
+  const nameEl = document.createElement("span");
+  nameEl.className = "agent-tool-name";
+  nameEl.textContent = "Tool: " + name;
+  summary.appendChild(nameEl);
+  const status = document.createElement("span");
+  status.className = "agent-tool-status";
+  status.setAttribute("aria-label", "Running");
+  summary.appendChild(status);
   details.appendChild(summary);
-  const pre = document.createElement("pre");
-  details.appendChild(pre);
+  const request = createToolPayload("Request", "agent-tool-request");
+  details.appendChild(request.section);
   group.appendChild(details);
   scrollToBottomIfFollowing();
   const state = {
     details,
     summary,
-    pre,
+    nameEl,
+    status,
+    request: request.section,
+    pre: request.pre,
     name,
     rawArgs: "",
     userToggled: false,
@@ -258,18 +284,14 @@ function appendToolCall(name, args, id = null) {
 function appendToolCallArgsChunk(state, chunk) {
   state.rawArgs += chunk;
   state.pre.textContent = formatToolArguments(state.rawArgs);
-  state.summary.textContent =
-    "Tool: " + state.name + " - receiving arguments (" + state.rawArgs.length.toLocaleString() + " chars)";
 }
 
 function finishToolCall(state, name, args) {
   if (!state) return;
-  state.name = name || state.name;
-  state.details.dataset.toolName = state.name;
+  setToolName(state, name);
   state.details.classList.remove("streaming");
   state.details.classList.add("pending");
   state.pre.textContent = formatToolArguments(args);
-  state.summary.textContent = "Tool: " + state.name;
   if (!state.userToggled) {
     state.expectedOpen = false;
     state.details.open = false;
@@ -299,18 +321,28 @@ function createSqlEditLink(url) {
 function appendToolResult(name, output, id = null) {
   const messages = document.getElementById("messages");
 
-  // Remove pending indicator from the matching tool call
+  // Find the matching pill so this result completes the same DOM element.
   let pendingCalls = [];
   if (id) {
     pendingCalls = Array.from(messages.querySelectorAll(".agent-tool-call.pending"))
       .filter(el => el.dataset.toolCallId === id);
   }
   if (pendingCalls.length === 0) {
-    pendingCalls = messages.querySelectorAll('.agent-tool-call.pending[data-tool-name="' + name + '"]');
+    pendingCalls = Array.from(messages.querySelectorAll(".agent-tool-call.pending"))
+      .filter(el => el.dataset.toolName === name);
   }
-  if (pendingCalls.length > 0) {
-    pendingCalls[pendingCalls.length - 1].classList.remove("pending");
+  let details = pendingCalls.length > 0 ? pendingCalls[pendingCalls.length - 1] : null;
+  if (!details) {
+    details = startToolCall(name, id, false).details;
   }
+  details.classList.remove("pending", "streaming");
+  details.classList.add("done");
+  const status = details.querySelector(".agent-tool-status");
+  if (status) status.remove();
+
+  const response = createToolPayload("Response", "agent-tool-response");
+  response.pre.textContent = prettyPrintJson(output);
+  details.appendChild(response.section);
 
   // Check for rich HTML content
   let parsed;
@@ -337,19 +369,9 @@ function appendToolResult(name, output, id = null) {
     requestAnimationFrame(() => scrollToBottomIfFollowing());
   }
 
-  const group = getOrCreateToolGroup();
-  const details = document.createElement("details");
-  details.className = "agent-tool-result";
-  const summary = document.createElement("summary");
-  summary.textContent = "Result: " + name;
-  details.appendChild(summary);
-  const pre = document.createElement("pre");
-  pre.textContent = prettyPrintJson(output);
-  details.appendChild(pre);
   if (parsed && parsed._edit_sql_url && !parsed._html) {
-    details.appendChild(createSqlEditLink(parsed._edit_sql_url));
+    response.section.appendChild(createSqlEditLink(parsed._edit_sql_url));
   }
-  group.appendChild(details);
   scrollToBottomIfFollowing();
 }
 
@@ -692,10 +714,12 @@ async function streamAgentEvents(url, payload) {
     }
   }
 
-  function stopPendingToolCalls() {
+  function stopPendingToolCalls(statusText = "Stopped") {
     document.querySelectorAll(".agent-tool-call.pending").forEach(el => {
       el.classList.remove("pending");
       el.classList.remove("streaming");
+      const status = el.querySelector(".agent-tool-status");
+      if (status) status.textContent = statusText;
     });
   }
 
@@ -789,9 +813,7 @@ async function streamAgentEvents(url, payload) {
             hasToolActivity = true;
             let state = data.id ? streamingToolCalls.get(data.id) : null;
             if (state) {
-              state.name = data.name || state.name;
-              state.details.dataset.toolName = state.name;
-              state.summary.textContent = "Tool: " + state.name + " - receiving arguments...";
+              setToolName(state, data.name);
             } else {
               state = startToolCall(data.name || "tool", data.id, true);
               if (data.id) streamingToolCalls.set(data.id, state);
@@ -824,7 +846,7 @@ async function streamAgentEvents(url, payload) {
             appendToolResult(data.name, data.output, data.id);
           } else if (eventType === "question") {
             closeReasoning();
-            stopPendingToolCalls();
+            stopPendingToolCalls("Waiting");
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -851,7 +873,7 @@ async function streamAgentEvents(url, payload) {
           } else if (eventType === "error") {
             streamDone = true;
             closeReasoning();
-            stopPendingToolCalls();
+            stopPendingToolCalls("Failed");
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;

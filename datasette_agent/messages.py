@@ -264,6 +264,7 @@ def flatten_for_render(rows):
                         "tool_name": part.get("name", ""),
                         "tool_arguments": json.dumps(part.get("arguments", {})),
                         "tool_output": None,
+                        "tool_call_id": part.get("tool_call_id"),
                     }
                 )
             elif ptype == "tool_result":
@@ -274,9 +275,65 @@ def flatten_for_render(rows):
                         "tool_name": part.get("name", ""),
                         "tool_arguments": None,
                         "tool_output": part.get("output", ""),
+                        "tool_call_id": part.get("tool_call_id"),
                     }
                 )
     return out
+
+
+def combine_tool_messages_for_render(messages):
+    """Combine each tool call and result into one display message.
+
+    Tool calls may complete out of order, so prefer the provider's call ID.
+    Providers without IDs are paired FIFO by tool name, matching the export
+    behavior. Unmatched calls and results are retained so the UI never hides
+    an incomplete or legacy message.
+    """
+    combined = []
+    pending = []
+
+    for message in messages:
+        if message["role"] == "tool_call":
+            display_message = dict(message)
+            display_message["role"] = "tool"
+            combined.append(display_message)
+            pending.append(display_message)
+            continue
+
+        if message["role"] != "tool_result":
+            combined.append(message)
+            continue
+
+        call_id = message.get("tool_call_id")
+        match = None
+        if call_id is not None:
+            match = next(
+                (
+                    candidate
+                    for candidate in pending
+                    if candidate.get("tool_call_id") == call_id
+                ),
+                None,
+            )
+        if match is None:
+            match = next(
+                (
+                    candidate
+                    for candidate in pending
+                    if candidate.get("tool_name") == message.get("tool_name")
+                ),
+                None,
+            )
+
+        if match is not None:
+            match["tool_output"] = message.get("tool_output")
+            pending.remove(match)
+        else:
+            display_message = dict(message)
+            display_message["role"] = "tool"
+            combined.append(display_message)
+
+    return combined
 
 
 async def load_messages(db, conversation_id):
