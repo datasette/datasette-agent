@@ -40,9 +40,9 @@ plugins:
       agent:
         model: gpt-5.5
         models:
-          - gpt-5.5
-          - gpt-5.4-mini
-          - claude-sonnet-5
+        - gpt-5.5
+        - gpt-5.4-mini
+        - claude-sonnet-5
 ```
 
 Here `model` is the default for the agent and `models` is the allowlist offered in the picker. Without a `purposes.agent` section the picker offers every tool-capable model that datasette-llm considers available, with `default_model` preselected.
