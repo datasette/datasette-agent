@@ -6,6 +6,16 @@ permissions:
   contents: read
 
 jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22
+    - name: Test streaming Markdown parser
+      run: node --test tests/test_smd.mjs
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -25,4 +35,3 @@ jobs:
     - name: Run tests
       run: |
         python -m pytest
-

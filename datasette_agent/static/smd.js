@@ -180,6 +180,7 @@ export const heading_to_level = (token) => {
  * @typedef  {object      } Parser
  * @property {Any_Renderer} renderer        - {@link Renderer} interface
  * @property {string      } text            - Text to be added to the last token in the next flush
+ * @property {string      } last_text_char  - Last flushed character, retained across streaming chunks
  * @property {string      } pending         - Characters for identifying tokens
  * @property {Uint32Array } tokens          - Current token and it's parents (a slice of a tree)
  * @property {number      } len             - Number of tokens in types without root
@@ -207,6 +208,7 @@ export function parser(renderer) {
     return {
         renderer   : renderer,
         text       : "",
+        last_text_char: "",
         pending    : "",
         tokens     : tokens,
         len        : 0,
@@ -240,6 +242,7 @@ function add_text(p) {
     if (p.text.length === 0) return
     console.assert(p.len > 0, "Never adding text to root")
     p.renderer.add_text(p.renderer.data, p.text)
+    p.last_text_char = Array.from(p.text).at(-1)
     p.text = ""
 }
 
@@ -274,6 +277,7 @@ function end_token(p) {
     p.len -= 1
     p.token = /** @type {Token} */ (p.tokens[p.len])
     p.renderer.end_token(p.renderer.data)
+    p.last_text_char = ""
 }
 
 /**
@@ -281,6 +285,8 @@ function end_token(p) {
  * @param   {Token } token
  * @returns {void  } */
 function add_token(p, token) {
+    // Markup and block boundaries separate the surrounding text.
+    p.last_text_char = ""
     /*
      If a list doesn't start with a list item
      it means that there was a newline after the list:
@@ -463,6 +469,17 @@ function is_alnum(charcode) {
     return is_digit(charcode)                 || // 0-9
            (charcode >= 65 && charcode <= 90) || // A-Z
            (charcode >= 97 && charcode <= 122)   // a-z
+}
+
+// Local fix for https://github.com/thetarnav/streaming-markdown/issues/36.
+// Unlike asterisks, underscores cannot open or close emphasis inside words.
+// Include Unicode letters, numbers and combining marks in word boundaries.
+function is_word_char(char) {
+    return /[\p{L}\p{N}\p{M}]/u.test(char || "")
+}
+
+function before_pending(p) {
+    return Array.from(p.text).at(-1) || p.last_text_char
 }
 
 /**
@@ -976,6 +993,22 @@ export function parser_write(p, chunk) {
             if (p.token === STRONG_UND) {
                 symbol = '_'
                 italic = ITALIC_UND
+                // Wait for the character after a possible closing run, even
+                // when it arrives in the next parser_write() call.
+                if (p.pending === '_') {
+                    if (char === '_') {
+                        p.pending = '__'
+                        continue
+                    }
+                    break
+                }
+                if (p.pending === '__') {
+                    if (is_word_char(char)) break
+                    add_text(p)
+                    end_token(p)
+                    p.pending = char
+                    continue
+                }
             }
 
             if (symbol === p.pending) {
@@ -1005,6 +1038,7 @@ export function parser_write(p, chunk) {
             if (p.token === ITALIC_UND) {
                 symbol = '_'
                 strong = STRONG_UND
+                if (p.pending === '_' && is_word_char(char)) break
             }
 
             switch (p.pending) {
@@ -1309,6 +1343,15 @@ export function parser_write(p, chunk) {
             if ('_' === symbol) {
                 italic = ITALIC_UND
                 strong = STRONG_UND
+                if (is_word_char(before_pending(p))) {
+                    // Keep the entire run literal; otherwise the second
+                    // underscore in foo__bar could start a new delimiter.
+                    if (char === '_') {
+                        p.pending = pending_with_char
+                        continue
+                    }
+                    break
+                }
             }
 
             if (p.pending.length === 1) {
