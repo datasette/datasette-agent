@@ -95,21 +95,50 @@ def _normalize_statements(statements):
     for index, statement in enumerate(statements, 1):
         if isinstance(statement, str):
             sql = statement
-            params = {}
+            params = []
         elif isinstance(statement, Mapping):
             sql = statement.get("sql")
-            params = statement.get("params") or {}
+            params = statement.get("params", [])
         else:
             raise ValueError("statement {} must be an object".format(index))
         if not sql or not isinstance(sql, str):
             raise ValueError("statement {} must include SQL".format(index))
-        if not isinstance(params, Mapping):
-            raise ValueError("statement {} params must be an object".format(index))
+        # Saved tool calls may use the original dictionary format. Normalize
+        # locally so their persisted arguments and approval identity stay intact.
+        if isinstance(params, Mapping):
+            params = [{"name": name, "value": value} for name, value in params.items()]
+        if not isinstance(params, list):
+            raise ValueError("statement {} params must be an array or object".format(index))
+        provided_params = {}
+        for param in params:
+            if (
+                not isinstance(param, Mapping)
+                or not isinstance(param.get("name"), str)
+                or not param["name"]
+                or "value" not in param
+            ):
+                raise ValueError(
+                    "statement {} params entries must include a non-empty name and value".format(
+                        index
+                    )
+                )
+            name, value = param["name"], param["value"]
+            if name in provided_params:
+                raise ValueError(
+                    "statement {} has duplicate parameter: {}".format(index, name)
+                )
+            if value is not None and not isinstance(value, (str, int, float)):
+                raise ValueError(
+                    "statement {} parameter {} must be a string, number, boolean or null".format(
+                        index, name
+                    )
+                )
+            provided_params[name] = value
         normalized.append(
             {
                 "index": index,
                 "sql": sql,
-                "provided_params": dict(params),
+                "provided_params": provided_params,
             }
         )
     return normalized
@@ -764,11 +793,28 @@ def get_default_tools():
                                     "description": "A single writable SQL statement",
                                 },
                                 "params": {
-                                    "type": "object",
+                                    "type": "array",
                                     "description": (
-                                        "Optional named parameter values for this statement"
+                                        "Optional named SQL parameters as name/value entries. "
+                                        "Names must be unique and omit the placeholder prefix "
+                                        "(use id for :id)."
                                     ),
-                                    "additionalProperties": True,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "value": {
+                                                "anyOf": [
+                                                    {"type": "string"},
+                                                    {"type": "integer"},
+                                                    {"type": "number"},
+                                                    {"type": "boolean"},
+                                                    {"type": "null"},
+                                                ]
+                                            },
+                                        },
+                                        "required": ["name", "value"],
+                                    },
                                 },
                             },
                             "required": ["sql"],
