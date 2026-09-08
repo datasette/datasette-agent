@@ -37,6 +37,23 @@ The agent has a built-in `save_query` tool that saves SQL it has written as a [D
 
 Saving always requires human approval: the agent shows you the full SQL plus the proposed name, database and visibility, and nothing is stored until you click Yes. Validation and persistence run through Datasette's own `/-/queries/analyze` and `/-/queries/store` endpoints as the requesting actor, so the actor needs `execute-sql` and `store-query` on the target database (plus the relevant row permissions for write queries) - the same rules as the query creation web UI. Saved queries default to private.
 
+### SQL parameters
+
+The `sql_query` tool accepts optional named parameters as an array of name/value entries:
+
+```json
+{
+  "database": "demo",
+  "sql": "select * from items where name = :name and qty >= :qty",
+  "params": [
+    {"name": "name", "value": "apple"},
+    {"name": "qty", "value": 3}
+  ]
+}
+```
+
+Parameter names omit the placeholder prefix and must be unique. Values can be strings, numbers, booleans or null. Each statement in `execute_write_sql` accepts the same `params` format. Both tools also accept parameter dictionaries, preserving compatibility with saved write-tool calls.
+
 ### Executing write SQL
 
 The agent also has a built-in `execute_write_sql` tool that can run one or more ordered write SQL statements against a mutable database. It analyzes each statement first and asks the user for explicit approval in chat before anything runs.

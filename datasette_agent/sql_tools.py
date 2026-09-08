@@ -17,6 +17,27 @@ from datasette.write_sql import (
 
 from .tools import AgentTool
 
+_SQL_PARAMS_SCHEMA = {
+    "type": "array",
+    "description": "Optional named SQL parameters as name/value entries. Names must be unique and omit the placeholder prefix (use id for :id).",
+    "items": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "value": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "integer"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": ["name", "value"],
+    },
+}
+
 _DISPLAY_MODES = ("model", "both", "user")
 DROP_TABLE_TARGET_TYPES = {"table", "virtual-table"}
 
@@ -88,6 +109,39 @@ def _derived_write_parameters(sql):
     return parameters
 
 
+def _normalize_params(params, prefix=""):
+    # Saved tool calls may use the original dictionary format. Normalize
+    # locally so their persisted arguments and approval identity stay intact.
+    if isinstance(params, Mapping):
+        params = [{"name": name, "value": value} for name, value in params.items()]
+    if not isinstance(params, list):
+        raise ValueError("{}params must be an array or object".format(prefix))
+    provided_params = {}
+    for param in params:
+        if (
+            not isinstance(param, Mapping)
+            or not isinstance(param.get("name"), str)
+            or not param["name"]
+            or "value" not in param
+        ):
+            raise ValueError(
+                "{}params entries must include a non-empty name and value".format(
+                    prefix
+                )
+            )
+        name, value = param["name"], param["value"]
+        if name in provided_params:
+            raise ValueError("{}has duplicate parameter: {}".format(prefix, name))
+        if value is not None and not isinstance(value, (str, int, float)):
+            raise ValueError(
+                "{}parameter {} must be a string, number, boolean or null".format(
+                    prefix, name
+                )
+            )
+        provided_params[name] = value
+    return provided_params
+
+
 def _normalize_statements(statements):
     if not isinstance(statements, list) or not statements:
         raise ValueError("statements must be a non-empty array")
@@ -103,37 +157,7 @@ def _normalize_statements(statements):
             raise ValueError("statement {} must be an object".format(index))
         if not sql or not isinstance(sql, str):
             raise ValueError("statement {} must include SQL".format(index))
-        # Saved tool calls may use the original dictionary format. Normalize
-        # locally so their persisted arguments and approval identity stay intact.
-        if isinstance(params, Mapping):
-            params = [{"name": name, "value": value} for name, value in params.items()]
-        if not isinstance(params, list):
-            raise ValueError("statement {} params must be an array or object".format(index))
-        provided_params = {}
-        for param in params:
-            if (
-                not isinstance(param, Mapping)
-                or not isinstance(param.get("name"), str)
-                or not param["name"]
-                or "value" not in param
-            ):
-                raise ValueError(
-                    "statement {} params entries must include a non-empty name and value".format(
-                        index
-                    )
-                )
-            name, value = param["name"], param["value"]
-            if name in provided_params:
-                raise ValueError(
-                    "statement {} has duplicate parameter: {}".format(index, name)
-                )
-            if value is not None and not isinstance(value, (str, int, float)):
-                raise ValueError(
-                    "statement {} parameter {} must be a string, number, boolean or null".format(
-                        index, name
-                    )
-                )
-            provided_params[name] = value
+        provided_params = _normalize_params(params, "statement {} ".format(index))
         normalized.append(
             {
                 "index": index,
@@ -552,7 +576,9 @@ async def _describe_table(datasette, actor, database: str, table: str):
     )
 
 
-async def _sql_query(datasette, actor, database: str, sql: str, display: str = "model"):
+async def _sql_query(
+    datasette, actor, database: str, sql: str, display: str = "model", params=None
+):
     if not await datasette.allowed(
         action="execute-sql",
         resource=DatabaseResource(database=database),
@@ -574,7 +600,8 @@ async def _sql_query(datasette, actor, database: str, sql: str, display: str = "
     edit_sql_url = f"{query_path}?{urlencode({'sql': sql})}"
     start = time.perf_counter()
     try:
-        result = await db.execute(sql, truncate=True)
+        bound_params = _normalize_params([] if params is None else params)
+        result = await db.execute(sql, bound_params, truncate=True)
         query_ms = round((time.perf_counter() - start) * 1000, 2)
         rows = [dict(row) for row in result.rows]
 
@@ -747,6 +774,7 @@ def get_default_tools():
                         "type": "string",
                         "description": "The SQL query to execute",
                     },
+                    "params": _SQL_PARAMS_SCHEMA,
                     "display": {
                         "type": "string",
                         "enum": list(_DISPLAY_MODES),
@@ -792,30 +820,7 @@ def get_default_tools():
                                     "type": "string",
                                     "description": "A single writable SQL statement",
                                 },
-                                "params": {
-                                    "type": "array",
-                                    "description": (
-                                        "Optional named SQL parameters as name/value entries. "
-                                        "Names must be unique and omit the placeholder prefix "
-                                        "(use id for :id)."
-                                    ),
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "name": {"type": "string"},
-                                            "value": {
-                                                "anyOf": [
-                                                    {"type": "string"},
-                                                    {"type": "integer"},
-                                                    {"type": "number"},
-                                                    {"type": "boolean"},
-                                                    {"type": "null"},
-                                                ]
-                                            },
-                                        },
-                                        "required": ["name", "value"],
-                                    },
-                                },
+                                "params": _SQL_PARAMS_SCHEMA,
                             },
                             "required": ["sql"],
                         },

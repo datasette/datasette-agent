@@ -810,3 +810,81 @@ def test_normalize_write_parameters_rejects_invalid_entries(params, error):
         _normalize_statements(
             [{"sql": "insert into example values (:id)", "params": params}]
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["model", "both", "user"])
+@pytest.mark.parametrize("legacy_params", [False, True])
+async def test_sql_query_bound_parameters(datasette_with_data, display, legacy_params):
+    await _seed_items(datasette_with_data)
+    values = {
+        "text": "O'Reilly & friends",
+        "integer": 3,
+        "real": 1.5,
+        "boolean": True,
+        "null": None,
+    }
+    params = (
+        values
+        if legacy_params
+        else [{"name": name, "value": value} for name, value in values.items()]
+    )
+    original_params = json.dumps(params)
+    out = await _get_sql_tool().fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select :text as text, :integer as integer_value, :real as real_value, "
+        ":boolean as boolean_value, :null as null_value from items where qty = :integer",
+        display=display,
+        params=params,
+    )
+    data = json.loads(out)
+    assert data["_rows" if display == "user" else "rows"] == [
+        {
+            "text": "O'Reilly & friends",
+            "integer_value": 3,
+            "real_value": 1.5,
+            "boolean_value": 1,
+            "null_value": None,
+        }
+    ]
+    assert json.dumps(params) == original_params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params, error",
+    [
+        (
+            [{"name": "id", "value": 1}, {"name": "id", "value": 2}],
+            "duplicate parameter",
+        ),
+        ([{"name": "id", "value": []}], "must be a string, number, boolean or null"),
+        ([{"name": "id"}], "must include a non-empty name and value"),
+        ([], "binding parameter"),
+    ],
+)
+async def test_sql_query_invalid_parameters(datasette_with_data, params, error):
+    await _seed_items(datasette_with_data)
+    out = await _get_sql_tool().fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items where id = :id",
+        params=params,
+    )
+    assert error in json.loads(out)["error"]
+
+
+def test_sql_tools_share_parameter_schema():
+    query_schema = _get_sql_tool().input_schema
+    write_schema = _get_execute_write_tool().input_schema
+    params_schema = query_schema["properties"]["params"]
+    assert (
+        params_schema
+        == write_schema["properties"]["statements"]["items"]["properties"]["params"]
+    )
+    assert params_schema["type"] == "array"
+    assert "params" not in query_schema["required"]
+    assert "additionalProperties" not in json.dumps(params_schema)
