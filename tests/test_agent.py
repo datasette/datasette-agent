@@ -198,6 +198,7 @@ async def test_jump_section_script_added_for_users_with_permission(
     assert "window.datasetteAgentJumpConfig = " in response.text
     assert f'"pluginVersion": "{__version__}"' in response.text
     assert '"createConversationUrl": "/-/agent/api/conversations"' in response.text
+    assert '"modelsUrl": "/-/agent/api/models"' in response.text
     assert '"conversationBaseUrl": "/-/agent/"' in response.text
 
     script_response = await datasette_instance.client.get(
@@ -208,6 +209,8 @@ async def test_jump_section_script_added_for_users_with_permission(
     assert "version: pluginVersion" in script_response.text
     assert "datasette-agent-jump-start" in script_response.text
     assert "datasette-agent-jump-hint" in script_response.text
+    assert "datasette-agent-jump-model" in script_response.text
+    assert "fetch(modelsUrl)" in script_response.text
     assert "Press Enter to start. Shift+Enter adds a new line." in script_response.text
     assert 'event.key === "Enter" && !event.shiftKey' in script_response.text
 
@@ -719,7 +722,7 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
         def __init__(self, datasette):
             pass
 
-        async def model(self, purpose, actor):
+        async def model(self, model_id=None, purpose=None, actor=None):
             return FakeModel()
 
     class Writer:
@@ -837,7 +840,7 @@ async def test_tool_call_arguments_stream_before_tool_call(tmp_path, monkeypatch
         def __init__(self, datasette):
             pass
 
-        async def model(self, purpose, actor):
+        async def model(self, model_id=None, purpose=None, actor=None):
             return FakeModel()
 
     class Writer:
