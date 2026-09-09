@@ -103,8 +103,10 @@ from test_telemetry import (  # noqa: E402
     ask_tool_plugin,  # noqa: F401  (fixture)
     parse_sse,
     send_message,
+    start_background_via_api,
     start_conversation,
     tool_call_prompt,
+    wait_for_agent,
 )
 
 # Sentinels planted in the workload. The user's text and the model's
@@ -119,13 +121,18 @@ SENTINEL_SQL = "SENTINEL_sql_9b1c"
 async def exercise(tmp_path):
     """One broad workload touching every registered span and metric: a
     chat turn that calls a tool, a turn that suspends on a question and
-    its resume, and a CLI turn."""
+    its resume, a CLI turn, and a background agent run."""
     from datasette_agent.cli_chat import run_chat
 
     ds = Datasette(
         memory=True,
         metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
-        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                "datasette-agent-background": {"id": "user"},
+            }
+        },
         internal=str(tmp_path / "internal.db"),
     )
     cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
@@ -172,6 +179,17 @@ async def exercise(tmp_path):
     )
     assert parse_sse(response.text)[-1]["event"] == "done"
     await run_chat(ds, initial_prompt=SENTINEL_USER_TEXT, actor={"id": "cli"})
+    goal = json.dumps(
+        {
+            "prompt": SENTINEL_USER_TEXT,
+            "tool_calls": [
+                {"name": "list_databases_and_tables", "arguments": {}},
+                {"name": "mark_finished", "arguments": {"final_message": "done"}},
+            ],
+        }
+    )
+    agent_id = await start_background_via_api(ds, cookies, goal)
+    await wait_for_agent(ds, agent_id)
     return ds
 
 
@@ -213,6 +231,7 @@ EXPECTED_SPANS = {
     "chat ",
     "execute_tool ",
     "datasette_agent.system_prompt",
+    "datasette_agent.background.iteration",
 }
 
 EXPECTED_METRICS = {
@@ -224,6 +243,7 @@ EXPECTED_METRICS = {
     "datasette_agent.turns.active",
     "datasette_agent.tool.duration",
     "datasette_agent.tool.output.truncated",
+    "datasette_agent.background.iterations",
 }
 
 EXPECTED_ATTRIBUTES = {
@@ -250,6 +270,11 @@ EXPECTED_ATTRIBUTES = {
     "datasette_agent.tool_calls_requested",
     "datasette_agent.databases",
     "datasette_agent.prompt.chars",
+    "datasette_agent.background.id",
+    "datasette_agent.background.iterations",
+    "datasette_agent.background.max_iterations",
+    "datasette_agent.background.spawned_from_conversation",
+    "datasette_agent.background.iteration",
     "gen_ai.tool.name",
     "gen_ai.tool.call.id",
     "gen_ai.tool.type",

@@ -36,7 +36,12 @@ def ds(tmp_path):
     return Datasette(
         memory=True,
         metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
-        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                "datasette-agent-background": {"id": "user"},
+            }
+        },
         internal=str(tmp_path / "internal.db"),
     )
 
@@ -125,6 +130,9 @@ def ask_tool_plugin():
             async def big_output(datasette, actor):
                 return {"rows": "x" * 20000}
 
+            async def hang(datasette, actor):
+                await asyncio.Event().wait()
+
             path_schema = {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -148,6 +156,12 @@ def ask_tool_plugin():
                     description="Returns more than the model may see",
                     input_schema={"type": "object", "properties": {}},
                     fn=big_output,
+                ),
+                AgentTool(
+                    name="hang",
+                    description="Never returns",
+                    input_schema={"type": "object", "properties": {}},
+                    fn=hang,
                 ),
             ]
 
@@ -542,6 +556,144 @@ def test_classify_tool_payload():
     assert classify_tool_payload('{"error": {"code": 1}}') == "error"
     assert classify_tool_payload('{"error"') == "ok"
     assert classify_tool_payload('["error"]') == "ok"
+
+
+# --- Background agents ----------------------------------------------------------
+
+GOAL_TOOL_THEN_FINISH = tool_call_prompt(
+    ("list_databases_and_tables", {}),
+    ("mark_finished", {"final_message": "done"}),
+)
+
+
+async def start_background_via_api(ds, cookies, goal):
+    response = await ds.client.post(
+        "/-/agent/api/background",
+        content=json.dumps({"goal": goal}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["agent_id"]
+
+
+async def wait_for_agent(ds, agent_id):
+    task = getattr(ds, "_background_agent_tasks", {}).get(agent_id)
+    if task is not None:
+        await asyncio.wait([task], timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_background_run_is_a_linked_root(ds, cookies, otel_spans):
+    agent_id = await start_background_via_api(ds, cookies, GOAL_TOOL_THEN_FINISH)
+    await wait_for_agent(ds, agent_id)
+
+    finished = otel_spans.get_finished_spans()
+    (request,) = [s for s in finished if s.kind == SpanKind.SERVER]
+    (root,) = ours(otel_spans, "invoke_agent ")
+    # Its own trace, linked back to the request that spawned it.
+    assert root.parent is None
+    assert root.context.trace_id != request.context.trace_id
+    (link,) = root.links
+    assert link.context.trace_id == request.context.trace_id
+    assert link.context.span_id == request.context.span_id
+    assert root.status.status_code == StatusCode.UNSET
+    attrs = dict(root.attributes)
+    assert attrs["datasette_agent.mode"] == "background"
+    assert attrs["datasette_agent.outcome"] == "completed"
+    assert attrs["datasette_agent.background.id"] == agent_id
+    assert attrs["datasette_agent.background.iterations"] == 1
+    assert attrs["datasette_agent.background.max_iterations"] == 50
+    assert attrs["datasette_agent.background.spawned_from_conversation"] is False
+    assert attrs["datasette_agent.chain.steps"] == 2
+    assert attrs["datasette_agent.tool_calls"] == 2
+    assert attrs["gen_ai.request.model"] == "echo"
+
+    (iteration,) = ours(otel_spans, "datasette_agent.background.iteration")
+    assert iteration.parent.span_id == root.context.span_id
+    assert iteration.attributes["datasette_agent.background.iteration"] == 1
+
+    chats = ours(otel_spans, "chat ")
+    assert len(chats) == 2
+    assert all(c.parent.span_id == iteration.context.span_id for c in chats)
+    assert all(c.attributes["datasette_agent.streaming"] is False for c in chats)
+    assert all("gen_ai.first_token" not in [e.name for e in c.events] for c in chats)
+
+    tools = {t.name: t for t in ours(otel_spans, "execute_tool ")}
+    assert set(tools) == {
+        "execute_tool list_databases_and_tables",
+        "execute_tool mark_finished",
+    }
+    assert all(t.parent.span_id == iteration.context.span_id for t in tools.values())
+    # mark_finished is built per run, not registered by a plugin.
+    assert (
+        tools["execute_tool mark_finished"].attributes["datasette_agent.tool.plugin"]
+        == "unknown"
+    )
+    (prompt,) = ours(otel_spans, "datasette_agent.system_prompt")
+    assert prompt.parent.span_id == iteration.context.span_id
+
+
+@pytest.mark.asyncio
+async def test_explorer_run_hits_iteration_limit(ds, otel_spans, monkeypatch):
+    from datasette_agent import background_agent
+    from datasette_agent.explorer import start_explorer
+
+    # The explorer's goal is prose, which echo answers without ever calling
+    # mark_finished - so the run ends at the cap.
+    monkeypatch.setattr(background_agent, "MAX_ITERATIONS", 2)
+    await ds.invoke_startup()
+    report_id, agent_id = await start_explorer(ds, {"id": "user"}, "_memory")
+    await wait_for_agent(ds, agent_id)
+
+    (root,) = ours(otel_spans, "invoke_agent ")
+    assert root.parent is None
+    assert root.links == ()  # started outside any span
+    attrs = dict(root.attributes)
+    assert attrs["datasette_agent.mode"] == "explorer"
+    assert attrs["datasette_agent.outcome"] == "max_iterations"
+    assert attrs["datasette_agent.background.iterations"] == 2
+    assert attrs["datasette_agent.background.max_iterations"] == 2
+    assert root.status.status_code == StatusCode.ERROR
+    assert "error.type" not in attrs
+    iterations = sorted(
+        ours(otel_spans, "datasette_agent.background.iteration"),
+        key=lambda s: s.start_time,
+    )
+    assert [
+        i.attributes["datasette_agent.background.iteration"] for i in iterations
+    ] == [
+        1,
+        2,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_run(ds, cookies, otel_spans, ask_tool_plugin):
+    agent_id = await start_background_via_api(
+        ds, cookies, tool_call_prompt(("hang", {}))
+    )
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if any(s.name == "chat echo" for s in otel_spans.get_finished_spans()):
+            break
+    response = await ds.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel", cookies=cookies
+    )
+    assert response.json()["cancelled"] is True
+    await wait_for_agent(ds, agent_id)
+
+    (root,) = ours(otel_spans, "invoke_agent ")
+    attrs = dict(root.attributes)
+    assert attrs["datasette_agent.outcome"] == "cancelled"
+    assert attrs["error.type"] == "CancelledError"
+    assert attrs["datasette_agent.background.iterations"] == 1
+    assert root.status.status_code == StatusCode.UNSET
+    # The tool that was running when the cancel landed did not finish.
+    (tool,) = ours(otel_spans, "execute_tool ")
+    assert tool.name == "execute_tool hang"
+    assert tool.attributes["datasette_agent.tool.outcome"] == "error"
+    assert tool.attributes["error.type"] == "CancelledError"
 
 
 # --- CLI ----------------------------------------------------------------------

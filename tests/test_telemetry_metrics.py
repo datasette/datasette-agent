@@ -8,10 +8,12 @@ from datasette.app import Datasette
 pytest.importorskip("opentelemetry.sdk")
 
 from test_telemetry import (  # noqa: E402
+    GOAL_TOOL_THEN_FINISH,
     ask_tool_plugin,  # noqa: F401  (fixture)
     send_message,
     start_conversation,
     tool_call_prompt,
+    wait_for_agent,
 )
 
 
@@ -181,3 +183,33 @@ async def test_tool_metrics(ds, cookies, otel_metrics, ask_tool_plugin):  # noqa
     assert not otel_metrics.points(
         "datasette_agent.tool.output.truncated", {"gen_ai.tool.name": "sql_query"}
     )
+
+
+@pytest.mark.asyncio
+async def test_background_run_metrics(ds, otel_metrics):
+    from datasette_agent.api import start_background_agent
+
+    await ds.invoke_startup()
+    agent_id = await start_background_agent(
+        datasette=ds, actor={"id": "user"}, goal=GOAL_TOOL_THEN_FINISH
+    )
+    await wait_for_agent(ds, agent_id)
+    otel_metrics.collect()
+    iterations = otel_metrics.point(
+        "datasette_agent.background.iterations",
+        {"datasette_agent.mode": "background", "datasette_agent.outcome": "completed"},
+    )
+    assert iterations.count == 1 and iterations.sum == 1
+    turn = otel_metrics.point(
+        "datasette_agent.turn.duration", {"datasette_agent.mode": "background"}
+    )
+    assert turn.count == 1
+    assert (
+        otel_metrics.point(
+            "datasette_agent.turns.active", {"datasette_agent.mode": "background"}
+        ).value
+        == 0
+    )
+    # The two model responses of the one iteration.
+    assert otel_metrics.point("gen_ai.client.operation.duration", CHAT_ATTRS).count == 2
+    assert not otel_metrics.points("datasette_agent.chat.time_to_first_token")

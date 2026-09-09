@@ -9,7 +9,12 @@ from .tools import get_agent_tools
 
 
 async def start_background_agent(
-    datasette, actor, goal, tools=None, spawned_by_conversation_id=None
+    datasette,
+    actor,
+    goal,
+    tools=None,
+    spawned_by_conversation_id=None,
+    mode="background",
 ):
     """Start a background agent. Returns the agent_id (ULID).
 
@@ -19,6 +24,7 @@ async def start_background_agent(
         goal: The goal prompt for the agent
         tools: Optional list of AgentTool instances. If None, uses default tools.
         spawned_by_conversation_id: If spawned from a chat, the conversation ID to notify on completion.
+        mode: Telemetry mode for the run - "background" or "explorer".
     """
     db = datasette.get_internal_database()
     await ensure_tables(db)
@@ -57,7 +63,7 @@ async def start_background_agent(
 
     # Launch as asyncio task
     task = asyncio.get_event_loop().create_task(
-        run_background_agent(datasette, actor, agent_id, tools=tools)
+        run_background_agent(datasette, actor, agent_id, tools=tools, mode=mode)
     )
 
     # Store task reference on datasette instance

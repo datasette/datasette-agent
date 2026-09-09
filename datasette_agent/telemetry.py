@@ -39,6 +39,13 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from . import __version__
 from .telemetry_registry import (
+    BACKGROUND_ID,
+    BACKGROUND_ITERATION,
+    BACKGROUND_ITERATION_SPAN,
+    BACKGROUND_ITERATIONS,
+    BACKGROUND_MAX_ITERATIONS,
+    BACKGROUND_SPAWNED_FROM_CONVERSATION,
+    M_BACKGROUND_ITERATIONS,
     EXECUTE_TOOL,
     GEN_AI_TOOL_CALL_ID,
     GEN_AI_TOOL_NAME,
@@ -148,6 +155,9 @@ turn_duration = _histogram(
 chain_steps = _histogram(M_CHAIN_STEPS, "Model round-trips per agent turn")
 turns_active = _up_down_counter(M_TURNS_ACTIVE, "Agent turns in flight, by mode")
 tool_duration = _histogram(M_TOOL_DURATION, "Duration of one tool call, by outcome")
+background_iterations = _histogram(
+    M_BACKGROUND_ITERATIONS, "Loop passes per background agent run, by outcome"
+)
 tool_output_truncated = _counter(
     M_TOOL_OUTPUT_TRUNCATED, "Tool outputs cut down before the model saw them"
 )
@@ -209,6 +219,19 @@ class TurnRecorder:
         self.chain_steps = 0
         self.tool_calls = 0
         self.error_type = None
+        self.iterations = None
+
+    def set_background(self, agent_id, *, max_iterations, spawned_from_conversation):
+        "Mark the turn as a background run (the whole run is one turn)."
+        if self.span.is_recording():
+            self.span.set_attribute(BACKGROUND_ID, agent_id)
+            self.span.set_attribute(BACKGROUND_MAX_ITERATIONS, max_iterations)
+            self.span.set_attribute(
+                BACKGROUND_SPAWNED_FROM_CONVERSATION, bool(spawned_from_conversation)
+            )
+
+    def set_iterations(self, iterations):
+        self.iterations = iterations
 
     def set_model(self, model):
         self.model_id = _model_id(model)
@@ -246,14 +269,18 @@ class TurnRecorder:
 
 
 @contextmanager
-def turn_span(*, mode, conversation_id):
+def turn_span(*, mode, conversation_id, **span_kwargs):
     """``invoke_agent datasette-agent`` around one turn, plus
     ``turns.active``, ``turn.duration`` and ``chain.steps``.
 
     Yields a ``TurnRecorder``. Every exit path stamps the outcome and
-    counts on the span and records the histograms; only ``error`` and
-    ``chain_limit`` set span status ``ERROR`` - a suspension or a
-    cancellation is not a failure of the agent.
+    counts on the span and records the histograms; only ``error``,
+    ``chain_limit`` and ``max_iterations`` set span status ``ERROR`` - a
+    suspension or a cancellation is not a failure of the agent.
+
+    ``span_kwargs`` go to ``start_as_current_span``: a background run
+    passes ``datasette.telemetry.linked_root_span_kwargs()`` to become a
+    root with a link instead of a child of the request that started it.
     """
     mode = clamp(mode, MODE.values, "chat")
     started = time.perf_counter()
@@ -262,7 +289,10 @@ def turn_span(*, mode, conversation_id):
     # classification below decides what is an error, and a CancelledError
     # (a BaseException the SDK would not handle anyway) is not one.
     with tracer.start_as_current_span(
-        INVOKE_AGENT, record_exception=False, set_status_on_exception=False
+        INVOKE_AGENT,
+        record_exception=False,
+        set_status_on_exception=False,
+        **span_kwargs,
     ) as span:
         recorder = TurnRecorder(span, mode)
         if span.is_recording():
@@ -284,8 +314,14 @@ def turn_span(*, mode, conversation_id):
                 span.set_attribute(TOOL_CALLS, recorder.tool_calls)
                 if recorder.error_type is not None:
                     span.set_attribute(ERROR_TYPE, recorder.error_type)
-                if outcome in ("error", "chain_limit"):
+                if recorder.iterations is not None:
+                    span.set_attribute(BACKGROUND_ITERATIONS, recorder.iterations)
+                if outcome in ("error", "chain_limit", "max_iterations"):
                     span.set_status(Status(StatusCode.ERROR))
+            if recorder.iterations is not None:
+                background_iterations.record(
+                    recorder.iterations, {MODE: mode, OUTCOME: outcome}
+                )
             elapsed = time.perf_counter() - started
             attributes = {
                 MODE: mode,
@@ -300,6 +336,15 @@ def turn_span(*, mode, conversation_id):
                 {MODE: mode, GEN_AI_REQUEST_MODEL: recorder.model_id},
             )
             turns_active.add(-1, {MODE: mode})
+
+
+@contextmanager
+def background_iteration_span(iteration):
+    "``datasette_agent.background.iteration`` around one loop pass."
+    with tracer.start_as_current_span(BACKGROUND_ITERATION_SPAN) as span:
+        if span.is_recording():
+            span.set_attribute(BACKGROUND_ITERATION, iteration)
+        yield
 
 
 # --- Model calls ----------------------------------------------------------

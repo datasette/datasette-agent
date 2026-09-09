@@ -41,6 +41,7 @@ from datasette.telemetry_registry import (
 
 __all__ = [
     "ATTRIBUTES",
+    "BACKGROUND_ITERATION_BUCKETS",
     "CHAIN_STEP_BUCKETS",
     "COUNTER",
     "GENAI_DURATION_BUCKETS",
@@ -236,7 +237,8 @@ HISTORY_MESSAGES = Attribute(
     "Messages loaded from the conversation's persisted history for this "
     "turn, this turn's own user message included - what drives input "
     "tokens up over a long conversation. Absent in ``cli`` mode, where llm "
-    "holds the history in memory.",
+    "holds the history in memory; for a background run, the size at its "
+    "last iteration.",
     optional=True,
 )
 CHAIN_STEPS = Attribute(
@@ -335,6 +337,33 @@ SQL_DISPLAY = Attribute(
     values={"model", "both", "user"},
     optional=True,
 )
+BACKGROUND_ID = Attribute(
+    "datasette_agent.background.id",
+    "The background agent's ULID. Spans only, never a metric dimension.",
+    optional=True,
+)
+BACKGROUND_ITERATIONS = Attribute(
+    "datasette_agent.background.iterations",
+    "How many loop passes the background run made before it ended.",
+    optional=True,
+)
+BACKGROUND_MAX_ITERATIONS = Attribute(
+    "datasette_agent.background.max_iterations",
+    "The iteration cap the run was allowed (``MAX_ITERATIONS``).",
+    optional=True,
+)
+BACKGROUND_SPAWNED_FROM_CONVERSATION = Attribute(
+    "datasette_agent.background.spawned_from_conversation",
+    "``True`` when a chat turn's ``spawn_background_agent`` tool started "
+    "the run (its completion is then posted back as a notification), "
+    "``False`` for the HTTP API and the explorer. Never the other "
+    "conversation's id - the span link carries that.",
+    optional=True,
+)
+BACKGROUND_ITERATION = Attribute(
+    "datasette_agent.background.iteration",
+    "1-based loop pass within the background run.",
+)
 ERROR_TYPE = Attribute(
     "error.type",
     "Exception class name when the work raised; ``CancelledError`` when it "
@@ -368,6 +397,11 @@ ATTRIBUTES = (
     TOOL_CALLS_REQUESTED,
     DATABASES,
     PROMPT_CHARS,
+    BACKGROUND_ID,
+    BACKGROUND_ITERATIONS,
+    BACKGROUND_MAX_ITERATIONS,
+    BACKGROUND_SPAWNED_FROM_CONVERSATION,
+    BACKGROUND_ITERATION,
     GEN_AI_TOOL_NAME,
     GEN_AI_TOOL_CALL_ID,
     GEN_AI_TOOL_TYPE,
@@ -395,9 +429,16 @@ INVOKE_AGENT = SpanName(
     "insert so every ``db.query`` of the turn nests under it, and ends in "
     "a ``finally`` so the error path that sends the ``error`` SSE event "
     "still closes it. Kind ``INTERNAL``: the agent is this process's own "
-    "work, not a call out. Status is ``ERROR`` only for ``outcome=error`` "
-    "and ``chain_limit``; a suspension is ``UNSET`` because it is the "
-    "designed way a turn ends.",
+    "work, not a call out. Status is ``ERROR`` only for ``outcome=error``, "
+    "``chain_limit`` and ``max_iterations``; a suspension is ``UNSET`` "
+    "because it is the designed way a turn ends. For a background agent "
+    "or explorer run the span covers the whole run and is a **root span "
+    "in its own trace** with a link back to whatever span was current "
+    "when the run was started - the API request, or the spawning turn's "
+    "``execute_tool spawn_background_agent`` - the shape core uses for "
+    "``block=False`` writes: a run outlives its cause, so a link records "
+    "the causation without asserting containment. The ``background.*`` "
+    "attributes appear on those runs only.",
     (
         GEN_AI_OPERATION_NAME,
         GEN_AI_AGENT_NAME,
@@ -409,6 +450,10 @@ INVOKE_AGENT = SpanName(
         CHAIN_STEPS,
         TOOL_CALLS,
         NOTIFICATIONS_DRAINED,
+        BACKGROUND_ID,
+        BACKGROUND_ITERATIONS,
+        BACKGROUND_MAX_ITERATIONS,
+        BACKGROUND_SPAWNED_FROM_CONVERSATION,
         ERROR_TYPE,
     ),
 )
@@ -479,7 +524,17 @@ EXECUTE_TOOL = SpanName(
     prefix=True,
 )
 
-SPANS = (INVOKE_AGENT, CHAT, EXECUTE_TOOL, SYSTEM_PROMPT)
+BACKGROUND_ITERATION_SPAN = SpanName(
+    "datasette_agent.background.iteration",
+    "One pass of a background agent's loop, child of the run's "
+    "``invoke_agent`` root. Each pass rebuilds the system prompt, reloads "
+    'the whole history and runs a chain, so this is where "why did '
+    'iteration 7 take four minutes" gets answered; ``chat`` and '
+    "``execute_tool`` spans nest under it.",
+    (BACKGROUND_ITERATION,),
+)
+
+SPANS = (INVOKE_AGENT, CHAT, EXECUTE_TOOL, SYSTEM_PROMPT, BACKGROUND_ITERATION_SPAN)
 
 
 # --- Metrics --------------------------------------------------------------
@@ -490,6 +545,7 @@ SPANS = (INVOKE_AGENT, CHAT, EXECUTE_TOOL, SYSTEM_PROMPT)
 # (models, providers).
 
 CHAIN_STEP_BUCKETS = (1, 2, 3, 4, 6, 8, 10, 15, 20)
+BACKGROUND_ITERATION_BUCKETS = (1, 2, 3, 5, 8, 12, 16, 20, 30, 50)
 
 M_TOKEN_USAGE = MetricName(
     "gen_ai.client.token.usage",
@@ -556,8 +612,21 @@ M_TURNS_ACTIVE = MetricName(
     UPDOWN_COUNTER,
     "{turn}",
     "Turns in flight right now, by mode. Each streaming turn holds an SSE "
-    "connection and a provider stream open, so this is the capacity number.",
+    "connection and a provider stream open, so this is the capacity number; "
+    "``mode=background`` / ``explorer`` is the number of background agents "
+    "running.",
     (MODE,),
+)
+M_BACKGROUND_ITERATIONS = MetricName(
+    "datasette_agent.background.iterations",
+    HISTOGRAM,
+    "{iteration}",
+    "Loop passes per background run, by outcome - how close the agents run "
+    "to ``MAX_ITERATIONS``. The whole run's duration is on "
+    "``datasette_agent.turn.duration`` with ``mode=background``; "
+    "iterations are deliberately not mixed into that histogram.",
+    (MODE, OUTCOME),
+    buckets=BACKGROUND_ITERATION_BUCKETS,
 )
 
 M_TOOL_DURATION = MetricName(
@@ -592,4 +661,5 @@ METRICS = (
     M_TURNS_ACTIVE,
     M_TOOL_DURATION,
     M_TOOL_OUTPUT_TRUNCATED,
+    M_BACKGROUND_ITERATIONS,
 )
