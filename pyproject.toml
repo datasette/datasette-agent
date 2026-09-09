@@ -13,6 +13,7 @@ dependencies = [
     "datasette>=1.0a37",
     "datasette-llm>=0.1a7",
     "llm>=0.32rc2",
+    "opentelemetry-api>=1.37",
     "python-ulid",
 ]
 
@@ -22,7 +23,17 @@ dev = [
     "pytest-asyncio",
     "llm-echo>=0.5a0",
     "inline-snapshot",
+    "opentelemetry-sdk>=1.37",
 ]
+
+# DEV-ONLY PIN: the telemetry work imports Datasette's plugin telemetry kit
+# (datasette.telemetry_registry / datasette.telemetry / datasette.telemetry_testing),
+# which is public plugin API on the asg017/otel-phase1-6-plugin-kit branch
+# (PR #2899) and not yet in a release. Once the stack ships, delete this
+# [tool.uv.sources] block and raise the `datasette>=` floor above to the
+# release that includes PR #2899. CI has a matching temporary pip step.
+[tool.uv.sources]
+datasette = { git = "https://github.com/simonw/datasette", branch = "asg017/otel-phase1-6-plugin-kit" }
 
 [build-system]
 requires = ["setuptools"]
