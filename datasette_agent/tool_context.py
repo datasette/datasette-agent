@@ -40,6 +40,7 @@ from .browser_tasks import (
     task_row_to_dict,
 )
 from .questions import QuestionPending, QuestionsNotSupported, question_row_to_dict
+from .telemetry import current_span_ids, mark_tool_replayed, record_suspension
 
 
 def call_key_for(tool_name, arguments, tool_call_id):
@@ -161,6 +162,7 @@ class ToolContext:
             )
         ).first()
         if answered is not None:
+            mark_tool_replayed()
             return json.loads(answered["answer_json"])
 
         # Re-raising for a question that is already pending (e.g. a second
@@ -188,11 +190,14 @@ class ToolContext:
             "options": options,
             "html": html,
         }
+        # The execute_tool span is current here; its ids let the resumed
+        # turn link back to it (NULL when nothing is recording).
+        trace_id, span_id = current_span_ids()
         await db.execute_write(
             "INSERT INTO agent_questions "
             "(id, conversation_id, call_key, ask_index, tool_name, question_type, "
-            "prompt, options_json, html, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            "prompt, options_json, html, status, created_at, trace_id, span_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
             [
                 question["id"],
                 self.conversation_id,
@@ -204,8 +209,11 @@ class ToolContext:
                 json.dumps(options) if options is not None else None,
                 html,
                 _utc_now(),
+                trace_id,
+                span_id,
             ],
         )
+        record_suspension("question", self.tool_name, question_type)
         raise QuestionPending(question)
 
     async def mark_questions_consumed(self):
@@ -293,6 +301,7 @@ class ToolContext:
                 ).first()
                 status = existing["status"]
             if status in ("completed", "expired", "cancelled"):
+                mark_tool_replayed()
                 return json.loads(existing["result_json"])
             # Re-raising for an already-pending task (e.g. a second
             # suspended tool call re-executed on resume) must not
@@ -300,11 +309,12 @@ class ToolContext:
             raise BrowserTaskPending(task_row_to_dict(existing))
 
         task_id = str(ULID())
+        trace_id, span_id = current_span_ids()
         await db.execute_write(
             "INSERT INTO agent_browser_tasks "
             "(id, conversation_id, call_key, task_index, tool_name, label, "
-            "html, payload_json, timeout_ms, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            "html, payload_json, timeout_ms, status, created_at, trace_id, span_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
             [
                 task_id,
                 self.conversation_id,
@@ -316,8 +326,11 @@ class ToolContext:
                 json.dumps(payload) if payload is not None else None,
                 timeout_ms,
                 _utc_now(),
+                trace_id,
+                span_id,
             ],
         )
+        record_suspension("browser_task", self.tool_name)
         row = (
             await db.execute(
                 "SELECT * FROM agent_browser_tasks WHERE id = ?", [task_id]

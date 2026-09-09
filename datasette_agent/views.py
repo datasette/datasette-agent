@@ -7,6 +7,7 @@ from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
 from .agent import resume_agent, run_agent
+from .telemetry import record_suspension_wait
 from .browser_tasks import (
     MAX_RESULT_BYTES,
     cancel_task,
@@ -406,11 +407,13 @@ async def api_answer_question(request, datasette):
             return Response.json({"error": "Answer must be a string"}, status=400)
 
     now = datetime.now(timezone.utc).isoformat()
-    await db.execute_write(
+    result = await db.execute_write(
         "UPDATE agent_questions SET status = 'answered', answer_json = ?, "
         "answered_by = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
         [json.dumps(answer), actor_id, now, question_id],
     )
+    if result.rowcount == 1:
+        record_suspension_wait("question", "answered", question["created_at"])
 
     async def stream_fn(writer):
         await resume_agent(
@@ -418,6 +421,8 @@ async def api_answer_question(request, datasette):
             actor=request.actor,
             conversation_id=conversation_id,
             writer=writer,
+            resumed_from="question",
+            suspended_row=question,
         )
 
     return AsgiStream(
@@ -531,11 +536,12 @@ async def _task_request_checks(request, datasette):
     return db, task, None
 
 
-def _resume_stream(request, datasette, conversation_id):
+def _resume_stream(request, datasette, conversation_id, task=None):
     """Stream the resumed turn back on this response, exactly as the
     question-answer endpoint does - the completing tab is the tab
     watching the conversation, so it receives the resumed turn's
-    events on the same connection.
+    events on the same connection. ``task`` is the browser-task row
+    being resumed from, when there is one.
     """
 
     async def stream_fn(writer):
@@ -544,6 +550,8 @@ def _resume_stream(request, datasette, conversation_id):
             actor=request.actor,
             conversation_id=conversation_id,
             writer=writer,
+            resumed_from="browser_task",
+            suspended_row=task,
         )
 
     return AsgiStream(
@@ -627,7 +635,7 @@ async def api_complete_task(request, datasette):
     if state is not None:
         return Response.json({"ok": False, "state": state}, status=400)
 
-    return _resume_stream(request, datasette, task["conversation_id"])
+    return _resume_stream(request, datasette, task["conversation_id"], task)
 
 
 async def api_cancel_task(request, datasette):
@@ -642,7 +650,7 @@ async def api_cancel_task(request, datasette):
     if state is not None:
         return Response.json({"ok": False, "state": state}, status=400)
 
-    return _resume_stream(request, datasette, task["conversation_id"])
+    return _resume_stream(request, datasette, task["conversation_id"], task)
 
 
 async def api_resume_conversation(request, datasette):

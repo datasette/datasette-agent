@@ -22,6 +22,7 @@ from .questions import QuestionPending
 from .schema import ensure_tables
 from .telemetry import (
     chat_span,
+    link_kwargs,
     record_tool_output_truncated,
     system_prompt_span,
     turn_span,
@@ -406,8 +407,21 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             await _send_sse(writer, "error", {"message": str(e)})
 
 
-async def resume_agent(datasette, actor, conversation_id, writer):
+async def resume_agent(
+    datasette,
+    actor,
+    conversation_id,
+    writer,
+    *,
+    resumed_from=None,
+    suspended_row=None,
+):
     """Resume a conversation suspended on ask_user() or browser_task().
+
+    resumed_from ("question" / "browser_task") and suspended_row (the
+    agent_questions or agent_browser_tasks row, carrying the trace_id /
+    span_id of the tool span that suspended) are telemetry: the resumed
+    turn records what it continues from and links back to that span.
 
     The persisted history ends in an assistant message with unresolved
     tool calls, so the llm chain re-executes them through the normal
@@ -421,7 +435,13 @@ async def resume_agent(datasette, actor, conversation_id, writer):
 
     current_conversation_id.set(conversation_id)
 
-    with turn_span(mode="resume", conversation_id=conversation_id) as turn:
+    link = {}
+    if suspended_row is not None:
+        link = link_kwargs(
+            _row_get(suspended_row, "trace_id"), _row_get(suspended_row, "span_id")
+        )
+    with turn_span(mode="resume", conversation_id=conversation_id, **link) as turn:
+        turn.set_resumed_from(resumed_from)
         try:
             pending = await _run_chain(
                 datasette, actor, conversation_id, writer, prompt_text=None, turn=turn
@@ -430,6 +450,14 @@ async def resume_agent(datasette, actor, conversation_id, writer):
         except Exception as e:
             turn.fail(e)
             await _send_sse(writer, "error", {"message": str(e)})
+
+
+def _row_get(row, key):
+    "Read an optional column off a sqlite3.Row or dict."
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
 
 
 # Re-exports for background_agent.py / cli_chat.py compatibility.

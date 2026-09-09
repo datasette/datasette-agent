@@ -30,12 +30,19 @@ import asyncio
 import json
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 import llm
-
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace as otel_trace
-from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.trace import (
+    Link,
+    SpanContext,
+    SpanKind,
+    Status,
+    StatusCode,
+    TraceFlags,
+)
 
 from . import __version__
 from .telemetry_registry import (
@@ -56,7 +63,15 @@ from .telemetry_registry import (
     TOOL_OUTCOME,
     TOOL_OUTPUT_BYTES,
     TOOL_PLUGIN,
-    TOOL_SUSPENDED_ON,
+    SUSPENSION_KIND,
+    SUSPENSION_RESOLUTION,
+    QUESTION_TYPE,
+    QUESTION_ID,
+    TASK_ID,
+    TOOL_REPLAYED,
+    RESUMED_FROM,
+    M_SUSPENSIONS,
+    M_SUSPENSION_WAIT,
     CHAIN_INDEX,
     CHAIN_STEPS,
     CHAT,
@@ -158,6 +173,10 @@ tool_duration = _histogram(M_TOOL_DURATION, "Duration of one tool call, by outco
 background_iterations = _histogram(
     M_BACKGROUND_ITERATIONS, "Loop passes per background agent run, by outcome"
 )
+suspensions = _counter(M_SUSPENSIONS, "Turns suspended waiting on a human")
+suspension_wait = _histogram(
+    M_SUSPENSION_WAIT, "Seconds a suspension waited for its resolution"
+)
 tool_output_truncated = _counter(
     M_TOOL_OUTPUT_TRUNCATED, "Tool outputs cut down before the model saw them"
 )
@@ -232,6 +251,12 @@ class TurnRecorder:
 
     def set_iterations(self, iterations):
         self.iterations = iterations
+
+    def set_resumed_from(self, kind):
+        if kind is not None and self.span.is_recording():
+            self.span.set_attribute(
+                RESUMED_FROM, clamp(kind, RESUMED_FROM.values, "question")
+            )
 
     def set_model(self, model):
         self.model_id = _model_id(model)
@@ -560,12 +585,24 @@ class ToolRecorder:
         self.outcome = "suspended"
         # QuestionPending carries .question, BrowserTaskPending .task;
         # matched by attribute so this module does not import either.
-        if hasattr(exception, "question"):
+        question = getattr(exception, "question", None)
+        task = getattr(exception, "task", None)
+        if isinstance(question, dict):
             self.suspended_on = "question"
-        elif hasattr(exception, "task"):
+        elif isinstance(task, dict):
             self.suspended_on = "browser_task"
-        if self.span.is_recording() and self.suspended_on is not None:
-            self.span.set_attribute(TOOL_SUSPENDED_ON, self.suspended_on)
+        if not self.span.is_recording() or self.suspended_on is None:
+            return
+        self.span.set_attribute(SUSPENSION_KIND, self.suspended_on)
+        if question is not None:
+            self.span.set_attribute(
+                QUESTION_TYPE,
+                clamp(question.get("question_type"), QUESTION_TYPE.values, "text"),
+            )
+            if question.get("id"):
+                self.span.set_attribute(QUESTION_ID, str(question["id"]))
+        elif task.get("id"):
+            self.span.set_attribute(TASK_ID, str(task["id"]))
 
     def _fail(self, exception):
         self.outcome = "error"
@@ -623,3 +660,78 @@ def tool_span(agent_tool, *, tool_call_id=None, arguments=None):
 def record_tool_output_truncated(tool_name):
     "Count one tool output that ``prepare_tool_output_for_model`` cut down."
     tool_output_truncated.add(1, {GEN_AI_TOOL_NAME: tool_name})
+
+
+# --- Suspensions ----------------------------------------------------------
+
+
+def record_suspension(kind, tool_name, question_type=None):
+    """Count a *new* suspension - call where the pending row is inserted,
+    not where an already-pending suspension re-raises on resume."""
+    attributes = {
+        SUSPENSION_KIND: clamp(kind, SUSPENSION_KIND.values, "question"),
+        GEN_AI_TOOL_NAME: tool_name,
+    }
+    if question_type is not None:
+        attributes[QUESTION_TYPE] = clamp(question_type, QUESTION_TYPE.values, "text")
+    suspensions.add(1, attributes)
+
+
+def record_suspension_wait(kind, resolution, created_at):
+    """Record how long a suspension waited, from the row's ``created_at``
+    ISO timestamp to now. Call after the resolving UPDATE succeeded."""
+    try:
+        created = datetime.fromisoformat(created_at)
+    except (TypeError, ValueError):
+        return
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    waited = max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
+    suspension_wait.record(
+        waited,
+        {
+            SUSPENSION_KIND: clamp(kind, SUSPENSION_KIND.values, "question"),
+            SUSPENSION_RESOLUTION: clamp(
+                resolution, SUSPENSION_RESOLUTION.values, "answered"
+            ),
+        },
+    )
+
+
+def mark_tool_replayed():
+    """Flag the current ``execute_tool`` span as a replay: the call
+    consumed a stored answer or result instead of suspending."""
+    span = otel_trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute(TOOL_REPLAYED, True)
+
+
+def current_span_ids():
+    """``(trace_id, span_id)`` of the current span as W3C lowercase hex,
+    or ``(None, None)`` when nothing is recording - so a suspension row
+    written with no provider installed carries NULLs, not fake ids."""
+    span = otel_trace.get_current_span()
+    context = span.get_span_context()
+    if not span.is_recording() or not context.is_valid:
+        return None, None
+    return format(context.trace_id, "032x"), format(context.span_id, "016x")
+
+
+def link_kwargs(trace_id, span_id):
+    """``start_as_current_span`` kwargs linking to a persisted span - the
+    resumed turn pointing back at the ``execute_tool`` span that
+    suspended. Empty when the ids are missing or malformed."""
+    if not trace_id or not span_id:
+        return {}
+    try:
+        context = SpanContext(
+            trace_id=int(trace_id, 16),
+            span_id=int(span_id, 16),
+            is_remote=True,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        )
+    except (TypeError, ValueError):
+        return {}
+    if not context.is_valid:
+        return {}
+    return {"links": [Link(context)]}

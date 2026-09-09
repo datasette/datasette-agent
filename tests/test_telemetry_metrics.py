@@ -9,9 +9,10 @@ pytest.importorskip("opentelemetry.sdk")
 
 from test_telemetry import (  # noqa: E402
     GOAL_TOOL_THEN_FINISH,
-    ask_tool_plugin,  # noqa: F401  (fixture)
     send_message,
     start_conversation,
+    suspend_on_browser_task,
+    task_post,
     tool_call_prompt,
     wait_for_agent,
 )
@@ -149,7 +150,7 @@ def test_active_turns_counter_moves_with_the_turn(otel_metrics):
 
 
 @pytest.mark.asyncio
-async def test_tool_metrics(ds, cookies, otel_metrics, ask_tool_plugin):  # noqa: F811
+async def test_tool_metrics(ds, cookies, otel_metrics, telemetry_ask_tools):
     conversation_id = await start_conversation(ds, cookies)
     await send_message(
         ds,
@@ -213,3 +214,83 @@ async def test_background_run_metrics(ds, otel_metrics):
     # The two model responses of the one iteration.
     assert otel_metrics.point("gen_ai.client.operation.duration", CHAT_ATTRS).count == 2
     assert not otel_metrics.points("datasette_agent.chat.time_to_first_token")
+
+
+@pytest.mark.asyncio
+async def test_question_suspension_metrics(
+    ds, cookies, otel_metrics, telemetry_ask_tools
+):
+    conversation_id = await start_conversation(ds, cookies)
+    events = await send_message(
+        ds, cookies, conversation_id, tool_call_prompt(("approve_edit", {"path": "/x"}))
+    )
+    (question,) = [e["data"] for e in events if e["event"] == "question"]
+    otel_metrics.collect()
+    suspended = otel_metrics.point(
+        "datasette_agent.suspensions",
+        {
+            "datasette_agent.suspension.kind": "question",
+            "gen_ai.tool.name": "approve_edit",
+            "datasette_agent.question.type": "boolean",
+        },
+    )
+    assert suspended.value == 1
+    assert not otel_metrics.points("datasette_agent.suspension.wait")
+
+    response = await ds.client.post(
+        "/-/agent/{}/question/{}".format(conversation_id, question["id"]),
+        content=json.dumps({"answer": True}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    otel_metrics.collect()
+    wait = otel_metrics.point(
+        "datasette_agent.suspension.wait",
+        {
+            "datasette_agent.suspension.kind": "question",
+            "datasette_agent.suspension.resolution": "answered",
+        },
+    )
+    assert wait.count == 1 and 0 <= wait.sum < 5
+    # The replayed call on resume is not a new suspension: nothing new
+    # since the previous (delta) collect.
+    assert not otel_metrics.points("datasette_agent.suspensions")
+
+
+@pytest.mark.asyncio
+async def test_browser_task_wait_by_resolution(
+    ds, cookies, otel_metrics, otel_spans, telemetry_browser_tools
+):
+    from datasette_agent.browser_tasks import expire_task
+
+    conversation_id, task = await suspend_on_browser_task(ds, cookies, otel_spans)
+    response = await task_post(
+        ds, cookies, conversation_id, task["id"], "complete", {"ok": True}
+    )
+    assert response.status_code == 200, response.text
+    conversation_id, cancelled = await suspend_on_browser_task(ds, cookies, otel_spans)
+    response = await task_post(ds, cookies, conversation_id, cancelled["id"], "cancel")
+    assert response.status_code == 200, response.text
+    _, expired = await suspend_on_browser_task(ds, cookies, otel_spans)
+    assert await expire_task(ds.get_internal_database(), expired["id"]) is True
+    # Second expiry of the same row is a no-op and records nothing.
+    assert await expire_task(ds.get_internal_database(), expired["id"]) is False
+
+    otel_metrics.collect()
+    for resolution in ("completed", "cancelled", "expired"):
+        point = otel_metrics.point(
+            "datasette_agent.suspension.wait",
+            {
+                "datasette_agent.suspension.kind": "browser_task",
+                "datasette_agent.suspension.resolution": resolution,
+            },
+        )
+        assert point.count == 1, resolution
+    assert (
+        otel_metrics.point(
+            "datasette_agent.suspensions",
+            {"datasette_agent.suspension.kind": "browser_task"},
+        ).value
+        == 3
+    )

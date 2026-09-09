@@ -100,7 +100,6 @@ from datasette.telemetry_testing import (  # noqa: E402
 )
 
 from test_telemetry import (  # noqa: E402
-    ask_tool_plugin,  # noqa: F401  (fixture)
     parse_sse,
     send_message,
     start_background_via_api,
@@ -194,7 +193,9 @@ async def exercise(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_conformance(tmp_path, otel_spans, otel_metrics, ask_tool_plugin, capsys):  # noqa: F811
+async def test_conformance(
+    tmp_path, otel_spans, otel_metrics, telemetry_ask_tools, capsys
+):
     ds = await exercise(tmp_path)
     finished = otel_spans.get_finished_spans()
     # One collect() only: the reader is delta-temporality, so anything an
@@ -244,6 +245,8 @@ EXPECTED_METRICS = {
     "datasette_agent.tool.duration",
     "datasette_agent.tool.output.truncated",
     "datasette_agent.background.iterations",
+    "datasette_agent.suspensions",
+    "datasette_agent.suspension.wait",
 }
 
 EXPECTED_ATTRIBUTES = {
@@ -280,7 +283,13 @@ EXPECTED_ATTRIBUTES = {
     "gen_ai.tool.type",
     "datasette_agent.tool.plugin",
     "datasette_agent.tool.outcome",
-    "datasette_agent.tool.suspended_on",
+    "datasette_agent.suspension.kind",
+    "datasette_agent.suspension.resolution",
+    "datasette_agent.question.type",
+    "datasette_agent.question.id",
+    "datasette_agent.task.id",
+    "datasette_agent.tool.replayed",
+    "datasette_agent.resumed_from",
     "datasette_agent.tool.output.bytes",
     "datasette_agent.sql.display",
     "error.type",

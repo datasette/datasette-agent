@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 
 import llm
 
+from .telemetry import record_suspension_wait
+
 # Server-enforced ceiling on timeout_ms - a task cannot stay claimable
 # for longer than this.
 MAX_TIMEOUT_MS = 600_000  # 10 minutes
@@ -123,7 +125,21 @@ async def expire_task(db, task_id):
         "completed_at = ? WHERE id = ? AND status IN ('pending', 'running')",
         [json.dumps(expired_envelope()), _utc_now(), task_id],
     )
-    return result.rowcount == 1
+    if result.rowcount != 1:
+        return False
+    await _record_wait(db, task_id, "expired")
+    return True
+
+
+async def _record_wait(db, task_id, resolution):
+    "Record the suspension wait for a task this call just resolved."
+    row = (
+        await db.execute(
+            "SELECT created_at FROM agent_browser_tasks WHERE id = ?", [task_id]
+        )
+    ).first()
+    if row is not None:
+        record_suspension_wait("browser_task", resolution, row["created_at"])
 
 
 async def expire_overdue_tasks(db, conversation_id):
@@ -207,6 +223,7 @@ async def complete_task(db, task_id, envelope, actor_id):
             )
         ).first()
         return current["status"] if current else "not_found"
+    record_suspension_wait("browser_task", "completed", row["created_at"])
     return None
 
 
@@ -222,6 +239,7 @@ async def cancel_task(db, task_id, actor_id):
         [json.dumps(cancelled_envelope()), _utc_now(), actor_id, task_id],
     )
     if result.rowcount == 1:
+        await _record_wait(db, task_id, "cancelled")
         return None
     current = (
         await db.execute(

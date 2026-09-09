@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS agent_questions (
     answer_json TEXT,
     answered_by TEXT,
     created_at TEXT NOT NULL,
-    answered_at TEXT
+    answered_at TEXT,
+    trace_id TEXT,
+    span_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_questions_conversation
     ON agent_questions(conversation_id, status);
@@ -86,7 +88,9 @@ CREATE TABLE IF NOT EXISTS agent_browser_tasks (
     claimed_at TEXT,
     claimed_by TEXT,
     completed_at TEXT,
-    completed_by TEXT
+    completed_by TEXT,
+    trace_id TEXT,
+    span_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_conversation
     ON agent_browser_tasks(conversation_id, status);
@@ -107,13 +111,24 @@ CREATE TABLE IF NOT EXISTS agent_explorer_reports (
 """
 
 
+# Columns added after their tables first shipped; CREATE TABLE IF NOT
+# EXISTS won't add them to existing databases. trace_id / span_id are the
+# OpenTelemetry ids of the execute_tool span a suspension was raised
+# from, as W3C lowercase hex - NULL when no tracing provider was
+# installed - so the resumed turn can link back to it.
+_MIGRATIONS = {
+    "agent_questions": ("html", "trace_id", "span_id"),
+    "agent_browser_tasks": ("trace_id", "span_id"),
+}
+
+
 async def ensure_tables(db):
     await db.execute_write_script(SCHEMA_SQL)
-    # Migration: agent_questions.html was added after the table first
-    # shipped; CREATE TABLE IF NOT EXISTS won't add it to existing DBs.
-    question_columns = [
-        row["name"]
-        for row in (await db.execute("PRAGMA table_info(agent_questions)")).rows
-    ]
-    if "html" not in question_columns:
-        await db.execute_write("ALTER TABLE agent_questions ADD COLUMN html TEXT")
+    for table, columns in _MIGRATIONS.items():
+        existing = {
+            row["name"]
+            for row in (await db.execute(f"PRAGMA table_info({table})")).rows
+        }
+        for column in columns:
+            if column not in existing:
+                await db.execute_write(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")

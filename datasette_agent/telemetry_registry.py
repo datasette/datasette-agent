@@ -318,9 +318,52 @@ TOOL_OUTCOME = Attribute(
     "request to it was wrong.",
     values={"ok", "error", "suspended", "permission_denied", "not_found"},
 )
-TOOL_SUSPENDED_ON = Attribute(
-    "datasette_agent.tool.suspended_on",
-    "What the tool suspended the turn on, when ``outcome=suspended``.",
+SUSPENSION_KIND = Attribute(
+    "datasette_agent.suspension.kind",
+    "What a tool suspended the turn on: an ``ask_user()`` question or a "
+    "``browser_task()``. On the ``execute_tool`` span when "
+    "``outcome=suspended``; the dimension of the suspension metrics.",
+    values={"question", "browser_task"},
+    optional=True,
+)
+SUSPENSION_RESOLUTION = Attribute(
+    "datasette_agent.suspension.resolution",
+    "How a suspension ended: a question was ``answered``; a browser task "
+    "was ``completed`` by the page, ``cancelled`` by the user, or "
+    "``expired`` past its deadline. Expiry is recorded lazily, when "
+    "someone next looks, so an expired wait is at least the timeout and "
+    "possibly much more.",
+    values={"answered", "completed", "cancelled", "expired"},
+)
+QUESTION_TYPE = Attribute(
+    "datasette_agent.question.type",
+    "The ``ask_user()`` question's shape: yes/no, a choice, or free text. "
+    "Never the prompt or the options.",
+    values={"boolean", "choice", "text"},
+    optional=True,
+)
+QUESTION_ID = Attribute(
+    "datasette_agent.question.id",
+    "The ``agent_questions`` row the tool suspended on. Spans only.",
+    optional=True,
+)
+TASK_ID = Attribute(
+    "datasette_agent.task.id",
+    "The ``agent_browser_tasks`` row the tool suspended on. Spans only.",
+    optional=True,
+)
+TOOL_REPLAYED = Attribute(
+    "datasette_agent.tool.replayed",
+    "``True`` when the tool call consumed a stored answer or browser-task "
+    "result instead of suspending - the re-execution of a suspended call "
+    "on resume. Absent on a fresh call.",
+    optional=True,
+)
+RESUMED_FROM = Attribute(
+    "datasette_agent.resumed_from",
+    "For ``mode=resume``: what the turn is continuing from. The span also "
+    "carries a link to the ``execute_tool`` span that suspended, when its "
+    "trace context was persisted with the row.",
     values={"question", "browser_task"},
     optional=True,
 )
@@ -407,7 +450,13 @@ ATTRIBUTES = (
     GEN_AI_TOOL_TYPE,
     TOOL_PLUGIN,
     TOOL_OUTCOME,
-    TOOL_SUSPENDED_ON,
+    SUSPENSION_KIND,
+    SUSPENSION_RESOLUTION,
+    QUESTION_TYPE,
+    QUESTION_ID,
+    TASK_ID,
+    TOOL_REPLAYED,
+    RESUMED_FROM,
     TOOL_OUTPUT_BYTES,
     SQL_DISPLAY,
     ERROR_TYPE,
@@ -450,6 +499,7 @@ INVOKE_AGENT = SpanName(
         CHAIN_STEPS,
         TOOL_CALLS,
         NOTIFICATIONS_DRAINED,
+        RESUMED_FROM,
         BACKGROUND_ID,
         BACKGROUND_ITERATIONS,
         BACKGROUND_MAX_ITERATIONS,
@@ -507,8 +557,11 @@ EXECUTE_TOOL = SpanName(
     "nested internal ``SERVER`` span ``execute_write_sql`` produces by "
     "posting through ``datasette.client`` (core marks that one "
     "``datasette.internal_client: true``). Arguments and output are never "
-    "recorded; a suspension is a ``suspended`` event carrying the question "
-    "or task id, never an error.",
+    "recorded; a suspension is ``outcome=suspended`` with the question or "
+    "task id, never an error. The span ends when the tool raises; the "
+    "human wait that follows is not a span (it can outlive the process) "
+    "but the ``suspension.wait`` histogram, and the resumed turn links "
+    "back here.",
     (
         GEN_AI_OPERATION_NAME,
         GEN_AI_TOOL_NAME,
@@ -516,7 +569,11 @@ EXECUTE_TOOL = SpanName(
         GEN_AI_TOOL_TYPE,
         TOOL_PLUGIN,
         TOOL_OUTCOME,
-        TOOL_SUSPENDED_ON,
+        SUSPENSION_KIND,
+        QUESTION_TYPE,
+        QUESTION_ID,
+        TASK_ID,
+        TOOL_REPLAYED,
         TOOL_OUTPUT_BYTES,
         SQL_DISPLAY,
         ERROR_TYPE,
@@ -617,6 +674,26 @@ M_TURNS_ACTIVE = MetricName(
     "running.",
     (MODE,),
 )
+M_SUSPENSIONS = MetricName(
+    "datasette_agent.suspensions",
+    COUNTER,
+    "{suspension}",
+    "Turns suspended waiting on a human, by kind and asking tool - "
+    "counted when the pending row is inserted, not when a suspended call "
+    "re-raises on resume. How often the agent stops to ask.",
+    (SUSPENSION_KIND, GEN_AI_TOOL_NAME, QUESTION_TYPE),
+)
+M_SUSPENSION_WAIT = MetricName(
+    "datasette_agent.suspension.wait",
+    HISTOGRAM,
+    "s",
+    "Seconds from a suspension's row being created to its resolution - "
+    "how long people take to answer, and how often browser tasks expire. "
+    "Recorded at the four resolution sites after their guarded UPDATE "
+    "succeeds, so a lost race is not double-counted.",
+    (SUSPENSION_KIND, SUSPENSION_RESOLUTION),
+    buckets=HUMAN_WAIT_BUCKETS,
+)
 M_BACKGROUND_ITERATIONS = MetricName(
     "datasette_agent.background.iterations",
     HISTOGRAM,
@@ -662,4 +739,6 @@ METRICS = (
     M_TOOL_DURATION,
     M_TOOL_OUTPUT_TRUNCATED,
     M_BACKGROUND_ITERATIONS,
+    M_SUSPENSIONS,
+    M_SUSPENSION_WAIT,
 )

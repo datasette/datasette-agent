@@ -19,12 +19,9 @@ import sys
 import textwrap
 
 import pytest
-from datasette import hookimpl
 from datasette.app import Datasette
-from datasette.plugins import pm
 from opentelemetry.trace import SpanKind, StatusCode
 
-from datasette_agent.tools import AgentTool
 
 pytest.importorskip("opentelemetry.sdk")
 
@@ -109,68 +106,6 @@ def tool_call_prompt(*calls):
             "tool_calls": [{"name": name, "arguments": args} for name, args in calls],
         }
     )
-
-
-@pytest.fixture
-def ask_tool_plugin():
-    class AskToolPlugin:
-        __name__ = "AskToolPlugin"
-
-        @hookimpl
-        def register_agent_tools(self, datasette):
-            async def approve_edit(datasette, actor, context, path):
-                ok = await context.ask_user(
-                    "Is it OK to edit files in {}?".format(path)
-                )
-                return json.dumps({"approved": ok, "path": path})
-
-            async def explode(datasette, actor, path):
-                raise RuntimeError("tool blew up on {}".format(path))
-
-            async def big_output(datasette, actor):
-                return {"rows": "x" * 20000}
-
-            async def hang(datasette, actor):
-                await asyncio.Event().wait()
-
-            path_schema = {
-                "type": "object",
-                "properties": {"path": {"type": "string"}},
-                "required": ["path"],
-            }
-            return [
-                AgentTool(
-                    name="approve_edit",
-                    description="Edit files (asks first)",
-                    input_schema=path_schema,
-                    fn=approve_edit,
-                ),
-                AgentTool(
-                    name="explode",
-                    description="Raises",
-                    input_schema=path_schema,
-                    fn=explode,
-                ),
-                AgentTool(
-                    name="big_output",
-                    description="Returns more than the model may see",
-                    input_schema={"type": "object", "properties": {}},
-                    fn=big_output,
-                ),
-                AgentTool(
-                    name="hang",
-                    description="Never returns",
-                    input_schema={"type": "object", "properties": {}},
-                    fn=hang,
-                ),
-            ]
-
-    plugin = AskToolPlugin()
-    pm.register(plugin, name="AskToolPlugin")
-    try:
-        yield plugin
-    finally:
-        pm.unregister(name="AskToolPlugin")
 
 
 # --- Chat turns -----------------------------------------------------------
@@ -346,7 +281,7 @@ def test_unknown_mode_is_clamped(otel_spans):
 
 @pytest.mark.asyncio
 async def test_question_suspends_then_resume_turn(
-    ds, cookies, otel_spans, ask_tool_plugin
+    ds, cookies, otel_spans, telemetry_ask_tools
 ):
     conversation_id = await start_conversation(ds, cookies)
     otel_spans.clear()
@@ -358,8 +293,19 @@ async def test_question_suspends_then_resume_turn(
     )
     (question_event,) = [e for e in events if e["event"] == "question"]
     (turn,) = ours(otel_spans, "invoke_agent ")
+    (suspended_tool,) = ours(otel_spans, "execute_tool ")
     assert turn.attributes["datasette_agent.mode"] == "chat"
     assert turn.attributes["datasette_agent.outcome"] == "question"
+    assert "datasette_agent.resumed_from" not in turn.attributes
+    # The question row carries the tool span's ids.
+    row = (
+        await ds.get_internal_database().execute(
+            "SELECT trace_id, span_id FROM agent_questions WHERE id = ?",
+            [question_event["data"]["id"]],
+        )
+    ).first()
+    assert row["trace_id"] == format(suspended_tool.context.trace_id, "032x")
+    assert row["span_id"] == format(suspended_tool.context.span_id, "016x")
     assert turn.status.status_code == StatusCode.UNSET
     # The paused tool call is not a completed one.
     assert turn.attributes["datasette_agent.tool_calls"] == 0
@@ -379,6 +325,7 @@ async def test_question_suspends_then_resume_turn(
     (resume,) = ours(otel_spans, "invoke_agent ")
     assert resume.attributes["datasette_agent.mode"] == "resume"
     assert resume.attributes["datasette_agent.outcome"] == "done"
+    assert resume.attributes["datasette_agent.resumed_from"] == "question"
     assert resume.attributes["datasette_agent.tool_calls"] == 1
     # The replayed tool call, then one model response.
     assert resume.attributes["datasette_agent.chain.steps"] == 1
@@ -386,6 +333,16 @@ async def test_question_suspends_then_resume_turn(
         s for s in otel_spans.get_finished_spans() if s.kind == SpanKind.SERVER
     ]
     assert resume.parent.span_id == request.context.span_id
+    # The resumed turn links back to the tool span that suspended, whose
+    # ids were persisted with the question row...
+    (link,) = resume.links
+    assert link.context.trace_id == suspended_tool.context.trace_id
+    assert link.context.span_id == suspended_tool.context.span_id
+    # ...and the re-executed call is marked as a replay.
+    (replayed,) = ours(otel_spans, "execute_tool ")
+    assert replayed.attributes["datasette_agent.tool.replayed"] is True
+    assert replayed.attributes["datasette_agent.tool.outcome"] == "ok"
+    assert "datasette_agent.suspension.kind" not in replayed.attributes
 
 
 # --- Tool calls ---------------------------------------------------------------
@@ -489,7 +446,7 @@ async def test_tool_permission_denied_outcome(tmp_path, otel_spans):
 
 
 @pytest.mark.asyncio
-async def test_raising_tool_is_an_error(ds, cookies, otel_spans, ask_tool_plugin):
+async def test_raising_tool_is_an_error(ds, cookies, otel_spans, telemetry_ask_tools):
     events = await run_tool_call(
         ds, cookies, otel_spans, ("explode", {"path": "/SENTINEL-path"})
     )
@@ -509,19 +466,22 @@ async def test_raising_tool_is_an_error(ds, cookies, otel_spans, ask_tool_plugin
 
 
 @pytest.mark.asyncio
-async def test_suspending_tool_span(ds, cookies, otel_spans, ask_tool_plugin):
+async def test_suspending_tool_span(ds, cookies, otel_spans, telemetry_ask_tools):
     await run_tool_call(ds, cookies, otel_spans, ("approve_edit", {"path": "/tmp"}))
     (tool,) = ours(otel_spans, "execute_tool ")
     attrs = dict(tool.attributes)
     assert attrs["datasette_agent.tool.outcome"] == "suspended"
-    assert attrs["datasette_agent.tool.suspended_on"] == "question"
+    assert attrs["datasette_agent.suspension.kind"] == "question"
+    assert attrs["datasette_agent.question.type"] == "boolean"
+    assert len(attrs["datasette_agent.question.id"]) == 26
+    assert "datasette_agent.task.id" not in attrs
     assert "datasette_agent.tool.output.bytes" not in attrs
     assert tool.status.status_code == StatusCode.UNSET
     assert "error.type" not in attrs
 
 
 @pytest.mark.asyncio
-async def test_tools_learn_their_plugin(ds, ask_tool_plugin):
+async def test_tools_learn_their_plugin(ds, telemetry_ask_tools):
     from datasette_agent.tools import get_agent_tools
 
     tools = await get_agent_tools(ds)
@@ -556,6 +516,122 @@ def test_classify_tool_payload():
     assert classify_tool_payload('{"error": {"code": 1}}') == "error"
     assert classify_tool_payload('{"error"') == "ok"
     assert classify_tool_payload('["error"]') == "ok"
+
+
+# --- Browser tasks ----------------------------------------------------------------
+
+
+async def suspend_on_browser_task(ds, cookies, otel_spans):
+    conversation_id = await start_conversation(ds, cookies)
+    otel_spans.clear()
+    events = await send_message(
+        ds,
+        cookies,
+        conversation_id,
+        tool_call_prompt(("run_in_browser", {"script": "1 + 1"})),
+    )
+    (task,) = [e["data"] for e in events if e["event"] == "browser_task"]
+    return conversation_id, task
+
+
+async def task_post(ds, cookies, conversation_id, task_id, action, body=None):
+    return await ds.client.post(
+        "/-/agent/{}/task/{}/{}".format(conversation_id, task_id, action),
+        content=json.dumps(body or {}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+
+
+@pytest.mark.asyncio
+async def test_browser_task_suspends_and_completes(
+    ds, cookies, otel_spans, telemetry_browser_tools
+):
+    conversation_id, task = await suspend_on_browser_task(ds, cookies, otel_spans)
+    (tool,) = ours(otel_spans, "execute_tool ")
+    attrs = dict(tool.attributes)
+    assert attrs["datasette_agent.tool.outcome"] == "suspended"
+    assert attrs["datasette_agent.suspension.kind"] == "browser_task"
+    assert attrs["datasette_agent.task.id"] == task["id"]
+    assert "datasette_agent.question.type" not in attrs
+    (turn,) = ours(otel_spans, "invoke_agent ")
+    assert turn.attributes["datasette_agent.outcome"] == "browser_task"
+
+    otel_spans.clear()
+    claim = await task_post(ds, cookies, conversation_id, task["id"], "claim")
+    assert claim.status_code == 200, claim.text
+    complete = await task_post(
+        ds,
+        cookies,
+        conversation_id,
+        task["id"],
+        "complete",
+        {"ok": True, "result": 2},
+    )
+    assert complete.status_code == 200, complete.text
+    assert parse_sse(complete.text)[-1]["event"] == "done"
+
+    (resume,) = ours(otel_spans, "invoke_agent ")
+    assert resume.attributes["datasette_agent.mode"] == "resume"
+    assert resume.attributes["datasette_agent.resumed_from"] == "browser_task"
+    (link,) = resume.links
+    assert link.context.span_id == tool.context.span_id
+    (replayed,) = ours(otel_spans, "execute_tool ")
+    assert replayed.attributes["datasette_agent.tool.replayed"] is True
+
+
+@pytest.mark.asyncio
+async def test_browser_task_cancel_resumes_with_link(
+    ds, cookies, otel_spans, telemetry_browser_tools
+):
+    conversation_id, task = await suspend_on_browser_task(ds, cookies, otel_spans)
+    (tool,) = ours(otel_spans, "execute_tool ")
+    otel_spans.clear()
+    cancel = await task_post(ds, cookies, conversation_id, task["id"], "cancel")
+    assert cancel.status_code == 200, cancel.text
+    (resume,) = ours(otel_spans, "invoke_agent ")
+    assert resume.attributes["datasette_agent.resumed_from"] == "browser_task"
+    (link,) = resume.links
+    assert link.context.span_id == tool.context.span_id
+
+
+def test_link_kwargs_rejects_bad_ids():
+    from datasette_agent.telemetry import link_kwargs
+
+    assert link_kwargs(None, None) == {}
+    assert link_kwargs("", "abc") == {}
+    assert link_kwargs("not-hex", "0123456789abcdef") == {}
+    assert link_kwargs("0" * 32, "0" * 16) == {}
+    (link,) = link_kwargs("1" * 32, "2" * 16)["links"]
+    assert link.context.is_remote is True
+    assert format(link.context.trace_id, "032x") == "1" * 32
+
+
+def test_current_span_ids_without_a_recording_span():
+    from datasette_agent.telemetry import current_span_ids
+
+    assert current_span_ids() == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_schema_migration_adds_trace_columns(tmp_path):
+    from datasette_agent.schema import SCHEMA_SQL, ensure_tables
+
+    ds = Datasette(memory=True, internal=str(tmp_path / "internal.db"))
+    db = ds.get_internal_database()
+    # A database from before the columns existed.
+    old_sql = SCHEMA_SQL.replace(",\n    trace_id TEXT,\n    span_id TEXT\n", "\n")
+    assert "trace_id" not in old_sql
+    await db.execute_write_script(old_sql)
+    await ensure_tables(db)
+    for table in ("agent_questions", "agent_browser_tasks"):
+        columns = {
+            row["name"]
+            for row in (await db.execute(f"PRAGMA table_info({table})")).rows
+        }
+        assert {"trace_id", "span_id"} <= columns, table
+    # Idempotent.
+    await ensure_tables(db)
 
 
 # --- Background agents ----------------------------------------------------------
@@ -669,7 +745,7 @@ async def test_explorer_run_hits_iteration_limit(ds, otel_spans, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_background_run(ds, cookies, otel_spans, ask_tool_plugin):
+async def test_cancelled_background_run(ds, cookies, otel_spans, telemetry_ask_tools):
     agent_id = await start_background_via_api(
         ds, cookies, tool_call_prompt(("hang", {}))
     )
