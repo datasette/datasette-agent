@@ -13,13 +13,19 @@ from .messages import (
     make_user_message_dict,
     message_dict_text,
     prepare_tool_output_for_model,
+    tool_output_was_truncated,
     strip_internal_keys,
 )
 from .browser_tasks import BrowserTaskPending
 from .models import AGENT_PURPOSE
 from .questions import QuestionPending
 from .schema import ensure_tables
-from .telemetry import chat_span, system_prompt_span, turn_span
+from .telemetry import (
+    chat_span,
+    record_tool_output_truncated,
+    system_prompt_span,
+    turn_span,
+)
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
@@ -227,6 +233,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, *, 
         )
         # Strip user-only keys and safely cap JSON before the model sees it.
         tool_result.output = prepare_tool_output_for_model(output)
+        if tool_output_was_truncated(tool_result.output):
+            record_tool_output_truncated(tool_result.name)
         turn.tool_call()
 
     chain_response = model.chain(

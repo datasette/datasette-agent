@@ -119,17 +119,36 @@ def ask_tool_plugin():
                 )
                 return json.dumps({"approved": ok, "path": path})
 
+            async def explode(datasette, actor, path):
+                raise RuntimeError("tool blew up on {}".format(path))
+
+            async def big_output(datasette, actor):
+                return {"rows": "x" * 20000}
+
+            path_schema = {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            }
             return [
                 AgentTool(
                     name="approve_edit",
                     description="Edit files (asks first)",
-                    input_schema={
-                        "type": "object",
-                        "properties": {"path": {"type": "string"}},
-                        "required": ["path"],
-                    },
+                    input_schema=path_schema,
                     fn=approve_edit,
-                )
+                ),
+                AgentTool(
+                    name="explode",
+                    description="Raises",
+                    input_schema=path_schema,
+                    fn=explode,
+                ),
+                AgentTool(
+                    name="big_output",
+                    description="Returns more than the model may see",
+                    input_schema={"type": "object", "properties": {}},
+                    fn=big_output,
+                ),
             ]
 
     plugin = AskToolPlugin()
@@ -353,6 +372,176 @@ async def test_question_suspends_then_resume_turn(
         s for s in otel_spans.get_finished_spans() if s.kind == SpanKind.SERVER
     ]
     assert resume.parent.span_id == request.context.span_id
+
+
+# --- Tool calls ---------------------------------------------------------------
+
+
+async def run_tool_call(ds, cookies, otel_spans, *calls):
+    conversation_id = await start_conversation(ds, cookies)
+    otel_spans.clear()
+    events = await send_message(ds, cookies, conversation_id, tool_call_prompt(*calls))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_tool_span_shape(ds, cookies, otel_spans):
+    await run_tool_call(
+        ds,
+        cookies,
+        otel_spans,
+        ("sql_query", {"database": "_memory", "sql": "select 1", "display": "both"}),
+    )
+    (turn,) = ours(otel_spans, "invoke_agent ")
+    (tool,) = ours(otel_spans, "execute_tool ")
+    assert tool.name == "execute_tool sql_query"
+    assert tool.kind == SpanKind.INTERNAL
+    assert tool.parent.span_id == turn.context.span_id
+    assert tool.status.status_code == StatusCode.UNSET
+    attrs = dict(tool.attributes)
+    assert attrs["gen_ai.operation.name"] == "execute_tool"
+    assert attrs["gen_ai.tool.name"] == "sql_query"
+    assert attrs["gen_ai.tool.type"] == "function"
+    assert attrs["datasette_agent.tool.plugin"] == "agent"
+    assert attrs["datasette_agent.tool.outcome"] == "ok"
+    assert attrs["datasette_agent.sql.display"] == "both"
+    assert attrs["datasette_agent.tool.output.bytes"] > 10
+    # llm issues an id for every tool call, and the provider's id (when it
+    # has one) is what lands here - never the argument-hash call key.
+    assert (
+        isinstance(attrs["gen_ai.tool.call.id"], str) and attrs["gen_ai.tool.call.id"]
+    )
+    assert not attrs["gen_ai.tool.call.id"].startswith("call:")
+    assert "error.type" not in attrs
+    # The SQL itself is never on the tool span...
+    assert "select 1" not in json.dumps(attrs)
+    # ...but core's db.query for it nests underneath.
+    queries = [
+        s
+        for s in otel_spans.get_finished_spans()
+        if s.name == "db.query"
+        and s.parent
+        and s.parent.span_id == tool.context.span_id
+    ]
+    assert any(s.attributes.get("db.query.text") == "select 1" for s in queries)
+    # Tool spans and chat spans are siblings under the turn.
+    chats = ours(otel_spans, "chat ")
+    assert all(c.parent.span_id == turn.context.span_id for c in chats)
+    assert chats[0].end_time <= tool.start_time <= chats[1].start_time
+
+
+@pytest.mark.asyncio
+async def test_tool_error_payloads_are_outcomes_not_errors(ds, cookies, otel_spans):
+    await run_tool_call(
+        ds,
+        cookies,
+        otel_spans,
+        ("sql_query", {"database": "nope", "sql": "select 1"}),
+        ("sql_query", {"database": "_memory", "sql": "select * from SENTINEL_missing"}),
+        ("describe_table", {"database": "_memory", "table": "absent"}),
+    )
+    tools = sorted(ours(otel_spans, "execute_tool "), key=lambda s: s.start_time)
+    outcomes = [t.attributes["datasette_agent.tool.outcome"] for t in tools]
+    assert outcomes == ["not_found", "error", "not_found"]
+    for tool in tools:
+        assert tool.status.status_code == StatusCode.UNSET
+        assert "error.type" not in tool.attributes
+        assert "SENTINEL_missing" not in json.dumps(dict(tool.attributes))
+
+
+@pytest.mark.asyncio
+async def test_tool_permission_denied_outcome(tmp_path, otel_spans):
+    ds = Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {"datasette-agent": {"id": "user"}},
+            "databases": {
+                "_memory": {"permissions": {"execute-sql": {"id": "someone_else"}}}
+            },
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+    await run_tool_call(
+        ds,
+        cookies,
+        otel_spans,
+        ("sql_query", {"database": "_memory", "sql": "select 1"}),
+    )
+    (tool,) = ours(otel_spans, "execute_tool ")
+    assert tool.attributes["datasette_agent.tool.outcome"] == "permission_denied"
+    assert tool.status.status_code == StatusCode.UNSET
+
+
+@pytest.mark.asyncio
+async def test_raising_tool_is_an_error(ds, cookies, otel_spans, ask_tool_plugin):
+    events = await run_tool_call(
+        ds, cookies, otel_spans, ("explode", {"path": "/SENTINEL-path"})
+    )
+    # llm turns the exception into an error tool result; the turn goes on.
+    assert events[-1]["event"] == "done"
+    (tool,) = ours(otel_spans, "execute_tool ")
+    assert tool.name == "execute_tool explode"
+    attrs = dict(tool.attributes)
+    assert attrs["datasette_agent.tool.plugin"] == "AskToolPlugin"
+    assert attrs["datasette_agent.tool.outcome"] == "error"
+    assert attrs["error.type"] == "RuntimeError"
+    assert tool.status.status_code == StatusCode.ERROR
+    assert "SENTINEL-path" not in json.dumps(attrs)
+    assert not tool.status.description
+    (turn,) = ours(otel_spans, "invoke_agent ")
+    assert turn.attributes["datasette_agent.outcome"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_suspending_tool_span(ds, cookies, otel_spans, ask_tool_plugin):
+    await run_tool_call(ds, cookies, otel_spans, ("approve_edit", {"path": "/tmp"}))
+    (tool,) = ours(otel_spans, "execute_tool ")
+    attrs = dict(tool.attributes)
+    assert attrs["datasette_agent.tool.outcome"] == "suspended"
+    assert attrs["datasette_agent.tool.suspended_on"] == "question"
+    assert "datasette_agent.tool.output.bytes" not in attrs
+    assert tool.status.status_code == StatusCode.UNSET
+    assert "error.type" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_tools_learn_their_plugin(ds, ask_tool_plugin):
+    from datasette_agent.tools import get_agent_tools
+
+    tools = await get_agent_tools(ds)
+    by_name = {tool.name: tool.plugin_name for tool in tools}
+    assert by_name["sql_query"] == "agent"
+    assert by_name["approve_edit"] == "AskToolPlugin"
+    # Order is what pluggy would have produced: last registered first.
+    assert list(by_name)[0] == "approve_edit"
+
+
+def test_classify_tool_payload():
+    from datasette_agent.telemetry import classify_tool_payload
+
+    assert classify_tool_payload("") == "ok"
+    assert classify_tool_payload("plain text") == "ok"
+    assert classify_tool_payload('{"rows": []}') == "ok"
+    assert (
+        classify_tool_payload('{"error": "Permission denied"}') == "permission_denied"
+    )
+    assert (
+        classify_tool_payload(
+            '{"ok": false, "error": "Permission denied: need execute-write-sql"}'
+        )
+        == "permission_denied"
+    )
+    assert classify_tool_payload('{"error": "Database \'x\' not found"}') == "not_found"
+    assert (
+        classify_tool_payload("{\"error\": \"Table 't' not found in database 'x'\"}")
+        == "not_found"
+    )
+    assert classify_tool_payload('{"error": "no such table: t"}') == "error"
+    assert classify_tool_payload('{"error": {"code": 1}}') == "error"
+    assert classify_tool_payload('{"error"') == "ok"
+    assert classify_tool_payload('["error"]') == "ok"
 
 
 # --- CLI ----------------------------------------------------------------------

@@ -277,6 +277,64 @@ PROMPT_CHARS = Attribute(
     "datasette_agent.prompt.chars",
     "Length of the built system prompt in characters. A size, never the text.",
 )
+GEN_AI_TOOL_NAME = Attribute(
+    "gen_ai.tool.name",
+    "The tool's registered name (``sql_query``, ``describe_table``, a "
+    "plugin's tool...). Bounded: the set of registered tools.",
+)
+GEN_AI_TOOL_CALL_ID = Attribute(
+    "gen_ai.tool.call.id",
+    "The provider's id for this tool call, when it issues one. Never the "
+    "argument-hash fallback the plugin derives for providers that do not. "
+    "Spans only.",
+    optional=True,
+)
+GEN_AI_TOOL_TYPE = Attribute(
+    "gen_ai.tool.type",
+    "Always ``function`` - every agent tool is a client-side function.",
+    values={"function"},
+)
+TOOL_PLUGIN = Attribute(
+    "datasette_agent.tool.plugin",
+    "The pluggy name of the plugin whose ``register_agent_tools`` hook "
+    "registered the tool (``agent`` for this plugin's own tools), or "
+    "``unknown`` for a tool constructed directly. Lets an operator see "
+    "that the slow tool came from ``datasette-foo``. Bounded by installed "
+    "plugins.",
+)
+TOOL_OUTCOME = Attribute(
+    "datasette_agent.tool.outcome",
+    "How the tool call ended. Most tools return errors *as data* - "
+    '``{"error": ...}`` is a successful call from llm\'s point of view '
+    "and a failed one from the operator's - so the returned payload is "
+    "classified too: ``permission_denied`` and ``not_found`` for the two "
+    "messages this plugin's own tools emit, ``error`` for any other "
+    "top-level ``error`` key or a raised exception, ``suspended`` when the "
+    "tool paused the turn on ``ask_user()`` / ``browser_task()``, ``ok`` "
+    "otherwise. Only a raised exception sets span status ``ERROR``; a "
+    "returned error payload means the tool did what it was asked and the "
+    "request to it was wrong.",
+    values={"ok", "error", "suspended", "permission_denied", "not_found"},
+)
+TOOL_SUSPENDED_ON = Attribute(
+    "datasette_agent.tool.suspended_on",
+    "What the tool suspended the turn on, when ``outcome=suspended``.",
+    values={"question", "browser_task"},
+    optional=True,
+)
+TOOL_OUTPUT_BYTES = Attribute(
+    "datasette_agent.tool.output.bytes",
+    "Length of the tool's returned string. A size, never the content.",
+)
+SQL_DISPLAY = Attribute(
+    "datasette_agent.sql.display",
+    "``sql_query`` only: the ``display`` mode the model picked. The "
+    "distribution is directly actionable - the system prompt is trying to "
+    "steer it. Rows, truncation and the SQL text are on the nested core "
+    "``db.query`` span; not duplicated here.",
+    values={"model", "both", "user"},
+    optional=True,
+)
 ERROR_TYPE = Attribute(
     "error.type",
     "Exception class name when the work raised; ``CancelledError`` when it "
@@ -310,6 +368,14 @@ ATTRIBUTES = (
     TOOL_CALLS_REQUESTED,
     DATABASES,
     PROMPT_CHARS,
+    GEN_AI_TOOL_NAME,
+    GEN_AI_TOOL_CALL_ID,
+    GEN_AI_TOOL_TYPE,
+    TOOL_PLUGIN,
+    TOOL_OUTCOME,
+    TOOL_SUSPENDED_ON,
+    TOOL_OUTPUT_BYTES,
+    SQL_DISPLAY,
     ERROR_TYPE,
 )
 
@@ -386,7 +452,34 @@ SYSTEM_PROMPT = SpanName(
     (DATABASES, PROMPT_CHARS),
 )
 
-SPANS = (INVOKE_AGENT, CHAT, SYSTEM_PROMPT)
+EXECUTE_TOOL = SpanName(
+    "execute_tool ",
+    "One tool invocation, named ``execute_tool {gen_ai.tool.name}``, "
+    "following the GenAI ``execute_tool`` convention. Every tool - this "
+    "plugin's own and any registered through ``register_agent_tools`` - "
+    "runs through one code path, so every call gets a span. Core's "
+    "``db.query`` spans issued by the tool nest under it, as does the "
+    "nested internal ``SERVER`` span ``execute_write_sql`` produces by "
+    "posting through ``datasette.client`` (core marks that one "
+    "``datasette.internal_client: true``). Arguments and output are never "
+    "recorded; a suspension is a ``suspended`` event carrying the question "
+    "or task id, never an error.",
+    (
+        GEN_AI_OPERATION_NAME,
+        GEN_AI_TOOL_NAME,
+        GEN_AI_TOOL_CALL_ID,
+        GEN_AI_TOOL_TYPE,
+        TOOL_PLUGIN,
+        TOOL_OUTCOME,
+        TOOL_SUSPENDED_ON,
+        TOOL_OUTPUT_BYTES,
+        SQL_DISPLAY,
+        ERROR_TYPE,
+    ),
+    prefix=True,
+)
+
+SPANS = (INVOKE_AGENT, CHAT, EXECUTE_TOOL, SYSTEM_PROMPT)
 
 
 # --- Metrics --------------------------------------------------------------
@@ -467,6 +560,29 @@ M_TURNS_ACTIVE = MetricName(
     (MODE,),
 )
 
+M_TOOL_DURATION = MetricName(
+    "datasette_agent.tool.duration",
+    HISTOGRAM,
+    "s",
+    "One measurement per ``execute_tool`` span. Per-tool call count and "
+    "error rate derive from its count, so there is no separate counter. "
+    "A ``suspended`` duration is the time until the tool raised - short, "
+    "and not the human wait.",
+    (GEN_AI_TOOL_NAME, TOOL_PLUGIN, TOOL_OUTCOME),
+    buckets=GENAI_DURATION_BUCKETS,
+)
+M_TOOL_OUTPUT_TRUNCATED = MetricName(
+    "datasette_agent.tool.output.truncated",
+    COUNTER,
+    "{call}",
+    "Tool outputs cut down before the model saw them. A high rate for "
+    "``sql_query`` means the model is over-fetching, or the model-visible "
+    "output limit is wrong for the workload. A counter rather than a "
+    "dimension on the duration histogram: truncation is an event to alert "
+    "on, not something to split latency by.",
+    (GEN_AI_TOOL_NAME,),
+)
+
 METRICS = (
     M_TOKEN_USAGE,
     M_OPERATION_DURATION,
@@ -474,4 +590,6 @@ METRICS = (
     M_TURN_DURATION,
     M_CHAIN_STEPS,
     M_TURNS_ACTIVE,
+    M_TOOL_DURATION,
+    M_TOOL_OUTPUT_TRUNCATED,
 )

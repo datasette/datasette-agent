@@ -45,7 +45,7 @@ def _approval_html(database, name, title, sql, is_write, is_private):
         for label, value in rows
         if value
     )
-    return '<table class="agent-save-query-details">{}</table>' "<pre>{}</pre>".format(
+    return '<table class="agent-save-query-details">{}</table><pre>{}</pre>'.format(
         details, html_module.escape(sql)
     )
 

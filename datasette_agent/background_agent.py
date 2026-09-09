@@ -11,8 +11,10 @@ from .messages import (
     make_tool_message_dict,
     make_user_message_dict,
     prepare_tool_output_for_model,
+    tool_output_was_truncated,
 )
 from .schema import ensure_tables
+from .telemetry import record_tool_output_truncated
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
 MAX_ITERATIONS = 50
@@ -140,6 +142,8 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     )
                 )
                 tool_result.output = prepare_tool_output_for_model(output)
+                if tool_output_was_truncated(tool_result.output):
+                    record_tool_output_truncated(tool_result.name)
 
             # supports_questions stays False: nobody is watching a
             # background agent to answer, so ask_user() tells the tool

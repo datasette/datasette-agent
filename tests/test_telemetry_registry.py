@@ -142,6 +142,21 @@ async def exercise(tmp_path):
             )
         ),
     )
+    # A tool whose output gets truncated, one that raises, and a SQL error
+    # whose message would echo the SQL.
+    await send_message(
+        ds,
+        cookies,
+        conversation_id,
+        tool_call_prompt(
+            ("big_output", {}),
+            ("explode", {"path": SENTINEL_USER_TEXT}),
+            (
+                "sql_query",
+                {"database": "_memory", "sql": f"select * from {SENTINEL_SQL}"},
+            ),
+        ),
+    )
     events = await send_message(
         ds,
         cookies,
@@ -196,6 +211,7 @@ async def test_conformance(tmp_path, otel_spans, otel_metrics, ask_tool_plugin, 
 EXPECTED_SPANS = {
     "invoke_agent datasette-agent",
     "chat ",
+    "execute_tool ",
     "datasette_agent.system_prompt",
 }
 
@@ -206,6 +222,8 @@ EXPECTED_METRICS = {
     "datasette_agent.turn.duration",
     "datasette_agent.chain.steps",
     "datasette_agent.turns.active",
+    "datasette_agent.tool.duration",
+    "datasette_agent.tool.output.truncated",
 }
 
 EXPECTED_ATTRIBUTES = {
@@ -232,6 +250,14 @@ EXPECTED_ATTRIBUTES = {
     "datasette_agent.tool_calls_requested",
     "datasette_agent.databases",
     "datasette_agent.prompt.chars",
+    "gen_ai.tool.name",
+    "gen_ai.tool.call.id",
+    "gen_ai.tool.type",
+    "datasette_agent.tool.plugin",
+    "datasette_agent.tool.outcome",
+    "datasette_agent.tool.suspended_on",
+    "datasette_agent.tool.output.bytes",
+    "datasette_agent.sql.display",
     "error.type",
 }
 
@@ -248,6 +274,8 @@ def test_wire_names_are_pinned():
 OPEN_BUT_BOUNDED = {
     "gen_ai.request.model",
     "gen_ai.provider.name",
+    "gen_ai.tool.name",
+    "datasette_agent.tool.plugin",
     "error.type",
 }
 

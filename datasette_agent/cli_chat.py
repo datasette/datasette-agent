@@ -10,10 +10,11 @@ from .messages import (
     make_tool_message_dict,
     make_user_message_dict,
     prepare_tool_output_for_model,
+    tool_output_was_truncated,
 )
 from .questions import QuestionsNotSupported
 from .schema import ensure_tables
-from .telemetry import chat_span, turn_span
+from .telemetry import chat_span, record_tool_output_truncated, turn_span
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
@@ -108,6 +109,8 @@ async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=Fals
             make_tool_message_dict(tool_result.name, output, tool_result.tool_call_id)
         )
         tool_result.output = prepare_tool_output_for_model(output)
+        if tool_output_was_truncated(tool_result.output):
+            record_tool_output_truncated(tool_result.name)
         if current["turn"] is not None:
             current["turn"].tool_call()
 

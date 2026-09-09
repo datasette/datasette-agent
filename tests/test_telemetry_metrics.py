@@ -8,6 +8,7 @@ from datasette.app import Datasette
 pytest.importorskip("opentelemetry.sdk")
 
 from test_telemetry import (  # noqa: E402
+    ask_tool_plugin,  # noqa: F401  (fixture)
     send_message,
     start_conversation,
     tool_call_prompt,
@@ -143,3 +144,40 @@ def test_active_turns_counter_moves_with_the_turn(otel_metrics):
         "datasette_agent.turns.active", {"datasette_agent.mode": "cli"}
     )
     assert after.value == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_metrics(ds, cookies, otel_metrics, ask_tool_plugin):  # noqa: F811
+    conversation_id = await start_conversation(ds, cookies)
+    await send_message(
+        ds,
+        cookies,
+        conversation_id,
+        tool_call_prompt(
+            ("sql_query", {"database": "_memory", "sql": "select 1"}),
+            ("sql_query", {"database": "nope", "sql": "select 1"}),
+            ("big_output", {}),
+        ),
+    )
+    otel_metrics.collect()
+    ok = otel_metrics.point(
+        "datasette_agent.tool.duration",
+        {
+            "gen_ai.tool.name": "sql_query",
+            "datasette_agent.tool.plugin": "agent",
+            "datasette_agent.tool.outcome": "ok",
+        },
+    )
+    assert ok.count == 1
+    not_found = otel_metrics.point(
+        "datasette_agent.tool.duration",
+        {"gen_ai.tool.name": "sql_query", "datasette_agent.tool.outcome": "not_found"},
+    )
+    assert not_found.count == 1
+    truncated = otel_metrics.point(
+        "datasette_agent.tool.output.truncated", {"gen_ai.tool.name": "big_output"}
+    )
+    assert truncated.value == 1
+    assert not otel_metrics.points(
+        "datasette_agent.tool.output.truncated", {"gen_ai.tool.name": "sql_query"}
+    )

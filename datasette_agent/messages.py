@@ -141,6 +141,16 @@ def _truncate_json_to_length(value, max_length):
     return truncated
 
 
+def tool_output_was_truncated(prepared):
+    """Whether ``prepare_tool_output_for_model`` cut ``prepared`` down.
+
+    Truncation always goes through the compact serializer, which spells
+    the marker exactly this way; the untruncated paths return the output
+    as it was or with default (spaced) separators.
+    """
+    return '"{}":true'.format(AGENT_OUTPUT_TRUNCATED_KEY) in (prepared or "")
+
+
 def prepare_tool_output_for_model(output, max_length=MODEL_TOOL_OUTPUT_LIMIT):
     """Strip user/export-only keys and cap model-visible JSON safely.
 

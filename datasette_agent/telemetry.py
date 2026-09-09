@@ -27,8 +27,11 @@ there is deliberately no local helper.
 """
 
 import asyncio
+import json
 import time
 from contextlib import contextmanager
+
+import llm
 
 from opentelemetry import metrics as otel_metrics
 from opentelemetry import trace as otel_trace
@@ -36,6 +39,17 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from . import __version__
 from .telemetry_registry import (
+    EXECUTE_TOOL,
+    GEN_AI_TOOL_CALL_ID,
+    GEN_AI_TOOL_NAME,
+    GEN_AI_TOOL_TYPE,
+    M_TOOL_DURATION,
+    M_TOOL_OUTPUT_TRUNCATED,
+    SQL_DISPLAY,
+    TOOL_OUTCOME,
+    TOOL_OUTPUT_BYTES,
+    TOOL_PLUGIN,
+    TOOL_SUSPENDED_ON,
     CHAIN_INDEX,
     CHAIN_STEPS,
     CHAT,
@@ -133,6 +147,10 @@ turn_duration = _histogram(
 )
 chain_steps = _histogram(M_CHAIN_STEPS, "Model round-trips per agent turn")
 turns_active = _up_down_counter(M_TURNS_ACTIVE, "Agent turns in flight, by mode")
+tool_duration = _histogram(M_TOOL_DURATION, "Duration of one tool call, by outcome")
+tool_output_truncated = _counter(
+    M_TOOL_OUTPUT_TRUNCATED, "Tool outputs cut down before the model saw them"
+)
 
 
 # --- Providers ------------------------------------------------------------
@@ -443,3 +461,120 @@ def system_prompt_span():
     "``datasette_agent.system_prompt`` around ``_build_system_prompt``."
     with tracer.start_as_current_span(SYSTEM_PROMPT) as span:
         yield SystemPromptRecorder(span)
+
+
+# --- Tools --------------------------------------------------------------------
+
+UNKNOWN_PLUGIN = "unknown"
+
+
+def classify_tool_payload(result):
+    """The ``datasette_agent.tool.outcome`` for a tool's returned string.
+
+    Tools in this repo report failures as data: ``{"error": "Permission
+    denied"}``, ``{"error": "Database 'x' not found"}``, ``{"ok": false,
+    "error": ...}``. Matched on prefix, never recorded. Anything that is
+    not a JSON object with a top-level ``error`` key is ``ok``.
+    """
+    if not result or result[0] != "{" or '"error"' not in result:
+        return "ok"
+    try:
+        parsed = json.loads(result)
+    except ValueError:
+        return "ok"
+    if not isinstance(parsed, dict) or "error" not in parsed:
+        return "ok"
+    message = parsed["error"]
+    if isinstance(message, str):
+        if message.startswith("Permission denied"):
+            return "permission_denied"
+        if message.startswith(("Database '", "Table '")) and " not found" in message:
+            return "not_found"
+    return "error"
+
+
+class ToolRecorder:
+    """What one ``execute_tool`` span learns: the returned output's size
+    and classification."""
+
+    def __init__(self, span):
+        self.span = span
+        self.outcome = "ok"
+        self.error_type = None
+        self.suspended_on = None
+
+    def output(self, result):
+        "Report the tool's returned string (after coercion)."
+        if result is None:
+            return
+        self.outcome = classify_tool_payload(result)
+        if self.span.is_recording():
+            self.span.set_attribute(TOOL_OUTPUT_BYTES, len(result))
+
+    def _pause(self, exception):
+        self.outcome = "suspended"
+        # QuestionPending carries .question, BrowserTaskPending .task;
+        # matched by attribute so this module does not import either.
+        if hasattr(exception, "question"):
+            self.suspended_on = "question"
+        elif hasattr(exception, "task"):
+            self.suspended_on = "browser_task"
+        if self.span.is_recording() and self.suspended_on is not None:
+            self.span.set_attribute(TOOL_SUSPENDED_ON, self.suspended_on)
+
+    def _fail(self, exception):
+        self.outcome = "error"
+        self.error_type = type(exception).__qualname__
+        if self.span.is_recording():
+            self.span.set_attribute(ERROR_TYPE, self.error_type)
+            self.span.set_status(Status(StatusCode.ERROR))
+
+
+@contextmanager
+def tool_span(agent_tool, *, tool_call_id=None, arguments=None):
+    """``execute_tool {tool}`` around one tool invocation, plus
+    ``tool.duration``. Yields a ``ToolRecorder``: call ``output(result)``
+    with the coerced return value. A raised ``llm.PauseChain`` is a
+    suspension (status ``UNSET``); any other exception is an error."""
+    name = agent_tool.name
+    plugin = getattr(agent_tool, "plugin_name", None) or UNKNOWN_PLUGIN
+    started = time.perf_counter()
+    with tracer.start_as_current_span(
+        f"{EXECUTE_TOOL}{name}", record_exception=False, set_status_on_exception=False
+    ) as span:
+        recorder = ToolRecorder(span)
+        if span.is_recording():
+            span.set_attribute(GEN_AI_OPERATION_NAME, "execute_tool")
+            span.set_attribute(GEN_AI_TOOL_NAME, name)
+            span.set_attribute(GEN_AI_TOOL_TYPE, "function")
+            span.set_attribute(TOOL_PLUGIN, plugin)
+            if tool_call_id:
+                span.set_attribute(GEN_AI_TOOL_CALL_ID, str(tool_call_id))
+            if name == "sql_query" and isinstance(arguments, dict):
+                span.set_attribute(
+                    SQL_DISPLAY,
+                    clamp(
+                        arguments.get("display", "model"), SQL_DISPLAY.values, "model"
+                    ),
+                )
+        try:
+            yield recorder
+        except llm.PauseChain as exception:
+            recorder._pause(exception)
+            raise
+        except BaseException as exception:
+            recorder._fail(exception)
+            raise
+        finally:
+            outcome = clamp(recorder.outcome, TOOL_OUTCOME.values, "error")
+            if span.is_recording():
+                span.set_attribute(TOOL_OUTCOME, outcome)
+            tool_duration.record(
+                time.perf_counter() - started,
+                {GEN_AI_TOOL_NAME: name, TOOL_PLUGIN: plugin, TOOL_OUTCOME: outcome},
+            )
+
+
+def record_tool_output_truncated(tool_name):
+    "Count one tool output that ``prepare_tool_output_for_model`` cut down."
+    tool_output_truncated.add(1, {GEN_AI_TOOL_NAME: tool_name})
