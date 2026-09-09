@@ -13,6 +13,7 @@ from .messages import (
 )
 from .questions import QuestionsNotSupported
 from .schema import ensure_tables
+from .telemetry import chat_span, turn_span
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
@@ -87,6 +88,8 @@ async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=Fals
     system_prompt = await _build_system_prompt(datasette, actor)
 
     pending_tool_messages = []
+    # The TurnRecorder of the turn currently running, for after_call.
+    current = {"turn": None}
 
     async def before_call(tool, tool_call):
         args_str = json.dumps(tool_call.arguments, indent=2)
@@ -105,6 +108,8 @@ async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=Fals
             make_tool_message_dict(tool_result.name, output, tool_result.tool_call_id)
         )
         tool_result.output = prepare_tool_output_for_model(output)
+        if current["turn"] is not None:
+            current["turn"].tool_call()
 
     conversation = model.conversation()
 
@@ -123,33 +128,45 @@ async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=Fals
                 break
         first = False
 
-        await insert_message(db, conversation_id, make_user_message_dict(user_message))
+        with turn_span(mode="cli", conversation_id=conversation_id) as turn:
+            current["turn"] = turn
+            turn.set_model(model)
+            await insert_message(
+                db, conversation_id, make_user_message_dict(user_message)
+            )
 
-        chain_kwargs = {}
-        if first_message:
-            chain_kwargs["system"] = system_prompt
-            first_message = False
+            chain_kwargs = {}
+            if first_message:
+                chain_kwargs["system"] = system_prompt
+                first_message = False
 
-        chain_response = conversation.chain(
-            user_message,
-            stream=True,
-            tools=llm_tools,
-            before_call=before_call,
-            after_call=after_call,
-            **chain_kwargs,
-        )
+            chain_response = conversation.chain(
+                user_message,
+                stream=True,
+                tools=llm_tools,
+                before_call=before_call,
+                after_call=after_call,
+                **chain_kwargs,
+            )
 
-        print()
-        async for resp in chain_response.responses():
-            async for chunk in resp:
-                print(chunk, end="", flush=True)
-            response_pk = await insert_response(db, conversation_id, resp)
-            for tool_msg in pending_tool_messages:
-                await insert_message(
-                    db, conversation_id, tool_msg, response_id=response_pk
-                )
-            pending_tool_messages.clear()
-        print()
+            print()
+            chain_index = 0
+            async for resp in chain_response.responses():
+                turn.step()
+                with chat_span(model, chain_index=chain_index, streaming=True) as chat:
+                    chain_index += 1
+                    async for chunk in resp:
+                        chat.first_token()
+                        print(chunk, end="", flush=True)
+                    await chat.finish(resp)
+                response_pk = await insert_response(db, conversation_id, resp)
+                for tool_msg in pending_tool_messages:
+                    await insert_message(
+                        db, conversation_id, tool_msg, response_id=response_pk
+                    )
+                pending_tool_messages.clear()
+            print()
+            current["turn"] = None
 
         if one_shot:
             break

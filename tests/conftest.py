@@ -18,8 +18,10 @@ def pytest_collection_modifyitems(items):
     # its docstring documents a macOS/CPython 3.13 fork+exec crash (SIGBUS)
     # when subprocess-spawning tests run late in a thread-heavy process -
     # so run it first, the way core's conftest front-loads its equivalents.
-    front = [
-        item for item in items if item.name == "test_package_never_imports_the_sdk"
-    ]
+    subprocess_tests = {
+        "test_package_never_imports_the_sdk",
+        "test_turn_runs_unchanged_without_a_provider",
+    }
+    front = [item for item in items if item.name in subprocess_tests]
     for item in front:
         items.insert(0, items.pop(items.index(item)))

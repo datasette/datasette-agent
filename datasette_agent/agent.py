@@ -19,10 +19,18 @@ from .browser_tasks import BrowserTaskPending
 from .models import AGENT_PURPOSE
 from .questions import QuestionPending
 from .schema import ensure_tables
+from .telemetry import chat_span, system_prompt_span, turn_span
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
 async def _build_system_prompt(datasette, actor):
+    with system_prompt_span() as prompt_span:
+        prompt = await _system_prompt(datasette, actor)
+        prompt_span.finish(databases=len(datasette.databases), prompt_chars=len(prompt))
+        return prompt
+
+
+async def _system_prompt(datasette, actor):
     parts = [
         "You are a helpful data analysis assistant. "
         "You have access to tools that let you explore and query databases. "
@@ -85,7 +93,7 @@ async def _send_sse(writer, event, data):
     await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
+async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, *, turn):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages.
 
@@ -102,6 +110,10 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     prompt.prompt directly (e.g. echo); the persisted history passed as
     messages= is authoritative and must already contain the
     corresponding user row.
+
+    turn is the TurnRecorder of the enclosing invoke_agent span; the
+    chain reports its model, history size, steps, completed tool calls
+    and outcome to it.
     """
     db = datasette.get_internal_database()
 
@@ -118,6 +130,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
 
     system_prompt = await _build_system_prompt(datasette, actor)
     prior_messages = await load_messages(db, conversation_id)
+    turn.set_history(len(prior_messages))
 
     # A conversation is pinned to one model for its whole life. The
     # model is chosen when the conversation is created (or, for
@@ -137,6 +150,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     model = await llm_instance.model(
         model_id=stored_model_id, purpose=AGENT_PURPOSE, actor=actor
     )
+    turn.set_model(model)
 
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
@@ -213,6 +227,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         )
         # Strip user-only keys and safely cap JSON before the model sees it.
         tool_result.output = prepare_tool_output_for_model(output)
+        turn.tool_call()
 
     chain_response = model.chain(
         prompt_text,
@@ -225,6 +240,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     )
 
     try:
+        chain_index = 0
         async for response in chain_response.responses():
             # Flush tool results from the PRIOR response before persisting
             # this one. after_call fires between chain.responses() yields,
@@ -236,40 +252,53 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
             # tool messages").
             await flush_tool_messages()
 
-            async for event in response.astream_events():
-                if event.type == "text":
-                    await _send_sse(writer, "text_chunk", {"content": event.chunk})
-                elif event.type == "reasoning" and event.chunk:
-                    await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
-                elif event.type == "tool_call_name":
-                    stream_id = tool_call_stream_id(event)
-                    if stream_id is None:
-                        stream_id = f"streamed:{len(streamed_tool_calls)}"
-                    state = streamed_tool_calls.setdefault(
-                        stream_id, {"name": "", "args": ""}
-                    )
-                    state["name"] += event.chunk
-                    if len(state["name"]) == len(event.chunk):
+            # The response is lazy - iterating it is the model call - so
+            # the chat span covers exactly the streaming window. Tool
+            # execution happens inside chain_response.responses() between
+            # yields, outside this block, so tool spans are siblings of
+            # the chat spans, not children.
+            turn.step()
+            with chat_span(model, chain_index=chain_index, streaming=True) as chat:
+                chain_index += 1
+                async for event in response.astream_events():
+                    if event.type in ("text", "reasoning", "tool_call_name"):
+                        chat.first_token()
+                    if event.type == "text":
+                        await _send_sse(writer, "text_chunk", {"content": event.chunk})
+                    elif event.type == "reasoning" and event.chunk:
+                        await _send_sse(
+                            writer, "reasoning_chunk", {"content": event.chunk}
+                        )
+                    elif event.type == "tool_call_name":
+                        stream_id = tool_call_stream_id(event)
+                        if stream_id is None:
+                            stream_id = f"streamed:{len(streamed_tool_calls)}"
+                        state = streamed_tool_calls.setdefault(
+                            stream_id, {"name": "", "args": ""}
+                        )
+                        state["name"] += event.chunk
+                        if len(state["name"]) == len(event.chunk):
+                            await _send_sse(
+                                writer,
+                                "tool_call_start",
+                                {"id": stream_id, "name": state["name"]},
+                            )
+                    elif event.type == "tool_call_args":
+                        stream_id = tool_call_stream_id(event)
+                        if stream_id is None:
+                            stream_id = f"streamed:{len(streamed_tool_calls)}"
+                        state = streamed_tool_calls.setdefault(
+                            stream_id, {"name": "", "args": ""}
+                        )
+                        state["args"] += event.chunk
                         await _send_sse(
                             writer,
-                            "tool_call_start",
-                            {"id": stream_id, "name": state["name"]},
+                            "tool_call_args_chunk",
+                            {"id": stream_id, "chunk": event.chunk},
                         )
-                elif event.type == "tool_call_args":
-                    stream_id = tool_call_stream_id(event)
-                    if stream_id is None:
-                        stream_id = f"streamed:{len(streamed_tool_calls)}"
-                    state = streamed_tool_calls.setdefault(
-                        stream_id, {"name": "", "args": ""}
-                    )
-                    state["args"] += event.chunk
-                    await _send_sse(
-                        writer,
-                        "tool_call_args_chunk",
-                        {"id": stream_id, "chunk": event.chunk},
-                    )
-                # tool_result events are surfaced via after_call once the
-                # chain framework invokes the local tool.
+                    # tool_result events are surfaced via after_call once
+                    # the chain framework invokes the local tool.
+                await chat.finish(response)
 
             await insert_response(db, conversation_id, response)
 
@@ -281,12 +310,14 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         # paused call - that missing row is what marks it pending, so
         # resuming the chain re-executes it.
         await flush_tool_messages()
+        turn.set_outcome("question")
         return ("question", ex.question)
 
     except BrowserTaskPending as ex:
         # A tool is waiting on browser_task() - same PauseChain
         # semantics as QuestionPending above.
         await flush_tool_messages()
+        turn.set_outcome("browser_task")
         return ("browser_task", ex.task)
 
     # Final flush: tool results from the last response in the chain
@@ -311,52 +342,60 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
 
     current_conversation_id.set(conversation_id)
 
-    # Drain any pending notifications and prepend their text to the user
-    # turn so the model sees them on this turn.
-    notifications = (
-        await db.execute(
-            "SELECT id, content FROM agent_pending_notifications "
-            "WHERE conversation_id = ? ORDER BY id",
-            [conversation_id],
-        )
-    ).rows
-    if notifications:
-        prefix_parts = [row["content"] for row in notifications]
-        for nid in [row["id"] for row in notifications]:
-            await db.execute_write(
-                "DELETE FROM agent_pending_notifications WHERE id = ?",
-                [nid],
-            )
-        user_message = "\n".join(prefix_parts) + "\n\n" + user_message
-
-    try:
-        # Persist the user turn as a MessageDict.
-        await insert_message(db, conversation_id, make_user_message_dict(user_message))
-
-        pending = await _run_chain(
-            datasette, actor, conversation_id, writer, user_message
-        )
-
-        # Auto-set title from the first user message if not yet set.
-        row = (
+    # The turn span opens before the notification drain and the user
+    # message insert, so every db.query of the turn nests under it, and
+    # the SSE error path below reports to it rather than escaping it.
+    with turn_span(mode="chat", conversation_id=conversation_id) as turn:
+        # Drain any pending notifications and prepend their text to the
+        # user turn so the model sees them on this turn.
+        notifications = (
             await db.execute(
-                "SELECT title FROM agent_conversations WHERE id = ?",
+                "SELECT id, content FROM agent_pending_notifications "
+                "WHERE conversation_id = ? ORDER BY id",
                 [conversation_id],
             )
-        ).first()
-        if row and not row["title"]:
-            title = user_message[:100]
-            if len(user_message) > 100:
-                title += "..."
-            await db.execute_write(
-                "UPDATE agent_conversations SET title = ? WHERE id = ?",
-                [title, conversation_id],
+        ).rows
+        if notifications:
+            prefix_parts = [row["content"] for row in notifications]
+            for nid in [row["id"] for row in notifications]:
+                await db.execute_write(
+                    "DELETE FROM agent_pending_notifications WHERE id = ?",
+                    [nid],
+                )
+            user_message = "\n".join(prefix_parts) + "\n\n" + user_message
+            turn.set_notifications_drained(len(notifications))
+
+        try:
+            # Persist the user turn as a MessageDict.
+            await insert_message(
+                db, conversation_id, make_user_message_dict(user_message)
             )
 
-        await _finish_turn(writer, pending)
+            pending = await _run_chain(
+                datasette, actor, conversation_id, writer, user_message, turn=turn
+            )
 
-    except Exception as e:
-        await _send_sse(writer, "error", {"message": str(e)})
+            # Auto-set title from the first user message if not yet set.
+            row = (
+                await db.execute(
+                    "SELECT title FROM agent_conversations WHERE id = ?",
+                    [conversation_id],
+                )
+            ).first()
+            if row and not row["title"]:
+                title = user_message[:100]
+                if len(user_message) > 100:
+                    title += "..."
+                await db.execute_write(
+                    "UPDATE agent_conversations SET title = ? WHERE id = ?",
+                    [title, conversation_id],
+                )
+
+            await _finish_turn(writer, pending)
+
+        except Exception as e:
+            turn.fail(e)
+            await _send_sse(writer, "error", {"message": str(e)})
 
 
 async def resume_agent(datasette, actor, conversation_id, writer):
@@ -374,13 +413,15 @@ async def resume_agent(datasette, actor, conversation_id, writer):
 
     current_conversation_id.set(conversation_id)
 
-    try:
-        pending = await _run_chain(
-            datasette, actor, conversation_id, writer, prompt_text=None
-        )
-        await _finish_turn(writer, pending)
-    except Exception as e:
-        await _send_sse(writer, "error", {"message": str(e)})
+    with turn_span(mode="resume", conversation_id=conversation_id) as turn:
+        try:
+            pending = await _run_chain(
+                datasette, actor, conversation_id, writer, prompt_text=None, turn=turn
+            )
+            await _finish_turn(writer, pending)
+        except Exception as e:
+            turn.fail(e)
+            await _send_sse(writer, "error", {"message": str(e)})
 
 
 # Re-exports for background_agent.py / cli_chat.py compatibility.

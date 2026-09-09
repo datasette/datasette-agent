@@ -5,6 +5,8 @@ a single ``collect()``, then the kit's four conformance assertions plus the
 sentinel-content privacy walk.
 """
 
+import json
+
 import pytest
 
 from datasette_agent.telemetry_registry import (
@@ -82,3 +84,177 @@ def test_span_attributes_are_registered_attributes():
     for entry in (*SPANS, *METRICS):
         for attribute in entry.attributes:
             assert attribute in registered, f"{entry!r} uses unlisted {attribute!r}"
+
+
+# --- Dynamic half ---------------------------------------------------------
+
+pytest.importorskip("opentelemetry.sdk")
+
+from datasette.app import Datasette  # noqa: E402
+from datasette.telemetry_testing import (  # noqa: E402
+    assert_metrics_conform,
+    assert_metrics_covered,
+    assert_no_forbidden_values,
+    assert_spans_conform,
+    assert_spans_covered,
+)
+
+from test_telemetry import (  # noqa: E402
+    ask_tool_plugin,  # noqa: F401  (fixture)
+    parse_sse,
+    send_message,
+    start_conversation,
+    tool_call_prompt,
+)
+
+# Sentinels planted in the workload. The user's text and the model's
+# output (echo repeats the prompt) must never reach any signal, in any
+# scope. The SQL sentinel reaches core's db.query span by core's own
+# documented design (db.query.text), so that one is checked against this
+# plugin's scope only.
+SENTINEL_USER_TEXT = "SENTINEL-user-text-7f3a"
+SENTINEL_SQL = "SENTINEL_sql_9b1c"
+
+
+async def exercise(tmp_path):
+    """One broad workload touching every registered span and metric: a
+    chat turn that calls a tool, a turn that suspends on a question and
+    its resume, and a CLI turn."""
+    from datasette_agent.cli_chat import run_chat
+
+    ds = Datasette(
+        memory=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+    conversation_id = await start_conversation(ds, cookies)
+    await send_message(ds, cookies, conversation_id, SENTINEL_USER_TEXT)
+    await send_message(
+        ds,
+        cookies,
+        conversation_id,
+        tool_call_prompt(
+            (
+                "sql_query",
+                {"database": "_memory", "sql": f"select 1 as {SENTINEL_SQL}"},
+            )
+        ),
+    )
+    events = await send_message(
+        ds,
+        cookies,
+        conversation_id,
+        tool_call_prompt(("approve_edit", {"path": SENTINEL_USER_TEXT})),
+    )
+    (question,) = [e for e in events if e["event"] == "question"]
+    response = await ds.client.post(
+        "/-/agent/{}/question/{}".format(conversation_id, question["data"]["id"]),
+        content=json.dumps({"answer": True}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert parse_sse(response.text)[-1]["event"] == "done"
+    await run_chat(ds, initial_prompt=SENTINEL_USER_TEXT, actor={"id": "cli"})
+    return ds
+
+
+@pytest.mark.asyncio
+async def test_conformance(tmp_path, otel_spans, otel_metrics, ask_tool_plugin, capsys):  # noqa: F811
+    ds = await exercise(tmp_path)
+    finished = otel_spans.get_finished_spans()
+    # One collect() only: the reader is delta-temporality, so anything an
+    # earlier collect() drained is invisible to the coverage assertions.
+    otel_metrics.collect()
+    assert_spans_conform(SPANS, finished, scope_name=SCOPE)
+    assert_spans_covered(SPANS, finished, scope_name=SCOPE)
+    assert_metrics_conform(METRICS, otel_metrics, scope_name=SCOPE)
+    assert_metrics_covered(METRICS, otel_metrics, scope_name=SCOPE)
+    # Privacy walk: user text and model output across every scope...
+    assert_no_forbidden_values(
+        {SENTINEL_USER_TEXT}, finished_spans=finished, collector=otel_metrics
+    )
+    # ...and the SQL text within this plugin's scope (core records it on
+    # db.query by design).
+    assert_no_forbidden_values(
+        {SENTINEL_SQL},
+        finished_spans=finished,
+        collector=otel_metrics,
+        scope_name=SCOPE,
+    )
+    del ds
+
+
+# --- Wire names pinned as literals ----------------------------------------
+#
+# A rename is a dashboard-breaking decision to take here, deliberately,
+# not a line to re-derive. If one of these fails, either revert the rename
+# or update the literal AND the generated README reference in the same
+# commit.
+
+EXPECTED_SPANS = {
+    "invoke_agent datasette-agent",
+    "chat ",
+    "datasette_agent.system_prompt",
+}
+
+EXPECTED_METRICS = {
+    "gen_ai.client.token.usage",
+    "gen_ai.client.operation.duration",
+    "datasette_agent.chat.time_to_first_token",
+    "datasette_agent.turn.duration",
+    "datasette_agent.chain.steps",
+    "datasette_agent.turns.active",
+}
+
+EXPECTED_ATTRIBUTES = {
+    "gen_ai.operation.name",
+    "gen_ai.agent.name",
+    "gen_ai.conversation.id",
+    "gen_ai.provider.name",
+    "gen_ai.request.model",
+    "gen_ai.response.model",
+    "gen_ai.response.id",
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.cache_creation.input_tokens",
+    "gen_ai.token.type",
+    "datasette_agent.mode",
+    "datasette_agent.outcome",
+    "datasette_agent.history.messages",
+    "datasette_agent.chain.steps",
+    "datasette_agent.tool_calls",
+    "datasette_agent.notifications_drained",
+    "datasette_agent.chain.index",
+    "datasette_agent.streaming",
+    "datasette_agent.tool_calls_requested",
+    "datasette_agent.databases",
+    "datasette_agent.prompt.chars",
+    "error.type",
+}
+
+
+def test_wire_names_are_pinned():
+    assert {str(s) for s in SPANS} == EXPECTED_SPANS
+    assert {str(m) for m in METRICS} == EXPECTED_METRICS
+    assert {str(a) for a in ATTRIBUTES} == EXPECTED_ATTRIBUTES
+
+
+# Metric dimensions must be bounded. The kit enforces declared values=
+# enums; these are the attributes that are bounded by installed code
+# (models, providers, exception classes) rather than by an enum here.
+OPEN_BUT_BOUNDED = {
+    "gen_ai.request.model",
+    "gen_ai.provider.name",
+    "error.type",
+}
+
+
+def test_metric_dimensions_are_bounded():
+    for metric in METRICS:
+        for attribute in metric.attributes:
+            assert attribute.values is not None or str(attribute) in OPEN_BUT_BOUNDED, (
+                f"{metric}: {attribute} is neither an enum nor allowlisted"
+            )
