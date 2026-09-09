@@ -35,6 +35,9 @@ jobs:
         # TEMPORARY: the plugin telemetry kit (datasette PR #2899) is not
         # in a release yet. Remove once the datasette>= floor covers it.
         pip install "datasette @ git+https://github.com/simonw/datasette@asg017/otel-phase1-6-plugin-kit"
+    - name: Telemetry reference is fresh
+      run: |
+        python scripts/telemetry-doc.py --check
     - name: Run tests
       run: |
         python -m pytest

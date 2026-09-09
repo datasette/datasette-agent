@@ -405,12 +405,218 @@ Add `--json` for machine-readable output:
 datasette agent tools --json
 ```
 
+## Observability
+
+datasette-agent instruments every agent turn, model call, tool call, suspension
+and background run with [OpenTelemetry](https://opentelemetry.io/), through
+`opentelemetry-api` only. The plugin never installs a provider or an exporter:
+with no SDK in the process every span is a no-op and every instrument does
+nothing, so there is no cost until an operator turns telemetry on - exactly as
+with Datasette core. See Datasette's own telemetry documentation for the
+operator story; the two easiest routes are the standard
+`opentelemetry-instrument` wrapper, or the `datasette-otel-viewer` plugin,
+which records this instance's spans and metrics into a SQLite database and
+browses them at `/-/otel` with no `OTEL_*` configuration at all.
+
+Three spans follow the OpenTelemetry GenAI semantic conventions (`gen_ai.*`),
+so trace backends render them with their GenAI styling. A chat turn that runs
+one SQL query produces this tree (core's spans marked):
+
+```
+POST /-/agent/(?P<conversation_id>...)/stream$      SERVER   (core)
+└── invoke_agent datasette-agent                    INTERNAL
+    ├── datasette_agent.system_prompt               INTERNAL
+    │   └── db.query ×N                             CLIENT   (core)
+    ├── db.query  (load history)                    CLIENT   (core)
+    ├── chat claude-sonnet-5                        CLIENT
+    ├── execute_tool sql_query                      INTERNAL
+    │   └── db.query  SELECT ...                    CLIENT   (core)
+    ├── chat claude-sonnet-5                        CLIENT
+    └── db.query ×N  (persist messages)             CLIENT   (core)
+```
+
+The gap between one `chat` ending and the next starting is tool time; the gap
+inside a `chat` before its `gen_ai.first_token` event is provider latency.
+`execute_write_sql` posts through `datasette.client`, so its tool span
+contains a nested `SERVER` span that core marks `datasette.internal_client:
+true` - filter on that to keep request counts honest. A background agent or
+explorer run is a root span in its own trace with a link back to the request
+that started it; a turn resumed after `ask_user()` or `browser_task()` links
+back to the tool span that suspended.
+
+**Privacy.** No signal carries a prompt, a model's output, tool arguments,
+tool output, an error message or an actor id. Variability is closed enums,
+sizes are byte counts, and conversation, tool-call, question and task ids
+appear on spans only, never as a metric dimension. A sentinel-content test
+enforces this. Token usage on a public instance is spend data per request -
+not a new class of data, but worth knowing the trace backend holds it. Core's
+warning about inbound `traceparent` headers applies unchanged: strip them at
+the proxy on a public instance.
+
+Every span, attribute and metric below lives in the `datasette_agent`
+instrumentation scope and is declared in `datasette_agent/telemetry_registry.py`;
+a conformance test holds the code to this reference in both directions, and
+`uv run scripts/telemetry-doc.py` regenerates it.
+
+<!-- telemetry-reference:start -->
+
+#### Spans
+
+Span names ending in `{...}` are families: the suffix is the model id or the tool name. Kinds are `INTERNAL` unless noted.
+
+**`invoke_agent datasette-agent`** - One agent turn, following the GenAI `invoke_agent` convention. Starts before the pending-notification drain and the user message insert so every `db.query` of the turn nests under it, and ends in a `finally` so the error path that sends the `error` SSE event still closes it. Kind `INTERNAL`: the agent is this process's own work, not a call out. Status is `ERROR` only for `outcome=error`, `chain_limit` and `max_iterations`; a suspension is `UNSET` because it is the designed way a turn ends. For a background agent or explorer run the span covers the whole run and is a **root span in its own trace** with a link back to whatever span was current when the run was started - the API request, or the spawning turn's `execute_tool spawn_background_agent` - the shape core uses for `block=False` writes: a run outlives its cause, so a link records the causation without asserting containment. The `background.*` attributes appear on those runs only.
+
+- `gen_ai.operation.name` - The GenAI operation: `invoke_agent` for a whole turn, `chat` for one model response, `execute_tool` for one tool call. One of: `chat`, `execute_tool`, `invoke_agent`.
+- `gen_ai.agent.name` - Always `datasette-agent`. A fixed string today; a future agent profiles feature could vary it, but it would stay bounded. One of: `datasette-agent`.
+- `gen_ai.conversation.id` - The conversation's ULID. Opaque, but a stable key across every turn a person has with the agent, so closer to a session id than a request id. **Spans only, never a metric dimension.** The same ULID is in the request span's `url.path` anyway.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+- `datasette_agent.mode` - How the turn was started: `chat` (a user message on the stream route), `resume` (continuing a turn suspended on `ask_user()` or `browser_task()`), `cli` (`datasette agent chat`), `background` (a background agent's whole run) or `explorer` (the same, launched by the explorer). One of: `background`, `chat`, `cli`, `explorer`, `resume`.
+- `datasette_agent.outcome` - How the turn ended. `done` is a normal end; `question` and `browser_task` mean the turn suspended waiting on a human, which is the designed way a turn ends and **not** an error; `chain_limit` is llm's chain limit tripping; `cancelled` is the asyncio task being cancelled (a client disconnect, or the background-agent cancel endpoint); `error` is anything else raised. Background runs end in `completed`, `max_iterations`, `cancelled` or `error`. Only `error`, `chain_limit` and `max_iterations` set span status `ERROR`. One of: `browser_task`, `cancelled`, `chain_limit`, `completed`, `done`, `error`, `max_iterations`, `question`.
+- `datasette_agent.history.messages` *(optional)* - Messages loaded from the conversation's persisted history for this turn, this turn's own user message included - what drives input tokens up over a long conversation. Absent in `cli` mode, where llm holds the history in memory; for a background run, the size at its last iteration.
+- `datasette_agent.chain.steps` - Model responses in this turn's chain: 1 for a plain answer, 2 or more when the model called tools and came back for another round.
+- `datasette_agent.tool_calls` - Tool calls that ran to completion this turn (a call that suspended the turn is not counted; it re-runs on resume).
+- `datasette_agent.notifications_drained` *(optional)* - Background-agent completion notifications prepended to the user's message on this turn. Set only when there were any.
+- `datasette_agent.resumed_from` *(optional)* - For `mode=resume`: what the turn is continuing from. The span also carries a link to the `execute_tool` span that suspended, when its trace context was persisted with the row. One of: `browser_task`, `question`.
+- `datasette_agent.background.id` *(optional)* - The background agent's ULID. Spans only, never a metric dimension.
+- `datasette_agent.background.iterations` *(optional)* - How many loop passes the background run made before it ended.
+- `datasette_agent.background.max_iterations` *(optional)* - The iteration cap the run was allowed (`MAX_ITERATIONS`).
+- `datasette_agent.background.spawned_from_conversation` *(optional)* - `True` when a chat turn's `spawn_background_agent` tool started the run (its completion is then posted back as a notification), `False` for the HTTP API and the explorer. Never the other conversation's id - the span link carries that.
+- `error.type` *(optional)* - Exception class name when the work raised; `CancelledError` when it was cancelled. Never the message. Core's semantic-convention spelling, reused per the plugin telemetry docs. Absent on success, and absent when a tool merely *returned* an error payload - that is an outcome.
+
+**`chat {...}`** *(CLIENT)* - One model response, named `chat {gen_ai.request.model}`. Kind `CLIENT`: the one span here that represents a call to something outside the process, exactly as core's `db.query` is `CLIENT`. Covers exactly the streaming window - llm's response object is lazy and iterating it is what makes the HTTP call - so the gap before the `gen_ai.first_token` event is provider latency and the gap between one `chat` ending and the next starting is tool time. If the operator also installs `opentelemetry-instrumentation-httpx` the provider's HTTP call appears as a child. The prompt, the messages, the streamed text and the reasoning are never recorded.
+
+- `gen_ai.operation.name` - The GenAI operation: `invoke_agent` for a whole turn, `chat` for one model response, `execute_tool` for one tool call. One of: `chat`, `execute_tool`, `invoke_agent`.
+- `gen_ai.provider.name` - Which LLM provider served the call, derived from the llm plugin that implements the model: `anthropic`, `openai`, `gcp.gemini`, `echo` (tests)... Semconv well-known spellings where one exists, the plugin's module name otherwise. Bounded by the installed llm plugins.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+- `gen_ai.response.model` *(optional)* - The provider-reported concrete model (`claude-sonnet-5-20260101`) when llm reports one that differs from the requested id.
+- `gen_ai.response.id` *(optional)* - The provider's response id, for support tickets. Present only when the provider returns one. Spans only.
+- `gen_ai.usage.input_tokens` *(optional)* - Input tokens the provider billed for this response, when it reports usage.
+- `gen_ai.usage.output_tokens` *(optional)* - Output tokens the provider billed for this response, when it reports usage.
+- `gen_ai.usage.cache_read.input_tokens` *(optional)* - Input tokens served from the provider's prompt cache, normalised from Anthropic's `cache_read_input_tokens` and OpenAI's `prompt_tokens_details.cached_tokens`. Cache hit rate is the single biggest cost lever with prompt-caching providers.
+- `gen_ai.usage.cache_creation.input_tokens` *(optional)* - Input tokens written to the provider's prompt cache (Anthropic's `cache_creation_input_tokens`).
+- `datasette_agent.chain.index` - 0-based position of this model response within the turn's chain.
+- `datasette_agent.streaming` - Whether the response was streamed (`True` for chat, `False` for background agents).
+- `datasette_agent.tool_calls_requested` - Tool calls the model asked for in this response. Zero means the chain ends here.
+- `error.type` *(optional)* - Exception class name when the work raised; `CancelledError` when it was cancelled. Never the message. Core's semantic-convention spelling, reused per the plugin telemetry docs. Absent on success, and absent when a tool merely *returned* an error payload - that is an outcome.
+
+**`execute_tool {...}`** - One tool invocation, named `execute_tool {gen_ai.tool.name}`, following the GenAI `execute_tool` convention. Every tool - this plugin's own and any registered through `register_agent_tools` - runs through one code path, so every call gets a span. Core's `db.query` spans issued by the tool nest under it, as does the nested internal `SERVER` span `execute_write_sql` produces by posting through `datasette.client` (core marks that one `datasette.internal_client: true`). Arguments and output are never recorded; a suspension is `outcome=suspended` with the question or task id, never an error. The span ends when the tool raises; the human wait that follows is not a span (it can outlive the process) but the `suspension.wait` histogram, and the resumed turn links back here.
+
+- `gen_ai.operation.name` - The GenAI operation: `invoke_agent` for a whole turn, `chat` for one model response, `execute_tool` for one tool call. One of: `chat`, `execute_tool`, `invoke_agent`.
+- `gen_ai.tool.name` - The tool's registered name (`sql_query`, `describe_table`, a plugin's tool...). Bounded: the set of registered tools.
+- `gen_ai.tool.call.id` *(optional)* - The provider's id for this tool call, when it issues one. Never the argument-hash fallback the plugin derives for providers that do not. Spans only.
+- `gen_ai.tool.type` - Always `function` - every agent tool is a client-side function. One of: `function`.
+- `datasette_agent.tool.plugin` - The pluggy name of the plugin whose `register_agent_tools` hook registered the tool (`agent` for this plugin's own tools), or `unknown` for a tool constructed directly. Lets an operator see that the slow tool came from `datasette-foo`. Bounded by installed plugins.
+- `datasette_agent.tool.outcome` - How the tool call ended. Most tools return errors *as data* - `{"error": ...}` is a successful call from llm's point of view and a failed one from the operator's - so the returned payload is classified too: `permission_denied` and `not_found` for the two messages this plugin's own tools emit, `error` for any other top-level `error` key or a raised exception, `suspended` when the tool paused the turn on `ask_user()` / `browser_task()`, `ok` otherwise. Only a raised exception sets span status `ERROR`; a returned error payload means the tool did what it was asked and the request to it was wrong. One of: `error`, `not_found`, `ok`, `permission_denied`, `suspended`.
+- `datasette_agent.suspension.kind` *(optional)* - What a tool suspended the turn on: an `ask_user()` question or a `browser_task()`. On the `execute_tool` span when `outcome=suspended`; the dimension of the suspension metrics. One of: `browser_task`, `question`.
+- `datasette_agent.question.type` *(optional)* - The `ask_user()` question's shape: yes/no, a choice, or free text. Never the prompt or the options. One of: `boolean`, `choice`, `text`.
+- `datasette_agent.question.id` *(optional)* - The `agent_questions` row the tool suspended on. Spans only.
+- `datasette_agent.task.id` *(optional)* - The `agent_browser_tasks` row the tool suspended on. Spans only.
+- `datasette_agent.tool.replayed` *(optional)* - `True` when the tool call consumed a stored answer or browser-task result instead of suspending - the re-execution of a suspended call on resume. Absent on a fresh call.
+- `datasette_agent.tool.output.bytes` - Length of the tool's returned string. A size, never the content.
+- `datasette_agent.sql.display` *(optional)* - `sql_query` only: the `display` mode the model picked. The distribution is directly actionable - the system prompt is trying to steer it. Rows, truncation and the SQL text are on the nested core `db.query` span; not duplicated here. One of: `both`, `model`, `user`.
+- `error.type` *(optional)* - Exception class name when the work raised; `CancelledError` when it was cancelled. Never the message. Core's semantic-convention spelling, reused per the plugin telemetry docs. Absent on success, and absent when a tool merely *returned* an error payload - that is an outcome.
+
+**`datasette_agent.system_prompt`** - Building the system prompt: one permission check and one `table_names()` query per database, on every turn and every background-agent iteration. On an instance with many databases this is a visible slice of turn latency, and this span is the evidence for (or against) caching it.
+
+- `datasette_agent.databases` - Databases the system-prompt builder iterated - each one costs a permission check and a `table_names()` query, on every turn.
+- `datasette_agent.prompt.chars` - Length of the built system prompt in characters. A size, never the text.
+
+**`datasette_agent.background.iteration`** - One pass of a background agent's loop, child of the run's `invoke_agent` root. Each pass rebuilds the system prompt, reloads the whole history and runs a chain, so this is where "why did iteration 7 take four minutes" gets answered; `chat` and `execute_tool` spans nest under it.
+
+- `datasette_agent.background.iteration` - 1-based loop pass within the background run.
+
+#### Metrics
+
+**`gen_ai.client.token.usage`** *(Histogram, unit `{token}`)* - Tokens per model response, per token type - the semconv metric. A histogram rather than a counter, as semconv chose, so the p95 of input tokens says whether the context is growing while `sum` still gives total spend.
+
+- `gen_ai.operation.name` - The GenAI operation: `invoke_agent` for a whole turn, `chat` for one model response, `execute_tool` for one tool call. One of: `chat`, `execute_tool`, `invoke_agent`.
+- `gen_ai.provider.name` - Which LLM provider served the call, derived from the llm plugin that implements the model: `anthropic`, `openai`, `gcp.gemini`, `echo` (tests)... Semconv well-known spellings where one exists, the plugin's module name otherwise. Bounded by the installed llm plugins.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+- `gen_ai.token.type` - Which count a `gen_ai.client.token.usage` measurement is. `input` and `output` are the semconv values; `cache_read` and `cache_creation` are recorded additionally when the provider reports prompt-cache usage. One of: `cache_creation`, `cache_read`, `input`, `output`.
+
+Bucket boundaries: 1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864.
+
+**`gen_ai.client.operation.duration`** *(Histogram, unit `s`)* - Duration of one model response, measured across the streaming window - the semconv metric. `error.type` splits failures out of the latency distribution.
+
+- `gen_ai.operation.name` - The GenAI operation: `invoke_agent` for a whole turn, `chat` for one model response, `execute_tool` for one tool call. One of: `chat`, `execute_tool`, `invoke_agent`.
+- `gen_ai.provider.name` - Which LLM provider served the call, derived from the llm plugin that implements the model: `anthropic`, `openai`, `gcp.gemini`, `echo` (tests)... Semconv well-known spellings where one exists, the plugin's module name otherwise. Bounded by the installed llm plugins.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+- `error.type` *(optional)* - Exception class name when the work raised; `CancelledError` when it was cancelled. Never the message. Core's semantic-convention spelling, reused per the plugin telemetry docs. Absent on success, and absent when a tool merely *returned* an error payload - that is an outcome.
+
+Bucket boundaries: 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92.
+
+**`datasette_agent.chat.time_to_first_token`** *(Histogram, unit `s`)* - Seconds from starting a streamed model response to its first text, reasoning or tool-call chunk - the number a user waiting on a spinner feels. Streamed responses only. The same instant is a `gen_ai.first_token` event on the `chat` span, but a span event does not survive sampling and this does.
+
+- `gen_ai.provider.name` - Which LLM provider served the call, derived from the llm plugin that implements the model: `anthropic`, `openai`, `gcp.gemini`, `echo` (tests)... Semconv well-known spellings where one exists, the plugin's module name otherwise. Bounded by the installed llm plugins.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+
+Bucket boundaries: 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92.
+
+**`datasette_agent.turn.duration`** *(Histogram, unit `s`)* - One measurement per `invoke_agent` span: the whole turn, model calls and tool calls and persistence included. **The top-line instrument**: turns per second, error rate, suspension rate and p50/p95 turn time all come from it, split by mode.
+
+- `datasette_agent.mode` - How the turn was started: `chat` (a user message on the stream route), `resume` (continuing a turn suspended on `ask_user()` or `browser_task()`), `cli` (`datasette agent chat`), `background` (a background agent's whole run) or `explorer` (the same, launched by the explorer). One of: `background`, `chat`, `cli`, `explorer`, `resume`.
+- `datasette_agent.outcome` - How the turn ended. `done` is a normal end; `question` and `browser_task` mean the turn suspended waiting on a human, which is the designed way a turn ends and **not** an error; `chain_limit` is llm's chain limit tripping; `cancelled` is the asyncio task being cancelled (a client disconnect, or the background-agent cancel endpoint); `error` is anything else raised. Background runs end in `completed`, `max_iterations`, `cancelled` or `error`. Only `error`, `chain_limit` and `max_iterations` set span status `ERROR`. One of: `browser_task`, `cancelled`, `chain_limit`, `completed`, `done`, `error`, `max_iterations`, `question`.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+- `error.type` *(optional)* - Exception class name when the work raised; `CancelledError` when it was cancelled. Never the message. Core's semantic-convention spelling, reused per the plugin telemetry docs. Absent on success, and absent when a tool merely *returned* an error payload - that is an outcome.
+
+Bucket boundaries: 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92.
+
+**`datasette_agent.chain.steps`** *(Histogram, unit `{step}`)* - Model round-trips per turn. A rising median means the model is flailing, tool outputs are being truncated and re-fetched, or the system prompt is not landing; `chain_limit` outcomes on the turn histogram are the extreme of the same signal.
+
+- `datasette_agent.mode` - How the turn was started: `chat` (a user message on the stream route), `resume` (continuing a turn suspended on `ask_user()` or `browser_task()`), `cli` (`datasette agent chat`), `background` (a background agent's whole run) or `explorer` (the same, launched by the explorer). One of: `background`, `chat`, `cli`, `explorer`, `resume`.
+- `gen_ai.request.model` - The llm model id the call was made with (`claude-sonnet-5`, `echo`). On an `invoke_agent` span it is the conversation's pinned model, or `unknown` when the turn failed before a model was resolved. Bounded by the models an operator has configured.
+
+Bucket boundaries: 1, 2, 3, 4, 6, 8, 10, 15, 20.
+
+**`datasette_agent.turns.active`** *(UpDownCounter, unit `{turn}`)* - Turns in flight right now, by mode. Each streaming turn holds an SSE connection and a provider stream open, so this is the capacity number; `mode=background` / `explorer` is the number of background agents running.
+
+- `datasette_agent.mode` - How the turn was started: `chat` (a user message on the stream route), `resume` (continuing a turn suspended on `ask_user()` or `browser_task()`), `cli` (`datasette agent chat`), `background` (a background agent's whole run) or `explorer` (the same, launched by the explorer). One of: `background`, `chat`, `cli`, `explorer`, `resume`.
+
+**`datasette_agent.tool.duration`** *(Histogram, unit `s`)* - One measurement per `execute_tool` span. Per-tool call count and error rate derive from its count, so there is no separate counter. A `suspended` duration is the time until the tool raised - short, and not the human wait.
+
+- `gen_ai.tool.name` - The tool's registered name (`sql_query`, `describe_table`, a plugin's tool...). Bounded: the set of registered tools.
+- `datasette_agent.tool.plugin` - The pluggy name of the plugin whose `register_agent_tools` hook registered the tool (`agent` for this plugin's own tools), or `unknown` for a tool constructed directly. Lets an operator see that the slow tool came from `datasette-foo`. Bounded by installed plugins.
+- `datasette_agent.tool.outcome` - How the tool call ended. Most tools return errors *as data* - `{"error": ...}` is a successful call from llm's point of view and a failed one from the operator's - so the returned payload is classified too: `permission_denied` and `not_found` for the two messages this plugin's own tools emit, `error` for any other top-level `error` key or a raised exception, `suspended` when the tool paused the turn on `ask_user()` / `browser_task()`, `ok` otherwise. Only a raised exception sets span status `ERROR`; a returned error payload means the tool did what it was asked and the request to it was wrong. One of: `error`, `not_found`, `ok`, `permission_denied`, `suspended`.
+
+Bucket boundaries: 0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92.
+
+**`datasette_agent.tool.output.truncated`** *(Counter, unit `{call}`)* - Tool outputs cut down before the model saw them. A high rate for `sql_query` means the model is over-fetching, or the model-visible output limit is wrong for the workload. A counter rather than a dimension on the duration histogram: truncation is an event to alert on, not something to split latency by.
+
+- `gen_ai.tool.name` - The tool's registered name (`sql_query`, `describe_table`, a plugin's tool...). Bounded: the set of registered tools.
+
+**`datasette_agent.background.iterations`** *(Histogram, unit `{iteration}`)* - Loop passes per background run, by outcome - how close the agents run to `MAX_ITERATIONS`. The whole run's duration is on `datasette_agent.turn.duration` with `mode=background`; iterations are deliberately not mixed into that histogram.
+
+- `datasette_agent.mode` - How the turn was started: `chat` (a user message on the stream route), `resume` (continuing a turn suspended on `ask_user()` or `browser_task()`), `cli` (`datasette agent chat`), `background` (a background agent's whole run) or `explorer` (the same, launched by the explorer). One of: `background`, `chat`, `cli`, `explorer`, `resume`.
+- `datasette_agent.outcome` - How the turn ended. `done` is a normal end; `question` and `browser_task` mean the turn suspended waiting on a human, which is the designed way a turn ends and **not** an error; `chain_limit` is llm's chain limit tripping; `cancelled` is the asyncio task being cancelled (a client disconnect, or the background-agent cancel endpoint); `error` is anything else raised. Background runs end in `completed`, `max_iterations`, `cancelled` or `error`. Only `error`, `chain_limit` and `max_iterations` set span status `ERROR`. One of: `browser_task`, `cancelled`, `chain_limit`, `completed`, `done`, `error`, `max_iterations`, `question`.
+
+Bucket boundaries: 1, 2, 3, 5, 8, 12, 16, 20, 30, 50.
+
+**`datasette_agent.suspensions`** *(Counter, unit `{suspension}`)* - Turns suspended waiting on a human, by kind and asking tool - counted when the pending row is inserted, not when a suspended call re-raises on resume. How often the agent stops to ask.
+
+- `datasette_agent.suspension.kind` *(optional)* - What a tool suspended the turn on: an `ask_user()` question or a `browser_task()`. On the `execute_tool` span when `outcome=suspended`; the dimension of the suspension metrics. One of: `browser_task`, `question`.
+- `gen_ai.tool.name` - The tool's registered name (`sql_query`, `describe_table`, a plugin's tool...). Bounded: the set of registered tools.
+- `datasette_agent.question.type` *(optional)* - The `ask_user()` question's shape: yes/no, a choice, or free text. Never the prompt or the options. One of: `boolean`, `choice`, `text`.
+
+**`datasette_agent.suspension.wait`** *(Histogram, unit `s`)* - Seconds from a suspension's row being created to its resolution - how long people take to answer, and how often browser tasks expire. Recorded at the four resolution sites after their guarded UPDATE succeeds, so a lost race is not double-counted.
+
+- `datasette_agent.suspension.kind` *(optional)* - What a tool suspended the turn on: an `ask_user()` question or a `browser_task()`. On the `execute_tool` span when `outcome=suspended`; the dimension of the suspension metrics. One of: `browser_task`, `question`.
+- `datasette_agent.suspension.resolution` - How a suspension ended: a question was `answered`; a browser task was `completed` by the page, `cancelled` by the user, or `expired` past its deadline. Expiry is recorded lazily, when someone next looks, so an expired wait is at least the timeout and possibly much more. One of: `answered`, `cancelled`, `completed`, `expired`.
+
+Bucket boundaries: 1, 5, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 14400, 86400.
+
+<!-- telemetry-reference:end -->
+
 ## Development
 
 To set up this plugin locally, first checkout the code. Run the tests like this:
 ```bash
 cd datasette-agent
 uv run pytest
+```
+After changing `datasette_agent/telemetry_registry.py`, regenerate the
+telemetry reference above (CI checks it is fresh):
+```bash
+uv run scripts/telemetry-doc.py
 ```
 To run the development server with a persistent internal database and GPT-5.5 as the model:
 ```bash

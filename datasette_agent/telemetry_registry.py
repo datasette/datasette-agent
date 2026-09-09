@@ -220,7 +220,8 @@ OUTCOME = Attribute(
     "cancelled (a client disconnect, or the background-agent cancel "
     "endpoint); ``error`` is anything else raised. Background runs end in "
     "``completed``, ``max_iterations``, ``cancelled`` or ``error``. Only "
-    "``error`` and ``chain_limit`` set span status ``ERROR``.",
+    "``error``, ``chain_limit`` and ``max_iterations`` set span status "
+    "``ERROR``.",
     values={
         "done",
         "question",

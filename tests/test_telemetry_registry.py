@@ -320,3 +320,23 @@ def test_metric_dimensions_are_bounded():
             assert attribute.values is not None or str(attribute) in OPEN_BUT_BOUNDED, (
                 f"{metric}: {attribute} is neither an enum nor allowlisted"
             )
+
+
+def test_generated_docs_are_fresh():
+    """README.md's telemetry reference matches the registry - the pytest
+    twin of the `scripts/telemetry-doc.py --check` CI gate."""
+    import importlib.util
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "telemetry_doc", root / "scripts" / "telemetry-doc.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    text = (root / "README.md").read_text()
+    _, rest = text.split(module.START, 1)
+    checked_in, _ = rest.split(module.END, 1)
+    assert checked_in == "\n\n" + module.render() + "\n", (
+        "README.md telemetry reference is stale - run `uv run scripts/telemetry-doc.py`"
+    )
