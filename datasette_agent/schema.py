@@ -1,3 +1,6 @@
+import asyncio
+
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     id TEXT PRIMARY KEY,
@@ -108,6 +111,19 @@ CREATE TABLE IF NOT EXISTS agent_explorer_reports (
 
 
 async def ensure_tables(db):
+    """Initialize once per database instance, retrying if initialization fails."""
+    if getattr(db, "_agent_tables_ensured", False):
+        return
+    if not hasattr(db, "_agent_tables_lock"):
+        db._agent_tables_lock = asyncio.Lock()
+    async with db._agent_tables_lock:
+        if getattr(db, "_agent_tables_ensured", False):
+            return
+        await _initialize_tables(db)
+        db._agent_tables_ensured = True
+
+
+async def _initialize_tables(db):
     await db.execute_write_script(SCHEMA_SQL)
     # Migration: agent_questions.html was added after the table first
     # shipped; CREATE TABLE IF NOT EXISTS won't add it to existing DBs.
