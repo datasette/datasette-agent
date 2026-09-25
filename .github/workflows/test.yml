@@ -31,7 +31,8 @@ jobs:
         cache-dependency-path: pyproject.toml
     - name: Install dependencies
       run: |
-        pip install . --group dev
+        # TEMPORARY: unreleased llm / datasette-llm OpenTelemetry branches, see pyproject.toml
+        pip install . --group dev "llm @ git+https://github.com/asg017/llm@asg017/otel-v2" "datasette-llm @ git+https://github.com/datasette/datasette-llm@asg017/otel-v2"
     - name: Run tests
       run: |
         python -m pytest

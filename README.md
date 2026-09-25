@@ -405,6 +405,21 @@ Add `--json` for machine-readable output:
 datasette agent tools --json
 ```
 
+## Observability
+
+datasette-agent emits [OpenTelemetry](https://opentelemetry.io/) spans using only the `opentelemetry-api` package. Without an OpenTelemetry SDK configured these are no-ops.
+
+Each agent turn, a user message or a resume after `ask_user()` / `browser_task()`, is one `invoke_agent datasette-agent` span with these attributes:
+
+- `gen_ai.operation.name`: `invoke_agent`
+- `gen_ai.agent.name`: `datasette-agent`
+- `gen_ai.conversation.id`: the conversation ID
+- `datasette_agent.mode`: `chat` or `resume`
+- `datasette_agent.outcome`: `completed`, `question`, `browser_task`, `error` or `cancelled`
+- `error.type`: the exception class name, if the turn failed
+
+[datasette-llm](https://github.com/datasette/datasette-llm) and [llm](https://llm.datasette.io/) supply the spans beneath it: a `datasette_llm.prompt` span for the chain, with `chat {model_id}` and `execute_tool {name}` spans for each model call and tool call. On Datasette 1.0a41 or later the turn span nests under Datasette's own request span. Spans never record message text, tool arguments or outputs, error messages or actor IDs.
+
 ## Development
 
 To set up this plugin locally, first checkout the code. Run the tests like this:

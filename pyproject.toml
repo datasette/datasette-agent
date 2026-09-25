@@ -13,6 +13,7 @@ dependencies = [
     "datasette>=1.0a37",
     "datasette-llm>=0.1a7",
     "llm>=0.32rc2",
+    "opentelemetry-api>=1.37",
     "python-ulid",
 ]
 
@@ -22,7 +23,19 @@ dev = [
     "pytest-asyncio",
     "llm-echo>=0.5a0",
     "inline-snapshot",
+    "opentelemetry-sdk>=1.37",
 ]
+
+# TEMPORARY: the llm (https://github.com/simonw/llm/pull/1712) and
+# datasette-llm (https://github.com/datasette/datasette-llm/pull/8)
+# OpenTelemetry PRs are not released. Remove this block, and the matching
+# pip install lines in .github/workflows/, and raise the llm>= /
+# datasette-llm>= floors once they ship. Do not cut a release while these
+# pins exist. uv.lock is gitignored: after the upstream branches move, run
+# uv sync --upgrade-package llm --upgrade-package datasette-llm
+[tool.uv.sources]
+llm = { git = "https://github.com/asg017/llm", branch = "asg017/otel-v2" }
+datasette-llm = { git = "https://github.com/datasette/datasette-llm", branch = "asg017/otel-v2" }
 
 [build-system]
 requires = ["setuptools"]

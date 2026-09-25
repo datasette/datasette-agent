@@ -19,6 +19,7 @@ from .browser_tasks import BrowserTaskPending
 from .models import AGENT_PURPOSE
 from .questions import QuestionPending
 from .schema import ensure_tables
+from .telemetry import turn_span
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
@@ -333,9 +334,11 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         # Persist the user turn as a MessageDict.
         await insert_message(db, conversation_id, make_user_message_dict(user_message))
 
-        pending = await _run_chain(
-            datasette, actor, conversation_id, writer, user_message
-        )
+        with turn_span("chat", conversation_id) as turn:
+            pending = await _run_chain(
+                datasette, actor, conversation_id, writer, user_message
+            )
+            turn.set_outcome(pending[0] if pending else "completed")
 
         # Auto-set title from the first user message if not yet set.
         row = (
@@ -375,9 +378,11 @@ async def resume_agent(datasette, actor, conversation_id, writer):
     current_conversation_id.set(conversation_id)
 
     try:
-        pending = await _run_chain(
-            datasette, actor, conversation_id, writer, prompt_text=None
-        )
+        with turn_span("resume", conversation_id) as turn:
+            pending = await _run_chain(
+                datasette, actor, conversation_id, writer, prompt_text=None
+            )
+            turn.set_outcome(pending[0] if pending else "completed")
         await _finish_turn(writer, pending)
     except Exception as e:
         await _send_sse(writer, "error", {"message": str(e)})
