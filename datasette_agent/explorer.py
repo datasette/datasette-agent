@@ -121,6 +121,7 @@ async def start_explorer(
         actor=actor,
         goal=goal,
         tools=tools,
+        mode="explorer",
     )
 
     # Link agent to report
