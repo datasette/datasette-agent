@@ -561,7 +561,9 @@ async def test_stream_endpoint_headers(datasette_instance, cookies):
     assert "text/event-stream" in response.headers.get("content-type", "")
     # Content-Encoding: none is needed for SSE streaming on Fly.io
     assert response.headers.get("content-encoding") == "none"
-    assert response.headers.get("cache-control") == "no-cache"
+    # Datasette 1.0a41+ replaces it with "private, no-store" for
+    # authenticated requests - stricter, and fine for SSE
+    assert response.headers.get("cache-control") in ("no-cache", "private, no-store")
 
 
 @pytest.mark.asyncio
