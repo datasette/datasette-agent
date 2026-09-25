@@ -1,7 +1,6 @@
 import json
 from datetime import datetime, timezone
 
-from datasette.telemetry import linked_root_span_kwargs
 from datasette_llm import LLM
 
 from .agent import _build_system_prompt
@@ -21,6 +20,7 @@ from .telemetry import (
     record_tool_output_truncated,
     turn_span,
 )
+from .telemetry_compat import linked_root_span_kwargs
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
 MAX_ITERATIONS = 50

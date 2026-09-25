@@ -418,6 +418,11 @@ operator story; the two easiest routes are the standard
 which records this instance's spans and metrics into a SQLite database and
 browses them at `/-/otel` with no `OTEL_*` configuration at all.
 
+Datasette 1.0a41 and later instrument core too, so the agent's spans nest
+inside core's HTTP request spans and sit alongside its `db.query` spans. On
+Datasette 1.0a37 to 1.0a40 the agent's own spans and metrics are still emitted,
+but without core's spans around them.
+
 Three spans follow the OpenTelemetry GenAI semantic conventions (`gen_ai.*`),
 so trace backends render them with their GenAI styling. A chat turn that runs
 one SQL query produces this tree (core's spans marked):

@@ -26,9 +26,11 @@ def test_package_never_imports_the_sdk():
     # Front-loaded by conftest's pytest_collection_modifyitems - the
     # helper's docstring documents a macOS/CPython 3.13 fork+exec crash
     # when subprocess-spawning tests run late in a thread-heavy process.
-    from datasette.telemetry_testing import assert_package_never_imports_sdk
+    testing = pytest.importorskip(
+        "datasette.telemetry_testing", reason="telemetry kit needs datasette>=1.0a41"
+    )
 
-    assert_package_never_imports_sdk("datasette_agent")
+    testing.assert_package_never_imports_sdk("datasette_agent")
 
 
 def test_registry_has_no_duplicate_names():
@@ -89,6 +91,9 @@ def test_span_attributes_are_registered_attributes():
 # --- Dynamic half ---------------------------------------------------------
 
 pytest.importorskip("opentelemetry.sdk")
+pytest.importorskip(
+    "datasette.telemetry_testing", reason="telemetry kit needs datasette>=1.0a41"
+)
 
 from datasette.app import Datasette  # noqa: E402
 from datasette.telemetry_testing import (  # noqa: E402

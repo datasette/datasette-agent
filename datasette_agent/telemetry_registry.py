@@ -1,8 +1,9 @@
 """The single source of truth for every OpenTelemetry signal datasette-agent emits.
 
 Built from Datasette's public plugin telemetry kit
-(``datasette.telemetry_registry`` - see Datasette's "Telemetry for plugin
-authors" docs): ``Attribute`` / ``SpanName`` / ``MetricName`` subclass
+(``datasette.telemetry_registry``, via ``telemetry_compat`` so it still
+imports on Datasette releases that predate the kit - see Datasette's
+"Telemetry for plugin authors" docs): ``Attribute`` / ``SpanName`` / ``MetricName`` subclass
 ``str``, so a registry entry *is* the name handed to OpenTelemetry and a
 typo is an ``ImportError`` rather than a silently misnamed signal.
 
@@ -30,7 +31,7 @@ never on a metric.
 
 from opentelemetry.trace import SpanKind
 
-from datasette.telemetry_registry import (
+from .telemetry_compat import (
     COUNTER,
     HISTOGRAM,
     UPDOWN_COUNTER,

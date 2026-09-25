@@ -10,14 +10,20 @@ import pytest
 from datasette import hookimpl
 from datasette.plugins import pm
 from datasette_agent.tools import AgentTool
-from datasette.telemetry_testing import (  # noqa: F401
-    MetricsCollector,
-    otel_metrics,
-    otel_meter_provider,
-    otel_provider,
-    otel_reset,
-    otel_spans,
-)
+from datasette_agent.telemetry_compat import HAS_DATASETTE_TELEMETRY
+
+# Datasette < 1.0a41 has no telemetry kit: the telemetry test modules skip
+# themselves with importorskip and everything else runs.
+# TODO: import unconditionally once the datasette>= floor includes the kit.
+if HAS_DATASETTE_TELEMETRY:
+    from datasette.telemetry_testing import (  # noqa: F401
+        MetricsCollector,
+        otel_metrics,
+        otel_meter_provider,
+        otel_provider,
+        otel_reset,
+        otel_spans,
+    )
 
 
 def pytest_collection_modifyitems(items):
@@ -28,6 +34,7 @@ def pytest_collection_modifyitems(items):
     subprocess_tests = {
         "test_package_never_imports_the_sdk",
         "test_turn_runs_unchanged_without_a_provider",
+        "test_plugin_imports_without_the_kit",
     }
     front = [item for item in items if item.name in subprocess_tests]
     for item in front:

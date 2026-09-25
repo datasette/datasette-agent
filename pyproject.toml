@@ -10,6 +10,10 @@ classifiers=[
 ]
 requires-python = ">=3.10"
 dependencies = [
+    # 1.0a41+ adds Datasette's plugin telemetry kit; older releases are
+    # handled by datasette_agent/telemetry_compat.py.
+    # TODO: raise to the first stable 1.x release that includes the kit and
+    # drop the compat fallback.
     "datasette>=1.0a37",
     "datasette-llm>=0.1a7",
     "llm>=0.32rc2",
@@ -25,15 +29,6 @@ dev = [
     "inline-snapshot",
     "opentelemetry-sdk>=1.37",
 ]
-
-# DEV-ONLY PIN: the telemetry work imports Datasette's plugin telemetry kit
-# (datasette.telemetry_registry / datasette.telemetry / datasette.telemetry_testing),
-# which is public plugin API on the asg017/otel-phase1-6-plugin-kit branch
-# (PR #2899) and not yet in a release. Once the stack ships, delete this
-# [tool.uv.sources] block and raise the `datasette>=` floor above to the
-# release that includes PR #2899. CI has a matching temporary pip step.
-[tool.uv.sources]
-datasette = { git = "https://github.com/simonw/datasette", branch = "asg017/otel-phase1-6-plugin-kit" }
 
 [build-system]
 requires = ["setuptools"]

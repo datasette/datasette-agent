@@ -22,8 +22,9 @@ operator's provider (``opentelemetry-instrument``, a viewer plugin) the
 provider exists before this module is imported.
 
 For root-with-link spans (a background agent caused by a request but not
-contained by it) use ``datasette.telemetry.linked_root_span_kwargs()``;
-there is deliberately no local helper.
+contained by it) use ``linked_root_span_kwargs()`` - core's
+``datasette.telemetry`` helper, re-exported by ``telemetry_compat`` with a
+fallback for Datasette releases that predate the kit.
 """
 
 import asyncio
@@ -304,7 +305,7 @@ def turn_span(*, mode, conversation_id, **span_kwargs):
     suspension or a cancellation is not a failure of the agent.
 
     ``span_kwargs`` go to ``start_as_current_span``: a background run
-    passes ``datasette.telemetry.linked_root_span_kwargs()`` to become a
+    passes ``telemetry_compat.linked_root_span_kwargs()`` to become a
     root with a link instead of a child of the request that started it.
     """
     mode = clamp(mode, MODE.values, "chat")

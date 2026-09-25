@@ -6,6 +6,9 @@ import pytest
 from datasette.app import Datasette
 
 pytest.importorskip("opentelemetry.sdk")
+pytest.importorskip(
+    "datasette.telemetry_testing", reason="telemetry kit needs datasette>=1.0a41"
+)
 
 from test_telemetry import (  # noqa: E402
     GOAL_TOOL_THEN_FINISH,

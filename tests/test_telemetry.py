@@ -24,6 +24,9 @@ from opentelemetry.trace import SpanKind, StatusCode
 
 
 pytest.importorskip("opentelemetry.sdk")
+pytest.importorskip(
+    "datasette.telemetry_testing", reason="telemetry kit needs datasette>=1.0a41"
+)
 
 SCOPE = "datasette_agent"
 
