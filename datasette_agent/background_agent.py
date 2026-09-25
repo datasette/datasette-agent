@@ -13,6 +13,7 @@ from .messages import (
     prepare_tool_output_for_model,
 )
 from .schema import ensure_tables
+from .telemetry import linked_root_kwargs, turn_span
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
 MAX_ITERATIONS = 50
@@ -52,8 +53,13 @@ def _make_mark_finished_tool(finished_state):
     )
 
 
-async def run_background_agent(datasette, actor, agent_id, tools=None):
-    """Run a background agent to completion. Designed to be launched as an asyncio.Task."""
+async def run_background_agent(
+    datasette, actor, agent_id, tools=None, *, mode="background"
+):
+    """Run a background agent to completion. Designed to be launched as an asyncio.Task.
+
+    mode is the telemetry mode: "background" or "explorer".
+    """
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
@@ -66,6 +72,18 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     if row is None:
         return
 
+    # The run outlives the request (or chat turn) that started it, so it is
+    # the root of its own trace, linked back to that span
+    with turn_span(
+        mode, row["conversation_id"], agent_id, **linked_root_kwargs()
+    ) as turn:
+        turn.set_outcome(
+            *await _run_background_agent(datasette, actor, agent_id, tools, db, row)
+        )
+
+
+async def _run_background_agent(datasette, actor, agent_id, tools, db, row):
+    "Returns (outcome, error_type) for the turn span."
     goal = row["goal"]
     conversation_id = row["conversation_id"]
     spawned_by_conversation_id = row["spawned_by_conversation_id"]
@@ -208,6 +226,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             "WHERE id = ? AND status = 'running'",
             [status, final_message, error, now, agent_id],
         )
+        return (status if finished_state["called"] else "max_iterations"), None
 
     except Exception as e:
         now = datetime.now(timezone.utc).isoformat()
@@ -216,3 +235,4 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
             "SET status = 'error', error = ?, updated_at = ? WHERE id = ?",
             [str(e), now, agent_id],
         )
+        return "error", type(e).__qualname__

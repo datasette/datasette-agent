@@ -43,7 +43,12 @@ def ds(tmp_path):
     return Datasette(
         memory=True,
         metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
-        config={"permissions": {"datasette-agent": {"id": "user"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                "datasette-agent-background": {"id": "user"},
+            }
+        },
         internal=str(tmp_path / "internal.db"),
     )
 
@@ -180,3 +185,123 @@ def test_cancelled_turn_is_not_an_error(spans, exc):
     assert turn.attributes["datasette_agent.outcome"] == "cancelled"
     assert "error.type" not in turn.attributes
     assert turn.status.status_code == StatusCode.UNSET
+
+
+# ---- background agents and the explorer: linked root spans ----
+
+
+def finishing_goal(*tool_calls):
+    finish = {"name": "mark_finished", "arguments": {"final_message": "done"}}
+    return json.dumps({"prompt": "secret goal", "tool_calls": [*tool_calls, finish]})
+
+
+async def background_turn(spans):
+    for _ in range(250):
+        found = [
+            t for t in turns(spans()) if "datasette_agent.agent_id" in t.attributes
+        ]
+        if found:
+            return found[0]
+        await asyncio.sleep(0.02)
+    raise AssertionError("background turn span never ended")
+
+
+@pytest.mark.asyncio
+async def test_background_run_is_linked_root(ds, cookies, spans):
+    tool = {"name": "list_databases_and_tables", "arguments": {}}
+    response = await ds.client.post(
+        "/-/agent/api/background",
+        content=json.dumps({"goal": finishing_goal(tool)}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    turn = await background_turn(spans)
+    finished = spans()
+    assert turn.attributes["datasette_agent.mode"] == "background"
+    assert turn.attributes["datasette_agent.outcome"] == "completed"
+    assert turn.attributes["datasette_agent.agent_id"] == response.json()["agent_id"]
+    assert turn.attributes["gen_ai.conversation.id"] == (
+        response.json()["conversation_id"]
+    )
+    # Linked to the request span on Datasette >= 1.0a41; 1.0a37 has none
+    requests = [s for s in finished if s.name.startswith("POST ")]
+    assert [link.context.span_id for link in turn.links] == [
+        s.context.span_id for s in requests
+    ]
+    names = [s.name for s in descendants(finished, turn)]
+    assert "chat echo" in names
+    assert "execute_tool list_databases_and_tables" in names
+    # Privacy: the goal text never reaches a span attribute
+    for span in finished:
+        assert not any("secret goal" in str(v) for v in span.attributes.values())
+
+
+@pytest.mark.asyncio
+async def test_spawn_from_chat_links_to_tool_span(ds, cookies, spans):
+    conversation_id = await start_conversation(ds, cookies)
+    goal = {"goal": finishing_goal()}
+    message = {"tool_calls": [{"name": "spawn_background_agent", "arguments": goal}]}
+    await send_message(ds, cookies, conversation_id, json.dumps(message))
+    turn = await background_turn(spans)
+    by_id = {s.context.span_id: s for s in spans()}
+    [link] = turn.links
+    assert by_id[link.context.span_id].name == "execute_tool spawn_background_agent"
+    assert turn.context.trace_id != link.context.trace_id
+    assert turn.parent is None
+
+
+@pytest.mark.asyncio
+async def test_explorer_mode_and_link(ds, spans, monkeypatch):
+    from datasette_agent import explorer
+
+    monkeypatch.setattr(explorer, "_build_explorer_goal", lambda *a: finishing_goal())
+    await ds.invoke_startup()
+    with trace.get_tracer("test").start_as_current_span("outer") as outer:
+        await explorer.start_explorer(ds, {"id": "user"}, "_memory")
+    turn = await background_turn(spans)
+    assert turn.attributes["datasette_agent.mode"] == "explorer"
+    assert turn.attributes["datasette_agent.outcome"] == "completed"
+    [link] = turn.links
+    assert link.context.span_id == outer.get_span_context().span_id
+    assert turn.context.trace_id != outer.get_span_context().trace_id
+
+
+@pytest.mark.asyncio
+async def test_cancelled_background_run(ds, cookies, spans):
+    from datasette_agent.api import start_background_agent
+    from datasette_agent.tools import AgentTool
+
+    started = asyncio.Event()
+
+    async def hang(datasette, actor):
+        started.set()
+        await asyncio.sleep(60)
+
+    tool = AgentTool(name="hang", description="Hang", input_schema={}, fn=hang)
+    await ds.invoke_startup()
+    agent_id = await start_background_agent(
+        ds, {"id": "user"}, finishing_goal({"name": "hang", "arguments": {}}), [tool]
+    )
+    await asyncio.wait_for(started.wait(), 5)
+    response = await ds.client.post(
+        f"/-/agent/api/background/{agent_id}/cancel", cookies=cookies
+    )
+    assert response.json()["cancelled"]
+    turn = await background_turn(spans)
+    assert turn.attributes["datasette_agent.outcome"] == "cancelled"
+    assert turn.status.status_code == StatusCode.UNSET
+    assert "error.type" not in turn.attributes
+
+
+@pytest.mark.asyncio
+async def test_background_max_iterations(ds, spans, monkeypatch):
+    from datasette_agent import background_agent
+    from datasette_agent.api import start_background_agent
+
+    monkeypatch.setattr(background_agent, "MAX_ITERATIONS", 1)
+    await ds.invoke_startup()
+    await start_background_agent(ds, {"id": "user"}, "never finishes")
+    turn = await background_turn(spans)
+    assert turn.attributes["datasette_agent.outcome"] == "max_iterations"
+    assert turn.attributes["error.type"] == "_OTHER"
+    assert turn.status.status_code == StatusCode.ERROR

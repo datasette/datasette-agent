@@ -414,11 +414,12 @@ Each agent turn, a user message or a resume after `ask_user()` / `browser_task()
 - `gen_ai.operation.name`: `invoke_agent`
 - `gen_ai.agent.name`: `datasette-agent`
 - `gen_ai.conversation.id`: the conversation ID
-- `datasette_agent.mode`: `chat` or `resume`
-- `datasette_agent.outcome`: `completed`, `question`, `browser_task`, `error` or `cancelled`
-- `error.type`: the exception class name, if the turn failed
+- `datasette_agent.mode`: `chat`, `resume`, `background` or `explorer`
+- `datasette_agent.outcome`: `completed`, `question`, `browser_task`, `max_iterations`, `error` or `cancelled`
+- `datasette_agent.agent_id`: the background agent ID, for background and explorer runs
+- `error.type`: the exception class name if the turn raised, otherwise `_OTHER` (for `max_iterations` or an agent that finished with an error)
 
-[datasette-llm](https://github.com/datasette/datasette-llm) and [llm](https://llm.datasette.io/) supply the spans beneath it: a `datasette_llm.prompt` span for the chain, with `chat {model_id}` and `execute_tool {name}` spans for each model call and tool call. On Datasette 1.0a41 or later the turn span nests under Datasette's own request span. Spans never record message text, tool arguments or outputs, error messages or actor IDs.
+[datasette-llm](https://github.com/datasette/datasette-llm) and [llm](https://llm.datasette.io/) supply the spans beneath it: a `datasette_llm.prompt` span for the chain, with `chat {model_id}` and `execute_tool {name}` spans for each model call and tool call. On Datasette 1.0a41 or later the turn span nests under Datasette's own request span. A background agent or explorer run is a single turn that can outlive the request or chat turn that started it by minutes, so it starts its own trace instead of nesting. Its turn span carries a span link back to the span that started it, when there is one (e.g. the request span on Datasette 1.0a41+, or the chat's `execute_tool spawn_background_agent` span). Spans never record message text, tool arguments or outputs, error messages or actor IDs.
 
 ## Development
 
