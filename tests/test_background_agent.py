@@ -257,6 +257,57 @@ async def test_background_agent_completes(datasette_instance):
     assert status["final_message"] == "All done"
 
 
+@pytest.mark.asyncio
+async def test_background_agent_system_prompt_leads_message_chain(
+    datasette_instance, monkeypatch
+):
+    """Same as the chat agent: system= alone never reaches adapters that
+    only read prompt.messages, so the goal-bearing system prompt must
+    lead the chain."""
+    from datasette_llm import LLM
+
+    from datasette_agent.api import (
+        get_background_agent_status,
+        start_background_agent,
+    )
+
+    chain_calls = []
+
+    class CapturingLLM(LLM):
+        async def model(self, *args, **kwargs):
+            model = await super().model(*args, **kwargs)
+            real_chain = model.chain
+
+            def chain(*chain_args, **chain_kwargs):
+                chain_calls.append(chain_kwargs)
+                return real_chain(*chain_args, **chain_kwargs)
+
+            model.chain = chain
+            return model
+
+    monkeypatch.setattr("datasette_agent.background_agent.LLM", CapturingLLM)
+
+    await datasette_instance.invoke_startup()
+    agent_id = await start_background_agent(
+        datasette=datasette_instance,
+        actor={"id": "user"},
+        goal=GOAL_THAT_FINISHES,
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(datasette_instance, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+    assert status["status"] == "completed"
+
+    assert chain_calls
+    messages = chain_calls[0]["messages"]
+    assert [m.role for m in messages].count("system") == 1
+    assert messages[0].role == "system"
+    assert messages[0].parts[0].text == chain_calls[0]["system"]
+    assert "Your goal:" in chain_calls[0]["system"]
+
+
 # --- Background tools for chat agent ---
 
 

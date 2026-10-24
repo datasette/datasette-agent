@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 
+import llm
 from datasette_llm import LLM
 
 from .agent import _build_system_prompt
@@ -151,7 +152,8 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
 
             chain_response = model.chain(
                 current_user_text,
-                messages=chain_messages,
+                # Lead with the system prompt - see agent._run_chain
+                messages=[llm.system(system_prompt), *chain_messages],
                 system=system_prompt,
                 tools=llm_tools,
                 stream=False,

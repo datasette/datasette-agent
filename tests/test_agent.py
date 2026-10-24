@@ -66,6 +66,76 @@ async def test_system_prompt_documents_display_modes(datasette_instance):
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_leads_message_chain(datasette_instance, monkeypatch):
+    """llm treats messages= as the authoritative history and leaves
+    system= out of it, so adapters that only read prompt.messages (the
+    OpenAI ones) never saw the system prompt. It must be the first
+    message of the chain on every turn - and never persisted, or it
+    would be replayed as history on the next turn."""
+    from datasette_llm import LLM
+
+    from datasette_agent.agent import run_agent
+    from datasette_agent.schema import ensure_tables
+
+    chain_calls = []
+
+    class CapturingLLM(LLM):
+        async def model(self, *args, **kwargs):
+            model = await super().model(*args, **kwargs)
+            real_chain = model.chain
+
+            def chain(*chain_args, **chain_kwargs):
+                chain_calls.append(chain_kwargs)
+                return real_chain(*chain_args, **chain_kwargs)
+
+            model.chain = chain
+            return model
+
+    monkeypatch.setattr("datasette_agent.agent.LLM", CapturingLLM)
+
+    ds = datasette_instance
+    await ds.invoke_startup()
+    db = ds.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = "test-system-prompt"
+    now = "2026-10-24T00:00:00+00:00"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, now, now],
+    )
+
+    class Writer:
+        def __init__(self):
+            self.chunks = []
+
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    writer = Writer()
+    await run_agent(ds, {"id": "user"}, conversation_id, "first question", writer)
+    await run_agent(ds, {"id": "user"}, conversation_id, "second question", writer)
+
+    events = _parse_sse("".join(writer.chunks))
+    assert [e for e in events if e["event"] == "error"] == []
+    assert len(chain_calls) == 2
+    for call in chain_calls:
+        messages = call["messages"]
+        assert [m.role for m in messages].count("system") == 1
+        assert messages[0].role == "system"
+        assert messages[0].parts[0].text == call["system"]
+        assert "data analysis assistant" in call["system"]
+
+    rows = (
+        await db.execute(
+            "SELECT role FROM agent_messages WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).rows
+    assert "system" not in {row["role"] for row in rows}
+
+
+@pytest.mark.asyncio
 async def test_system_prompt_warns_against_repeating_rendered_tables(
     datasette_instance,
 ):

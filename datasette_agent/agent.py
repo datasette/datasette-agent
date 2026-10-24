@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 
+import llm
 from datasette.resources import DatabaseResource
 from datasette_llm import LLM
 
@@ -214,9 +215,13 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         # Strip user-only keys and safely cap JSON before the model sees it.
         tool_result.output = prepare_tool_output_for_model(output)
 
+    # messages= is authoritative, so llm leaves system= out of it and
+    # adapters that only read prompt.messages (OpenAI) would never see
+    # the system prompt. Lead the chain with it; system= stays for
+    # adapters that read prompt.system and for the agent_responses row.
     chain_response = model.chain(
         prompt_text,
-        messages=prior_messages,
+        messages=[llm.system(system_prompt), *prior_messages],
         system=system_prompt,
         tools=llm_tools,
         stream=True,
