@@ -13,6 +13,7 @@ from .messages import (
     make_user_message_dict,
     prepare_tool_output_for_model,
 )
+from .models import AGENT_PURPOSE, resolve_agent_model_id
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
@@ -98,7 +99,11 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
         await insert_message(db, conversation_id, make_user_message_dict(goal))
 
         llm_instance = LLM(datasette)
-        model = await llm_instance.model(purpose="agent", actor=actor)
+        model = await llm_instance.model(
+            model_id=await resolve_agent_model_id(datasette, actor),
+            purpose=AGENT_PURPOSE,
+            actor=actor,
+        )
 
         now = datetime.now(timezone.utc).isoformat()
         await db.execute_write(

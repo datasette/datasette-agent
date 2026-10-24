@@ -6,7 +6,11 @@ import json
 from datasette.app import Datasette
 import pytest
 
-from datasette_agent.models import get_agent_models
+from datasette_agent.models import (
+    AgentModelUnavailable,
+    get_agent_models,
+    resolve_agent_model_id,
+)
 from datasette_agent.schema import ensure_tables
 
 # gpt-4 is registered by llm's OpenAI plugin with supports_tools=False,
@@ -292,12 +296,7 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
 
     from datasette_agent.agent import run_agent
 
-    ds = Datasette(
-        memory=True,
-        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
-        config={"permissions": {"datasette-agent": {"id": "user"}}},
-        internal=str(tmp_path / "internal.db"),
-    )
+    ds = _make_datasette(tmp_path, MULTI_MODEL_CONFIG)
     await ds.invoke_startup()
     db = ds.get_internal_database()
     await ensure_tables(db)
@@ -307,7 +306,7 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
         "INSERT INTO agent_conversations "
         "(id, actor_id, title, model_id, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        [conversation_id, "user", None, "pinned-model", now, now],
+        [conversation_id, "user", None, "echo-needs-key", now, now],
     )
 
     requested = []
@@ -318,7 +317,7 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
 
         def to_dict(self):
             return {
-                "model": "pinned-model",
+                "model": "echo-needs-key",
                 "id": "fake-response",
                 "prompt": {},
                 "messages": [
@@ -331,7 +330,7 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
             yield FakeResponse()
 
     class FakeModel:
-        model_id = "pinned-model"
+        model_id = "echo-needs-key"
 
         def chain(self, *args, **kwargs):
             return FakeChain()
@@ -356,7 +355,125 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
     for message in ("first", "second"):
         await run_agent(ds, {"id": "user"}, conversation_id, message, Writer())
 
-    assert requested == [("pinned-model", "agent"), ("pinned-model", "agent")]
+    assert requested == [("echo-needs-key", "agent"), ("echo-needs-key", "agent")]
+
+
+@pytest.mark.asyncio
+async def test_pinned_model_that_is_no_longer_offered_stops_the_chat(tmp_path):
+    """datasette-llm skips its allowlist and blocklist for an explicit
+    model_id, so a conversation pinned before its model was blocked
+    would otherwise keep using it every turn."""
+    ds = _make_datasette(
+        tmp_path,
+        {
+            "default_model": "echo",
+            "require_keys": False,
+            "models": ["echo", "echo-needs-key"],
+            "blocked_models": ["echo-needs-key"],
+        },
+    )
+    await ds.invoke_startup()
+    db = ds.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = "01BLOCKEDMODELAAAAAAAAAAAA"
+    now = "2026-10-24T00:00:00+00:00"
+    await db.execute_write(
+        "INSERT INTO agent_conversations "
+        "(id, actor_id, title, model_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, "echo-needs-key", now, now],
+    )
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+
+    response = await ds.client.post(
+        f"/-/agent/{conversation_id}/stream",
+        content=json.dumps({"message": "hello"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert (
+        "Model echo-needs-key is no longer available - start a new chat "
+        "to use a different model"
+    ) in response.text
+    count = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_responses WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).first()
+    assert count["c"] == 0
+
+
+@pytest.mark.asyncio
+async def test_resolve_without_default_uses_first_model_on_offer(tmp_path):
+    ds = _make_datasette(
+        tmp_path, {"require_keys": False, "models": ["echo-needs-key", "echo"]}
+    )
+    await ds.invoke_startup()
+    models, default_model = await get_agent_models(ds, {"id": "user"})
+    assert default_model is None
+    # The same model the new-chat picker preselects.
+    assert await resolve_agent_model_id(ds, {"id": "user"}) == models[0]
+
+
+@pytest.mark.asyncio
+async def test_resolve_never_swaps_a_configured_default(tmp_path):
+    ds = _make_datasette(
+        tmp_path,
+        {
+            "default_model": "echo-needs-key",
+            "require_keys": False,
+            "models": ["echo", "echo-needs-key"],
+            "blocked_models": ["echo-needs-key"],
+        },
+    )
+    await ds.invoke_startup()
+    with pytest.raises(
+        AgentModelUnavailable, match="Model not available: echo-needs-key"
+    ):
+        await resolve_agent_model_id(ds, {"id": "user"})
+
+
+@pytest.mark.asyncio
+async def test_resolve_with_no_models_on_offer(tmp_path):
+    ds = _make_datasette(tmp_path, {"models": ["echo"], "blocked_models": ["echo"]})
+    await ds.invoke_startup()
+    with pytest.raises(AgentModelUnavailable, match="No models are available"):
+        await resolve_agent_model_id(ds, {"id": "user"})
+
+
+@pytest.mark.asyncio
+async def test_background_agent_runs_without_a_default_model(tmp_path):
+    """Background agents and explorer reports have no picker, so with no
+    default configured they use the first model on offer instead of
+    failing."""
+    import asyncio
+
+    from datasette_agent.api import get_background_agent_status, start_background_agent
+
+    ds = _make_datasette(tmp_path, {"require_keys": False, "models": ["echo"]})
+    await ds.invoke_startup()
+    goal = json.dumps(
+        {
+            "prompt": "Test goal",
+            "tool_calls": [
+                {"name": "mark_finished", "arguments": {"final_message": "done"}}
+            ],
+        }
+    )
+    agent_id = await start_background_agent(
+        datasette=ds, actor={"id": "user"}, goal=goal
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(ds, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+    assert status["status"] == "completed", status["error"]
+    row = await _conversation_row(ds, status["conversation_id"])
+    assert row["model_id"] == "echo"
 
 
 @pytest.mark.asyncio
