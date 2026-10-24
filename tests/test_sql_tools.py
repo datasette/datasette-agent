@@ -75,8 +75,12 @@ def _get_execute_write_tool():
     raise AssertionError("execute_write_sql tool not found")
 
 
-def _expected_sql_edit_url(ds, database, sql):
-    return ds.urls.database(database) + "/-/query?" + urlencode({"sql": sql})
+def _expected_sql_edit_url(ds, database, sql, params=None):
+    return (
+        ds.urls.database(database)
+        + "/-/query?"
+        + urlencode({"sql": sql, **(params or {})})
+    )
 
 
 async def _make_tool_context(datasette, arguments, tool_call_id="call_write_1"):
@@ -830,12 +834,15 @@ async def test_sql_query_bound_parameters(datasette_with_data, display, legacy_p
         else [{"name": name, "value": value} for name, value in values.items()]
     )
     original_params = json.dumps(params)
+    sql = (
+        "select :text as text, :integer as integer_value, :real as real_value, "
+        ":boolean as boolean_value, :null as null_value from items where qty = :integer"
+    )
     out = await _get_sql_tool().fn(
         datasette=datasette_with_data,
         actor={"id": "user"},
         database="data",
-        sql="select :text as text, :integer as integer_value, :real as real_value, "
-        ":boolean as boolean_value, :null as null_value from items where qty = :integer",
+        sql=sql,
         display=display,
         params=params,
     )
@@ -850,6 +857,14 @@ async def test_sql_query_bound_parameters(datasette_with_data, display, legacy_p
         }
     ]
     assert json.dumps(params) == original_params
+    # The "View SQL query" link carries the values too, so the query
+    # page opens with them filled in. NULL cannot be spelled there.
+    assert data["_edit_sql_url"] == _expected_sql_edit_url(
+        datasette_with_data,
+        "data",
+        sql,
+        {"text": "O'Reilly & friends", "integer": 3, "real": 1.5, "boolean": 1},
+    )
 
 
 @pytest.mark.asyncio

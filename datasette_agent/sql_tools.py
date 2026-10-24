@@ -576,6 +576,19 @@ async def _describe_table(datasette, actor, database: str, table: str):
     )
 
 
+def _edit_sql_url(query_path, sql, params=None):
+    # Datasette's query page reads named parameters from the query
+    # string as text and ignores _-prefixed ones. Booleans become 1/0,
+    # as SQLite stores them; NULL has no spelling there, so it is left
+    # out for the page to prompt for.
+    args = {"sql": sql}
+    for name, value in (params or {}).items():
+        if value is None or name == "sql" or name.startswith("_"):
+            continue
+        args[name] = int(value) if isinstance(value, bool) else value
+    return f"{query_path}?{urlencode(args)}"
+
+
 async def _sql_query(
     datasette, actor, database: str, sql: str, display: str = "model", params=None
 ):
@@ -597,10 +610,11 @@ async def _sql_query(
         display = "model"
     db = datasette.get_database(database)
     query_path = datasette.urls.database(database) + "/-/query"
-    edit_sql_url = f"{query_path}?{urlencode({'sql': sql})}"
+    edit_sql_url = _edit_sql_url(query_path, sql)
     start = time.perf_counter()
     try:
         bound_params = _normalize_params([] if params is None else params)
+        edit_sql_url = _edit_sql_url(query_path, sql, bound_params)
         result = await db.execute(sql, bound_params, truncate=True)
         query_ms = round((time.perf_counter() - start) * 1000, 2)
         rows = [dict(row) for row in result.rows]
