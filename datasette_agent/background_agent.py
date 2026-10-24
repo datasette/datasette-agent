@@ -90,6 +90,10 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     tools.append(mark_finished_tool)
 
     try:
+        # chain() appends each turn's user text to messages= itself, so
+        # the history is always loaded before that text is persisted -
+        # loading it back as well would send it to the model twice.
+        chain_messages = await load_messages(db, conversation_id)
         # Save initial goal as the opening user message.
         await insert_message(db, conversation_id, make_user_message_dict(goal))
 
@@ -120,13 +124,12 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     f"Keep going. Reminder: your goal is: {goal}. "
                     "You must call mark_finished() when done."
                 )
+                chain_messages = await load_messages(db, conversation_id)
                 await insert_message(
                     db,
                     conversation_id,
                     make_user_message_dict(current_user_text),
                 )
-
-            chain_messages = await load_messages(db, conversation_id)
 
             pending_tool_messages = []
 

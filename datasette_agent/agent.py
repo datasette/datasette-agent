@@ -99,12 +99,16 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     chain re-executes them through the normal tool machinery before
     calling the model.
 
-    prompt_text is passed through to chain() for adapters that read
-    prompt.prompt directly (e.g. echo); the persisted history passed as
-    messages= is authoritative and must already contain the
-    corresponding user row.
+    prompt_text is this turn's user message, or None when resuming.
+    chain() appends it to messages= itself, so the history is loaded
+    before its row is persisted - loading it back as well would send
+    the model every user message twice.
     """
     db = datasette.get_internal_database()
+
+    prior_messages = await load_messages(db, conversation_id)
+    if prompt_text is not None:
+        await insert_message(db, conversation_id, make_user_message_dict(prompt_text))
 
     agent_tools = await get_agent_tools(datasette)
     agent_tools = await filter_tools_for_actor(datasette, actor, agent_tools)
@@ -118,7 +122,6 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     )
 
     system_prompt = await _build_system_prompt(datasette, actor)
-    prior_messages = await load_messages(db, conversation_id)
 
     # A conversation is pinned to one model for its whole life. The
     # model is chosen when the conversation is created (or, for
@@ -335,9 +338,7 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         user_message = "\n".join(prefix_parts) + "\n\n" + user_message
 
     try:
-        # Persist the user turn as a MessageDict.
-        await insert_message(db, conversation_id, make_user_message_dict(user_message))
-
+        # _run_chain persists the user turn.
         pending = await _run_chain(
             datasette, actor, conversation_id, writer, user_message
         )

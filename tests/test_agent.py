@@ -29,6 +29,42 @@ def cookies(datasette_instance):
     return {"ds_actor": datasette_instance.client.actor_cookie({"id": "user"})}
 
 
+def _user_texts(prompt):
+    return [
+        part.text
+        for message in prompt.messages
+        if message.role == "user"
+        for part in message.parts
+    ]
+
+
+async def _run_two_turns(ds, conversation_id):
+    from datasette_agent.agent import run_agent
+    from datasette_agent.schema import ensure_tables
+
+    await ds.invoke_startup()
+    db = ds.get_internal_database()
+    await ensure_tables(db)
+    now = "2026-10-24T00:00:00+00:00"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", None, now, now],
+    )
+
+    class Writer:
+        def __init__(self):
+            self.chunks = []
+
+        async def write(self, chunk):
+            self.chunks.append(chunk)
+
+    writer = Writer()
+    await run_agent(ds, {"id": "user"}, conversation_id, "first question", writer)
+    await run_agent(ds, {"id": "user"}, conversation_id, "second question", writer)
+    return db, writer
+
+
 def assert_rendered_error_page(response, status, message):
     assert response.status_code == status
     assert "text/html" in response.headers.get("content-type", "")
@@ -66,55 +102,17 @@ async def test_system_prompt_documents_display_modes(datasette_instance):
 
 
 @pytest.mark.asyncio
-async def test_system_prompt_leads_message_chain(datasette_instance, monkeypatch):
+async def test_system_prompt_leads_message_chain(
+    datasette_instance, capture_chain_calls
+):
     """llm treats messages= as the authoritative history and leaves
     system= out of it, so adapters that only read prompt.messages (the
     OpenAI ones) never saw the system prompt. It must be the first
     message of the chain on every turn - and never persisted, or it
     would be replayed as history on the next turn."""
-    from datasette_llm import LLM
-
-    from datasette_agent.agent import run_agent
-    from datasette_agent.schema import ensure_tables
-
-    chain_calls = []
-
-    class CapturingLLM(LLM):
-        async def model(self, *args, **kwargs):
-            model = await super().model(*args, **kwargs)
-            real_chain = model.chain
-
-            def chain(*chain_args, **chain_kwargs):
-                chain_calls.append(chain_kwargs)
-                return real_chain(*chain_args, **chain_kwargs)
-
-            model.chain = chain
-            return model
-
-    monkeypatch.setattr("datasette_agent.agent.LLM", CapturingLLM)
-
+    chain_calls, _ = capture_chain_calls("datasette_agent.agent.LLM")
     ds = datasette_instance
-    await ds.invoke_startup()
-    db = ds.get_internal_database()
-    await ensure_tables(db)
-    conversation_id = "test-system-prompt"
-    now = "2026-10-24T00:00:00+00:00"
-    await db.execute_write(
-        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [conversation_id, "user", None, now, now],
-    )
-
-    class Writer:
-        def __init__(self):
-            self.chunks = []
-
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
-    writer = Writer()
-    await run_agent(ds, {"id": "user"}, conversation_id, "first question", writer)
-    await run_agent(ds, {"id": "user"}, conversation_id, "second question", writer)
+    db, writer = await _run_two_turns(ds, "test-system-prompt")
 
     events = _parse_sse("".join(writer.chunks))
     assert [e for e in events if e["event"] == "error"] == []
@@ -129,10 +127,34 @@ async def test_system_prompt_leads_message_chain(datasette_instance, monkeypatch
     rows = (
         await db.execute(
             "SELECT role FROM agent_messages WHERE conversation_id = ?",
-            [conversation_id],
+            ["test-system-prompt"],
         )
     ).rows
     assert "system" not in {row["role"] for row in rows}
+
+
+@pytest.mark.asyncio
+async def test_each_user_message_reaches_the_model_once(
+    datasette_instance, capture_chain_calls
+):
+    """chain() appends prompt_text to messages=, so if the history
+    already holds this turn's user row the model gets it twice."""
+    _, prompts = capture_chain_calls("datasette_agent.agent.LLM")
+    db, writer = await _run_two_turns(datasette_instance, "test-user-once")
+
+    events = _parse_sse("".join(writer.chunks))
+    assert [e for e in events if e["event"] == "error"] == []
+    assert [_user_texts(prompt) for prompt in prompts] == [
+        ["first question"],
+        ["first question", "second question"],
+    ]
+    rows = (
+        await db.execute(
+            "SELECT role FROM agent_messages WHERE conversation_id = ? ORDER BY id",
+            ["test-user-once"],
+        )
+    ).rows
+    assert [row["role"] for row in rows] == ["user", "assistant", "user", "assistant"]
 
 
 @pytest.mark.asyncio

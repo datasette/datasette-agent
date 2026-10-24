@@ -259,33 +259,17 @@ async def test_background_agent_completes(datasette_instance):
 
 @pytest.mark.asyncio
 async def test_background_agent_system_prompt_leads_message_chain(
-    datasette_instance, monkeypatch
+    datasette_instance, capture_chain_calls
 ):
     """Same as the chat agent: system= alone never reaches adapters that
     only read prompt.messages, so the goal-bearing system prompt must
     lead the chain."""
-    from datasette_llm import LLM
-
     from datasette_agent.api import (
         get_background_agent_status,
         start_background_agent,
     )
 
-    chain_calls = []
-
-    class CapturingLLM(LLM):
-        async def model(self, *args, **kwargs):
-            model = await super().model(*args, **kwargs)
-            real_chain = model.chain
-
-            def chain(*chain_args, **chain_kwargs):
-                chain_calls.append(chain_kwargs)
-                return real_chain(*chain_args, **chain_kwargs)
-
-            model.chain = chain
-            return model
-
-    monkeypatch.setattr("datasette_agent.background_agent.LLM", CapturingLLM)
+    chain_calls, _ = capture_chain_calls("datasette_agent.background_agent.LLM")
 
     await datasette_instance.invoke_startup()
     agent_id = await start_background_agent(
@@ -306,6 +290,52 @@ async def test_background_agent_system_prompt_leads_message_chain(
     assert messages[0].role == "system"
     assert messages[0].parts[0].text == chain_calls[0]["system"]
     assert "Your goal:" in chain_calls[0]["system"]
+
+
+@pytest.mark.asyncio
+async def test_background_agent_sends_each_user_message_once(
+    datasette_instance, capture_chain_calls, monkeypatch
+):
+    """The goal and each "Keep going" nudge are persisted and also
+    passed as chain()'s prompt, which appends them to messages= - so
+    they must not come back from the loaded history too."""
+    from datasette_agent.api import (
+        get_background_agent_status,
+        start_background_agent,
+    )
+
+    _, prompts = capture_chain_calls("datasette_agent.background_agent.LLM")
+    # echo never calls mark_finished for a plain goal: stop after the
+    # goal turn and one nudge turn.
+    monkeypatch.setattr("datasette_agent.background_agent.MAX_ITERATIONS", 2)
+
+    await datasette_instance.invoke_startup()
+    agent_id = await start_background_agent(
+        datasette=datasette_instance,
+        actor={"id": "user"},
+        goal=SIMPLE_GOAL,
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(datasette_instance, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+    assert status["error"] == "Agent hit maximum iteration limit (2)"
+
+    user_texts = [
+        [
+            part.text
+            for message in prompt.messages
+            if message.role == "user"
+            for part in message.parts
+        ]
+        for prompt in prompts
+    ]
+    assert len(user_texts) == 2
+    assert user_texts[0] == [SIMPLE_GOAL]
+    assert user_texts[1][0] == SIMPLE_GOAL
+    assert user_texts[1][1].startswith("Keep going.")
+    assert len(user_texts[1]) == 2
 
 
 # --- Background tools for chat agent ---
