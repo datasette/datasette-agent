@@ -11,7 +11,7 @@
 
 <form id="new-chat-form">
   <div class="agent-new-chat">
-    <textarea id="new-message" placeholder="Ask a question about your data..." rows="3"></textarea>
+    <textarea id="new-message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="3"></textarea>
     <button type="submit">Start chat</button>
   </div>
   {% if models|length > 1 %}
@@ -43,7 +43,12 @@
 </ul>
 {% endif %}
 
-<script>
+<script type="module">
+import {attachReferencePicker} from "/-/static-plugins/datasette-agent/references.js";
+const referencePicker = attachReferencePicker(
+  document.getElementById("new-message"),
+  {placement: "below"}
+);
 const MODEL_STORAGE_KEY = "datasette-agent-model";
 const modelSelect = document.getElementById("new-model");
 // Preselect the model used last time, if it is still on offer.
@@ -87,6 +92,10 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     }
     // Store the initial message to send after redirect
     sessionStorage.setItem("agent_pending_message", message);
+    sessionStorage.setItem(
+      "agent_pending_references",
+      JSON.stringify(referencePicker.getReferences())
+    );
     window.location.href = "/-/agent/" + data.conversation_id;
   } catch (err) {
     btn.disabled = false;

@@ -18,6 +18,7 @@ from .messages import (
 from .browser_tasks import BrowserTaskPending
 from .models import AGENT_PURPOSE
 from .questions import QuestionPending
+from .references import resolve_references
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
@@ -305,7 +306,9 @@ async def _finish_turn(writer, pending):
         await _send_sse(writer, "done", {})
 
 
-async def run_agent(datasette, actor, conversation_id, user_message, writer):
+async def run_agent(
+    datasette, actor, conversation_id, user_message, writer, references=None
+):
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
@@ -330,8 +333,18 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
         user_message = "\n".join(prefix_parts) + "\n\n" + user_message
 
     try:
+        # #-tagged databases/tables/queries: re-check permissions and
+        # attach their schemas to the user turn for the model.
+        references, references_context = await resolve_references(
+            datasette, actor, references or []
+        )
+
         # Persist the user turn as a MessageDict.
-        await insert_message(db, conversation_id, make_user_message_dict(user_message))
+        await insert_message(
+            db,
+            conversation_id,
+            make_user_message_dict(user_message, references, references_context),
+        )
 
         pending = await _run_chain(
             datasette, actor, conversation_id, writer, user_message

@@ -68,7 +68,7 @@
         {% set in_tool_group.value = false %}
         {% endif %}
         {% if msg.role == "user" %}
-        <div class="agent-message agent-message-user">
+        <div class="agent-message agent-message-user"{% if msg.references %} data-references='{{ msg.references | tojson }}'{% endif %}>
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
         {% elif msg.role == "assistant" %}
@@ -90,7 +90,7 @@
 
   {% if not background_agent %}
   <form id="chat-form" class="agent-input">
-    <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
+    <textarea id="message-input" placeholder="Type a message... (# to tag a table or query)" rows="2"></textarea>
     <button type="submit" id="send-btn">Send</button>
   </form>
   {% endif %}
@@ -112,7 +112,14 @@ const conversationId = document.querySelector(".agent-chat").dataset.conversatio
 const pending = sessionStorage.getItem("agent_pending_message");
 if (pending) {
   sessionStorage.removeItem("agent_pending_message");
-  window.sendMessage(conversationId, pending);
+  let pendingReferences = [];
+  try {
+    pendingReferences = JSON.parse(
+      sessionStorage.getItem("agent_pending_references") || "[]"
+    );
+  } catch (e) {}
+  sessionStorage.removeItem("agent_pending_references");
+  window.sendMessage(conversationId, pending, pendingReferences);
 }
 </script>
 {% else %}

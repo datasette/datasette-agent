@@ -1,4 +1,5 @@
 import * as smd from "./smd.js";
+import {attachReferencePicker, renderTextWithReferences} from "./references.js";
 
 // Auto-follow: only programmatically scroll to bottom while the user is
 // already pinned there. If they scroll up to read earlier content, stop
@@ -83,7 +84,7 @@ function scrollToBottomIfFollowing() {
   if (autoFollow) scrollToBottom();
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, references = null) {
   const messages = document.getElementById("messages");
   const div = document.createElement("div");
   div.className = "agent-message agent-message-" + role;
@@ -97,6 +98,8 @@ function appendMessage(role, content) {
     smd.parser_write(parser, content);
     smd.parser_end(parser);
     setAssistantCopyText(div, content);
+  } else if (role === "user" && references && references.length) {
+    renderTextWithReferences(contentDiv, content, references);
   } else {
     contentDiv.textContent = content;
   }
@@ -383,6 +386,13 @@ let questionPending = false;
 // input-disabled semantics as questionPending.
 let browserTaskPending = false;
 
+// The # autocomplete for tagging tables, queries and databases. There is
+// no chat input on background-agent pages.
+const messageInputEl = document.getElementById("message-input");
+const referencePicker = messageInputEl
+  ? attachReferencePicker(messageInputEl)
+  : null;
+
 function currentConversationId() {
   return document.querySelector(".agent-chat").dataset.conversationId;
 }
@@ -395,13 +405,16 @@ function setInputEnabled(enabled) {
   if (enabled && input) input.focus();
 }
 
-async function sendMessage(conversationId, message) {
-  appendMessage("user", message);
+async function sendMessage(conversationId, message, references = []) {
+  appendMessage("user", message, references);
   const input = document.getElementById("message-input");
   if (input) input.value = "";
+  if (referencePicker) referencePicker.clear();
+  const payload = {message};
+  if (references && references.length) payload.references = references;
   const result = await streamAgentEvents(
     "/-/agent/" + conversationId + "/stream",
-    {message}
+    payload
   );
   if (result && result.ok === false && result.status) {
     const detail =
@@ -931,6 +944,18 @@ document.querySelectorAll(".agent-message-assistant .agent-message-content").for
   smd.parser_end(parser);
 });
 
+// Render #-references in existing user messages as inline pills
+document.querySelectorAll(".agent-message-user[data-references]").forEach(el => {
+  const contentEl = el.querySelector(".agent-message-content");
+  if (!contentEl) return;
+  try {
+    const references = JSON.parse(el.dataset.references);
+    renderTextWithReferences(contentEl, contentEl.textContent, references);
+  } catch (err) {
+    console.error("Failed to render references:", err);
+  }
+});
+
 // Render existing reasoning blocks as markdown + set the rolling summary preview
 document.querySelectorAll(".agent-reasoning").forEach(details => {
   const contentEl = details.querySelector(".agent-reasoning-content");
@@ -992,23 +1017,23 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
 })();
 
 // Wire up form
-document.getElementById("chat-form").addEventListener("submit", (e) => {
-  e.preventDefault();
+function submitInput() {
   const input = document.getElementById("message-input");
   const message = input.value.trim();
   if (!message) return;
   const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
-  sendMessage(conversationId, message);
+  sendMessage(conversationId, message, referencePicker.getReferences());
+}
+
+document.getElementById("chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  submitInput();
 });
 
 // Allow Ctrl+Enter / Cmd+Enter to send
 document.getElementById("message-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
-    const input = document.getElementById("message-input");
-    const message = input.value.trim();
-    if (!message) return;
-    const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
-    sendMessage(conversationId, message);
+    submitInput();
   }
 });

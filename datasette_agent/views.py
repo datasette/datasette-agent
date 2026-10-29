@@ -19,6 +19,7 @@ from .export_markdown import format_conversation_markdown
 from .messages import combine_tool_messages_for_render, flatten_for_render
 from .models import get_agent_models
 from .questions import question_row_to_dict
+from .references import search_references
 from .schema import ensure_tables
 
 
@@ -74,6 +75,16 @@ async def api_models(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     models, default_model = await get_agent_models(datasette, request.actor)
     return Response.json({"models": models, "default_model": default_model})
+
+
+async def api_references(request, datasette):
+    """Search databases, tables and stored queries for the chat
+    composer's #-reference autocomplete."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    results = await search_references(
+        datasette, request.actor, request.args.get("q", "")
+    )
+    return Response.json({"results": results})
 
 
 async def api_create_conversation(request, datasette):
@@ -329,6 +340,7 @@ async def agent_stream(request, datasette):
     body = await request.post_body()
     data = json.loads(body)
     user_message = data.get("message", "")
+    references = data.get("references") or []
 
     async def stream_fn(writer):
         await run_agent(
@@ -337,6 +349,7 @@ async def agent_stream(request, datasette):
             conversation_id=conversation_id,
             user_message=user_message,
             writer=writer,
+            references=references,
         )
 
     return AsgiStream(

@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 
 import llm
 
+from .references import REFERENCES_KEY
+
 MODEL_TOOL_OUTPUT_LIMIT = 10000
 AGENT_OUTPUT_TRUNCATED_KEY = "agent_output_truncated"
 TRUNCATED_STRING_SUFFIX = "... (truncated)"
@@ -23,8 +25,22 @@ def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def make_user_message_dict(text):
-    return {"role": "user", "parts": [{"type": "text", "text": text}]}
+def make_user_message_dict(text, references=None, references_context=None):
+    """A user MessageDict, optionally followed by the schema note for
+    #-tagged references. The note is a second text part flagged with
+    the reference list so the UI renders pills instead of the note."""
+    parts = [{"type": "text", "text": text}]
+    if references and references_context:
+        parts.append(
+            {
+                "type": "text",
+                # Adapters join a message's text parts with no
+                # separator, so start the note on its own paragraph.
+                "text": "\n\n" + references_context,
+                REFERENCES_KEY: references,
+            }
+        )
+    return {"role": "user", "parts": parts}
 
 
 def make_tool_message_dict(name, output, tool_call_id):
@@ -37,7 +53,9 @@ def make_tool_message_dict(name, output, tool_call_id):
 def message_dict_text(msg_dict):
     """Concatenate text parts of a MessageDict (used for title / display)."""
     return "".join(
-        p.get("text", "") for p in msg_dict.get("parts", []) if p.get("type") == "text"
+        p.get("text", "")
+        for p in msg_dict.get("parts", [])
+        if p.get("type") == "text" and REFERENCES_KEY not in p
     )
 
 
@@ -236,7 +254,13 @@ def flatten_for_render(rows):
         msg_role = msg.get("role", "")
         for part in msg.get("parts", []):
             ptype = part.get("type")
-            if ptype == "text":
+            if ptype == "text" and REFERENCES_KEY in part:
+                # Schema note for #-references: attach the references to
+                # the user text they belong to rather than rendering the
+                # note itself.
+                if out and out[-1]["role"] == msg_role:
+                    out[-1]["references"] = part[REFERENCES_KEY]
+            elif ptype == "text":
                 out.append(
                     {
                         "role": msg_role,
