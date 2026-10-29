@@ -796,6 +796,12 @@ async function streamAgentEvents(url, payload) {
             appendReasoningChunk(currentReasoning, data.content);
             scrollToBottomIfFollowing();
           } else if (eventType === "text_chunk") {
+            // Don't open a bubble for whitespace-only chunks (e.g. the
+            // "\n\n" models often emit right before a batch of tool calls)
+            if (!currentAssistant && !(data.content || "").trim()) {
+              eventType = null;
+              continue;
+            }
             closeReasoning();
             if (!currentAssistant) {
               currentAssistant = startAssistantMessage();

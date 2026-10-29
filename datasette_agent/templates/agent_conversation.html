@@ -71,7 +71,7 @@
         <div class="agent-message agent-message-user">
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
-        {% elif msg.role == "assistant" %}
+        {% elif msg.role == "assistant" and msg.content|trim %}
         <div class="agent-message agent-message-assistant">
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>

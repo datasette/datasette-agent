@@ -257,6 +257,52 @@ async def test_conversation_page(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_conversation_page_skips_whitespace_only_assistant_text(
+    datasette_instance, cookies
+):
+    """Models often emit a "\\n\\n" text part right before a batch of tool
+    calls. That must not render as an empty assistant bubble (which would
+    otherwise get a copy button with nothing to copy)."""
+    from datasette_agent.messages import insert_message
+    from datasette_agent.schema import ensure_tables
+    from datetime import datetime, timezone
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01WSCONVAAAAAAAAAAAAAAAAAA"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Whitespace", now, now],
+    )
+    for msg in [
+        {"role": "user", "parts": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "text": "\n\n"},
+                {
+                    "type": "tool_call",
+                    "name": "sql_query",
+                    "arguments": {"sql": "select 1"},
+                    "tool_call_id": "call_1",
+                },
+            ],
+        },
+        {"role": "assistant", "parts": [{"type": "text", "text": "Real answer"}]},
+    ]:
+        await insert_message(db, conversation_id, msg)
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}", cookies=cookies
+    )
+    assert response.status_code == 200
+    assert response.text.count('class="agent-message agent-message-assistant"') == 1
+    assert "Real answer" in response.text
+
+
+@pytest.mark.asyncio
 async def test_conversation_page_shows_chat_form_for_user_chat(
     datasette_instance, cookies
 ):
