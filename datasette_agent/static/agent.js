@@ -235,7 +235,7 @@ function createToolPayload(label, className) {
 function setToolName(state, name) {
   state.name = name || state.name;
   state.details.dataset.toolName = state.name;
-  state.nameEl.textContent = "Tool: " + state.name;
+  state.nameEl.textContent = state.name;
 }
 
 function startToolCall(name, id, streaming = false) {
@@ -247,7 +247,7 @@ function startToolCall(name, id, streaming = false) {
   const summary = document.createElement("summary");
   const nameEl = document.createElement("span");
   nameEl.className = "agent-tool-name";
-  nameEl.textContent = "Tool: " + name;
+  nameEl.textContent = name;
   summary.appendChild(nameEl);
   const status = document.createElement("span");
   status.className = "agent-tool-status";

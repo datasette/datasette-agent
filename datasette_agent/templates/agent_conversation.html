@@ -25,7 +25,7 @@
         {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
         <details class="agent-tool-call{% if msg.tool_output is not none %} done{% else %} waiting{% endif %}">
           <summary>
-            <span class="agent-tool-name">Tool: {{ msg.tool_name }}</span>
+            <span class="agent-tool-name">{{ msg.tool_name }}</span>
             {% if msg.tool_output is none %}
             <span class="agent-tool-status">Waiting</span>
             {% endif %}
