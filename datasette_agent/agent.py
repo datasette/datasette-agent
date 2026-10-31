@@ -8,7 +8,9 @@ from .context import current_conversation_id
 from .messages import (
     insert_message,
     insert_response,
+    latest_panel_url,
     load_messages,
+    make_panel_note_part,
     make_tool_message_dict,
     make_user_message_dict,
     message_dict_text,
@@ -23,7 +25,7 @@ from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
-async def _build_system_prompt(datasette, actor, panel_url=None):
+async def _build_system_prompt(datasette, actor):
     parts = [
         "You are a helpful data analysis assistant. "
         "You have access to tools that let you explore and query databases. "
@@ -79,13 +81,6 @@ async def _build_system_prompt(datasette, actor, panel_url=None):
         parts.append("\nAvailable databases and tables:")
         for db_name, tables in db_info.items():
             parts.append(f"\n  {db_name}: {', '.join(tables)}")
-    if panel_url:
-        parts.append(
-            "\nThe user has this page open in the panel next to the chat: "
-            f"{panel_url}\n"
-            'If they refer to "this" table, query or page, they probably '
-            "mean that one."
-        )
     return "\n".join(parts)
 
 
@@ -93,9 +88,7 @@ async def _send_sse(writer, event, data):
     await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def _run_chain(
-    datasette, actor, conversation_id, writer, prompt_text, panel_url=None
-):
+async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages.
 
@@ -126,7 +119,7 @@ async def _run_chain(
         supports_browser_tasks=True,
     )
 
-    system_prompt = await _build_system_prompt(datasette, actor, panel_url)
+    system_prompt = await _build_system_prompt(datasette, actor)
     prior_messages = await load_messages(db, conversation_id)
 
     # A conversation is pinned to one model for its whole life. The
@@ -355,11 +348,12 @@ async def run_agent(
         )
 
         # Persist the user turn as a MessageDict.
-        await insert_message(
-            db,
-            conversation_id,
-            make_user_message_dict(user_message, references, references_context),
+        user_message_dict = make_user_message_dict(
+            user_message, references, references_context
         )
+        if panel_url != await latest_panel_url(db, conversation_id):
+            user_message_dict["parts"].append(make_panel_note_part(panel_url))
+        await insert_message(db, conversation_id, user_message_dict)
 
         pending = await _run_chain(
             datasette,
@@ -367,7 +361,6 @@ async def run_agent(
             conversation_id,
             writer,
             user_message,
-            panel_url=panel_url,
         )
 
         # Auto-set title from the first user message if not yet set.

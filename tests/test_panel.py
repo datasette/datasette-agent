@@ -4,6 +4,7 @@ import re
 import pytest
 from datasette.app import Datasette
 
+from datasette_agent.messages import PANEL_URL_KEY, message_dict_text
 from datasette_agent.panel_tools import show_in_panel
 from datasette_agent.tool_context import ToolContext
 
@@ -142,15 +143,14 @@ async def test_show_in_panel_applies_base_url(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_system_prompt_mentions_panel_url(datasette_instance):
+async def test_system_prompt_does_not_mention_panel(datasette_instance):
+    # The panel URL changes between turns, and a changed system prompt
+    # would invalidate the provider's prompt cache for the whole history.
     from datasette_agent.agent import _build_system_prompt
 
     await datasette_instance.invoke_startup()
-    actor = {"id": "user"}
-    without = await _build_system_prompt(datasette_instance, actor)
-    assert "panel" not in without
-    prompt = await _build_system_prompt(datasette_instance, actor, "/data/items?id=3")
-    assert "/data/items?id=3" in prompt
+    prompt = await _build_system_prompt(datasette_instance, {"id": "user"})
+    assert "panel" not in prompt
 
 
 async def create_conversation(ds, cookies):
@@ -230,6 +230,130 @@ async def test_conversation_page_restores_latest_panel_url(
         )
     response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert 'data-panel-url="/data/second?_sort=id"' in response.text
+
+
+async def send_message(ds, cookies, conversation_id, panel_url=None):
+    payload = {"message": "what is this?"}
+    if panel_url is not None:
+        payload["panel_url"] = panel_url
+    response = await ds.client.post(
+        f"/-/agent/{conversation_id}/stream",
+        content=json.dumps(payload),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    assert response.status_code == 200
+
+
+async def stored_messages(ds, conversation_id, role):
+    rows = await ds.get_internal_database().execute(
+        "SELECT message_json FROM agent_messages "
+        "WHERE conversation_id = ? AND role = ? ORDER BY id",
+        [conversation_id, role],
+    )
+    return [json.loads(row["message_json"]) for row in rows.rows]
+
+
+def panel_notes(message):
+    return [part for part in message["parts"] if PANEL_URL_KEY in part]
+
+
+@pytest.mark.asyncio
+async def test_panel_note_added_to_user_message_when_page_changes(
+    datasette_instance, cookies
+):
+    ds = datasette_instance
+    conversation_id = await create_conversation(ds, cookies)
+    for panel_url in (
+        None,  # No panel yet, nothing to report
+        "/data/first",  # Opened
+        "/data/first",  # Unchanged
+        "/data/second",  # Navigated
+        None,  # Hidden
+        None,  # Still hidden
+        "/data/second",  # Shown again
+    ):
+        await send_message(ds, cookies, conversation_id, panel_url)
+
+    notes = [
+        panel_notes(message)
+        for message in await stored_messages(ds, conversation_id, "user")
+    ]
+    assert [[note[PANEL_URL_KEY] for note in n] for n in notes] == [
+        [],
+        ["/data/first"],
+        [],
+        ["/data/second"],
+        [None],
+        [],
+        ["/data/second"],
+    ]
+    assert "/data/first" in notes[1][0]["text"]
+    assert "closed" in notes[4][0]["text"]
+    # Adapters join text parts with no separator
+    assert notes[1][0]["text"].startswith("\n\n")
+
+
+@pytest.mark.asyncio
+async def test_panel_note_reaches_model_with_stable_system_prompt(
+    datasette_instance, cookies
+):
+    from datasette_agent.messages import load_messages
+
+    ds = datasette_instance
+    conversation_id = await create_conversation(ds, cookies)
+    for panel_url in ("/data/first", "/data/second", None):
+        await send_message(ds, cookies, conversation_id, panel_url)
+
+    # The echo model reports the system prompt it was given
+    systems = {
+        json.loads(message["parts"][-1]["text"])["system"]
+        for message in await stored_messages(ds, conversation_id, "assistant")
+    }
+    assert len(systems) == 1
+    assert "/data/" not in systems.pop()
+
+    messages = await load_messages(ds.get_internal_database(), conversation_id)
+    first = json.dumps(messages[0].to_dict())
+    assert "/data/first" in first
+
+
+@pytest.mark.asyncio
+async def test_panel_note_skipped_for_page_the_agent_opened(
+    datasette_instance, cookies
+):
+    from datasette_agent.messages import insert_message, make_tool_message_dict
+
+    ds = datasette_instance
+    conversation_id = await create_conversation(ds, cookies)
+    output = json.dumps({"ok": True, "_panel_url": "/data/first"})
+    await insert_message(
+        ds.get_internal_database(),
+        conversation_id,
+        make_tool_message_dict("show_in_panel", output, None),
+    )
+    await send_message(ds, cookies, conversation_id, "/data/first")
+    user_message = (await stored_messages(ds, conversation_id, "user"))[-1]
+    assert panel_notes(user_message) == []
+
+
+@pytest.mark.asyncio
+async def test_panel_note_hidden_from_user(datasette_instance, cookies):
+    ds = datasette_instance
+    conversation_id = await create_conversation(ds, cookies)
+    await send_message(ds, cookies, conversation_id, "/data/first")
+    message = (await stored_messages(ds, conversation_id, "user"))[-1]
+    assert message_dict_text(message) == "what is this?"
+
+    title = (
+        await ds.get_internal_database().execute(
+            "SELECT title FROM agent_conversations WHERE id = ?", [conversation_id]
+        )
+    ).first()["title"]
+    assert title == "what is this?"
+    for path in (f"/-/agent/{conversation_id}", f"/-/agent/{conversation_id}/markdown"):
+        response = await ds.client.get(path, cookies=cookies)
+        assert "open in the panel" not in response.text
 
 
 @pytest.fixture

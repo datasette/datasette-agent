@@ -19,6 +19,7 @@ from .references import REFERENCES_KEY
 MODEL_TOOL_OUTPUT_LIMIT = 10000
 AGENT_OUTPUT_TRUNCATED_KEY = "agent_output_truncated"
 TRUNCATED_STRING_SUFFIX = "... (truncated)"
+PANEL_URL_KEY = "agent_panel_url"
 
 
 def _utc_now():
@@ -43,6 +44,23 @@ def make_user_message_dict(text, references=None, references_context=None):
     return {"role": "user", "parts": parts}
 
 
+def make_panel_note_part(panel_url):
+    """A text part telling the model what the panel now shows, or that it
+    was closed if panel_url is None. This lives on the user message rather
+    than in the system prompt so that earlier turns stay byte-identical and
+    the provider's prompt cache survives the user changing page."""
+    if panel_url:
+        note = (
+            "The user has this page open in the panel next to the chat: "
+            f"{panel_url}\n"
+            'If they refer to "this" table, query or page, they probably '
+            "mean that one."
+        )
+    else:
+        note = "The user has closed the panel next to the chat."
+    return {"type": "text", "text": "\n\n" + note, PANEL_URL_KEY: panel_url}
+
+
 def make_tool_message_dict(name, output, tool_call_id):
     part = {"type": "tool_result", "name": name, "output": output or ""}
     if tool_call_id is not None:
@@ -55,7 +73,9 @@ def message_dict_text(msg_dict):
     return "".join(
         p.get("text", "")
         for p in msg_dict.get("parts", [])
-        if p.get("type") == "text" and REFERENCES_KEY not in p
+        if p.get("type") == "text"
+        and REFERENCES_KEY not in p
+        and PANEL_URL_KEY not in p
     )
 
 
@@ -260,6 +280,9 @@ def flatten_for_render(rows):
                 # note itself.
                 if out and out[-1]["role"] == msg_role:
                     out[-1]["references"] = part[REFERENCES_KEY]
+            elif ptype == "text" and PANEL_URL_KEY in part:
+                # Panel note is for the model only
+                continue
             elif ptype == "text":
                 out.append(
                     {
@@ -358,6 +381,31 @@ def combine_tool_messages_for_render(messages):
             combined.append(display_message)
 
     return combined
+
+
+async def latest_panel_url(db, conversation_id):
+    """The page the model last knew was in the panel - from a panel note or
+    a show_in_panel result - or None if there is none or it was closed."""
+    rows = (
+        await db.execute(
+            "SELECT message_json FROM agent_messages "
+            "WHERE conversation_id = ? ORDER BY id DESC",
+            [conversation_id],
+        )
+    ).rows
+    for row in rows:
+        for part in reversed(json.loads(row["message_json"]).get("parts", [])):
+            if PANEL_URL_KEY in part:
+                return part[PANEL_URL_KEY]
+            if part.get("type") != "tool_result":
+                continue
+            try:
+                output = json.loads(part.get("output") or "")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(output, dict) and output.get("_panel_url"):
+                return output["_panel_url"]
+    return None
 
 
 async def load_messages(db, conversation_id):
