@@ -37,6 +37,8 @@ def register_routes():
     from . import views
 
     return [
+        (r"^/-/patterns/agent$", views.agent_patterns),
+        (r"^/-/patterns/agent/markdown$", views.agent_patterns_markdown),
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/api/models$", views.api_models),

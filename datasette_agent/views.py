@@ -61,6 +61,18 @@ def _actor_id(request):
     return None
 
 
+async def agent_patterns(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    return Response.html(
+        await datasette.render_template("agent_patterns.html", {}, request=request)
+    )
+
+
+async def agent_patterns_markdown(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    return Response.text("# Agent pattern\n\nSample content for the Export menu.\n")
+
+
 async def agent_index(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
