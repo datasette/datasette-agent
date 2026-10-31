@@ -372,6 +372,9 @@ function appendToolResult(name, output, id = null) {
   if (parsed && parsed._edit_sql_url && !parsed._html) {
     response.section.appendChild(createSqlEditLink(parsed._edit_sql_url));
   }
+  if (parsed && parsed._canvas_url && window.datasetteAgentCanvas) {
+    window.datasetteAgentCanvas.open(parsed._canvas_url, {source: "agent"});
+  }
   scrollToBottomIfFollowing();
 }
 
@@ -399,9 +402,13 @@ async function sendMessage(conversationId, message) {
   appendMessage("user", message);
   const input = document.getElementById("message-input");
   if (input) input.value = "";
+  const payload = {message};
+  const canvasUrl =
+    window.datasetteAgentCanvas && window.datasetteAgentCanvas.currentUrl();
+  if (canvasUrl) payload.canvas_url = canvasUrl;
   const result = await streamAgentEvents(
     "/-/agent/" + conversationId + "/stream",
-    {message}
+    payload
   );
   if (result && result.ok === false && result.status) {
     const detail =

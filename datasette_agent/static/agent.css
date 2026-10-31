@@ -1018,3 +1018,294 @@
   font-size: 0.92em;
   white-space: nowrap;
 }
+
+/* Canvas: a Datasette page in an iframe next to the chat.
+   Wide screens (tablet landscape, desktop) put chat in a third and the
+   canvas in two thirds; narrow screens show one at a time with a
+   Chat | Canvas switch that slides between them. */
+.agent-panes,
+.agent-chat-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-canvas,
+.agent-view-switch,
+.agent-canvas-toggle {
+  display: none;
+}
+
+body.agent-workspace section.content {
+  margin: 0;
+}
+
+body.agent-workspace footer.ft {
+  display: none;
+}
+
+body.agent-workspace .agent-chat {
+  max-width: none;
+  height: calc(100vh - var(--agent-chat-top, 3rem));
+  height: calc(100dvh - var(--agent-chat-top, 3rem));
+}
+
+body.agent-workspace .agent-header {
+  padding: 0.5rem 1rem;
+}
+
+body.agent-workspace .agent-header > a {
+  white-space: nowrap;
+}
+
+body.agent-workspace .agent-header h1 {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.agent-workspace .agent-chat-pane {
+  padding: 0 1rem;
+  background: #fff;
+}
+
+.agent-has-canvas .chat-export-menu {
+  margin-left: 0;
+}
+
+.agent-canvas {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #fff;
+}
+
+.agent-canvas-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #ddd;
+  background: #f6f7f9;
+}
+
+.agent-canvas-bar button,
+.agent-canvas-open {
+  border: 0;
+  background: transparent;
+  color: #555;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.agent-canvas-bar button:hover,
+.agent-canvas-open:hover {
+  background: #e4e7eb;
+  color: #111;
+}
+
+.agent-canvas-url {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: #555;
+  background: #fff;
+  border: 1px solid #e1e4e8;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-canvas-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
+.agent-canvas.flash .agent-canvas-frame {
+  animation: agent-canvas-flash 0.9s ease;
+}
+
+@keyframes agent-canvas-flash {
+  from { box-shadow: inset 0 0 0 3px #007bff; }
+  to { box-shadow: inset 0 0 0 0 transparent; }
+}
+
+.agent-canvas-opened {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.agent-canvas-opened a {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.agent-canvas-toggle {
+  margin-left: auto;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agent-view-switch {
+  margin-left: auto;
+  background: #e9ecef;
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.agent-view-switch button {
+  position: relative;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #555;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.agent-view-switch button[aria-pressed="true"] {
+  background: #fff;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.agent-view-switch-badge {
+  display: none;
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9480f;
+}
+
+.agent-canvas-unseen .agent-view-switch-badge {
+  display: block;
+}
+
+/* Wide: chat one third, canvas two thirds */
+@media (min-width: 900px) {
+  .agent-has-canvas .agent-canvas-toggle {
+    display: inline-block;
+  }
+
+  .agent-has-canvas:not(.agent-canvas-hidden) .agent-panes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  .agent-has-canvas:not(.agent-canvas-hidden) .agent-chat-pane {
+    border-right: 1px solid #ddd;
+  }
+
+  .agent-has-canvas:not(.agent-canvas-hidden) .agent-canvas {
+    display: flex;
+  }
+
+  .agent-canvas-hidden .agent-chat-pane {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+}
+
+/* Narrow: one view at a time, sliding between them */
+@media (max-width: 899px) {
+  .agent-has-canvas .agent-view-switch {
+    display: inline-flex;
+  }
+
+  .agent-has-canvas .agent-model-badge {
+    display: none;
+  }
+
+  .agent-has-canvas .agent-header {
+    gap: 0.6rem;
+  }
+
+  .agent-has-canvas .agent-header h1 {
+    font-size: 1rem;
+  }
+
+  .agent-has-canvas .agent-panes {
+    display: block;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .agent-has-canvas .agent-chat-pane,
+  .agent-has-canvas .agent-canvas {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.38s ease,
+      box-shadow 0.38s ease,
+      visibility 0s linear 0s;
+  }
+
+  .agent-has-canvas .agent-canvas {
+    z-index: 2;
+  }
+
+  .agent-has-canvas[data-agent-view="chat"] .agent-canvas {
+    transform: translateX(100%);
+    visibility: hidden;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      box-shadow 0.38s ease,
+      visibility 0s linear 0.38s;
+  }
+
+  .agent-has-canvas[data-agent-view="canvas"] .agent-canvas {
+    transform: none;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+  }
+
+  .agent-has-canvas[data-agent-view="canvas"] .agent-chat-pane {
+    transform: translateX(-30%);
+    opacity: 0.5;
+    visibility: hidden;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.38s ease,
+      visibility 0s linear 0.38s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-pane,
+  .agent-canvas,
+  .agent-view-switch button {
+    transition: none !important;
+  }
+
+  .agent-canvas.flash .agent-canvas-frame {
+    animation: none;
+  }
+}

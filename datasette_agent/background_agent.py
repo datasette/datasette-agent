@@ -81,7 +81,8 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
     tools = [
         t
         for t in tools
-        if t.name not in ("spawn_background_agent", "check_background_agent")
+        if t.name
+        not in ("spawn_background_agent", "check_background_agent", "show_in_canvas")
     ]
 
     finished_state = {"called": False, "message": None, "error": None}

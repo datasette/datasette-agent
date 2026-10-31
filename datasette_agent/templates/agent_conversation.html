@@ -7,16 +7,23 @@
 {% endblock %}
 
 {% block content %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if canvas_url %} data-canvas-url="{{ canvas_url }}"{% endif %} data-agent-view="chat">
   <div class="agent-header">
     <a href="/-/agent">&larr; Back</a>
     <h1>{{ conversation.title or "Chat" }}</h1>
     {% if conversation.model_id %}
     <span class="agent-model-badge" title="Model used for this conversation">{{ conversation.model_id }}</span>
     {% endif %}
+    <div class="agent-view-switch" role="group" aria-label="View">
+      <button type="button" data-agent-view="chat" aria-pressed="true">Chat</button>
+      <button type="button" data-agent-view="canvas" aria-pressed="false">Canvas<span class="agent-view-switch-badge" title="The agent opened a new page"></span></button>
+    </div>
+    <button type="button" class="agent-canvas-toggle">Hide canvas</button>
     <div class="chat-export-menu" data-markdown-url="/-/agent/{{ conversation_id }}/markdown" data-title="{{ conversation.title or 'chat' }}"></div>
   </div>
 
+  <div class="agent-panes">
+  <div class="agent-chat-pane">
   <div class="agent-messages" id="messages">
     {% set in_tool_group = namespace(value=false) %}
     {% for msg in messages %}
@@ -94,6 +101,19 @@
     <button type="submit" id="send-btn">Send</button>
   </form>
   {% endif %}
+  </div>
+
+  <section class="agent-canvas" aria-label="Canvas">
+    <div class="agent-canvas-bar">
+      <button type="button" data-canvas-action="back" aria-label="Back" title="Back">&lsaquo;</button>
+      <button type="button" data-canvas-action="forward" aria-label="Forward" title="Forward">&rsaquo;</button>
+      <button type="button" data-canvas-action="reload" aria-label="Reload" title="Reload">&#8635;</button>
+      <span class="agent-canvas-url"></span>
+      <a class="agent-canvas-open" target="_blank" rel="noopener" aria-label="Open in new tab" title="Open in new tab">&#8599;</a>
+    </div>
+    <iframe class="agent-canvas-frame" name="agent-canvas" title="Canvas"></iframe>
+  </section>
+  </div>
 </div>
 
 {% if pending_question_json %}
@@ -104,6 +124,7 @@
 <script type="application/json" id="pending-tasks-data">{{ pending_tasks_json | safe }}</script>
 {% endif %}
 
+<script type="module" src="/-/static-plugins/datasette-agent/agent-canvas.js"></script>
 <script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
 <script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
 {% if not background_agent %}
