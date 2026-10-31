@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 from datasette.app import Datasette
@@ -212,17 +213,6 @@ async def test_conversation_page_has_canvas(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
-async def test_iframe_page_hides_header_before_render(datasette_instance):
-    normal = await datasette_instance.client.get("/")
-    embedded = await datasette_instance.client.get(
-        "/", headers={"Sec-Fetch-Dest": "iframe"}
-    )
-    stylesheet = "/-/static-plugins/datasette-agent/agent-canvas-page.css"
-    assert stylesheet not in normal.text
-    assert stylesheet in embedded.text
-
-
-@pytest.mark.asyncio
 async def test_conversation_page_restores_latest_canvas_url(
     datasette_instance, cookies
 ):
@@ -240,3 +230,66 @@ async def test_conversation_page_restores_latest_canvas_url(
         )
     response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert 'data-canvas-url="/data/second?_sort=id"' in response.text
+
+
+@pytest.fixture
+def prefixed_datasette(tmp_path):
+    ds = Datasette(
+        memory=True,
+        settings={"base_url": "/prefix/"},
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                "datasette-agent-background": {"id": "user"},
+                "datasette-agent-explore": {"id": "user"},
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    ds.add_memory_database("data")
+    return ds
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/data/items", "/prefix/data/items"])
+async def test_show_in_canvas_with_base_url(prefixed_datasette, path):
+    await create_items_table(prefixed_datasette)
+    result = await call_tool(prefixed_datasette, path)
+    assert result["ok"] is True, result
+    assert result["_canvas_url"] == "/prefix/data/items"
+
+
+# Agent URLs written into pages without the base_url prefix.
+UNPREFIXED_URL = re.compile(r"""["'(]/-/(agent|patterns|static-plugins)""")
+
+
+@pytest.mark.asyncio
+async def test_agent_pages_use_base_url(prefixed_datasette):
+    ds = prefixed_datasette
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+    await create_items_table(ds)
+    response = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = response.json()["conversation_id"]
+    pages = [
+        "/-/agent",
+        f"/-/agent/{conversation_id}",
+        "/-/agent/background",
+        "/-/agent/explore/data",
+        "/-/agent/explore/data/items",
+        "/-/patterns/agent",
+    ]
+    for path in pages:
+        response = await ds.client.get(path, cookies=cookies)
+        assert response.status_code == 200, path
+        assert not UNPREFIXED_URL.findall(response.text), path
+    conversation = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
+    assert (
+        f'data-conversation-url="/prefix/-/agent/{conversation_id}"'
+        in conversation.text
+    )

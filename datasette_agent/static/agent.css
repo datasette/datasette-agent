@@ -1116,6 +1116,24 @@ body.agent-workspace .agent-chat-pane {
   display: none;
 }
 
+/* The visible page is navigating: hide it until the next page has
+   loaded and had its Datasette header removed. The indicator itself
+   waits a moment so quick loads don't flicker. */
+.agent-canvas.agent-canvas-loading::before {
+  display: grid;
+  z-index: 3;
+  animation: agent-canvas-loading-in 0s linear 0.2s both;
+}
+
+.agent-canvas-loading .agent-canvas-frame-ready {
+  visibility: hidden;
+}
+
+@keyframes agent-canvas-loading-in {
+  from { visibility: hidden; }
+  to { visibility: visible; }
+}
+
 .agent-canvas-frame {
   position: absolute;
   inset: 0;

@@ -110,6 +110,15 @@ function setupCanvas() {
     nextFrame.name = "agent-canvas";
     nextFrame.classList.add("agent-canvas-frame-ready");
     canvas.classList.add("agent-canvas-ready");
+    canvas.classList.remove("agent-canvas-loading");
+  }
+
+  // Uncover a frame once its page is ready: a fresh frame replaces the
+  // visible one, the visible frame comes back from behind the loading
+  // indicator.
+  function revealFrame(frame) {
+    if (frame === pendingFrame) promoteFrame(frame);
+    else if (frame === currentFrame) canvas.classList.remove("agent-canvas-loading");
   }
 
   function frameLoaded(loadedFrame) {
@@ -119,12 +128,12 @@ function setupCanvas() {
       loc = loadedFrame.contentWindow.location;
     } catch (err) {
       // An off-site navigation cannot be inspected, but should still be shown.
-      promoteFrame(loadedFrame);
+      revealFrame(loadedFrame);
       return;
     }
     if (!loc || loc.href === "about:blank") return;
     if (loc.origin !== window.location.origin) {
-      promoteFrame(loadedFrame);
+      revealFrame(loadedFrame);
       return;
     }
     const url = loc.pathname + loc.search + loc.hash;
@@ -134,14 +143,20 @@ function setupCanvas() {
       window.location.href = url;
       return;
     }
-    // Fallback for pages that do not use Datasette's template hooks or
-    // browsers that do not send Sec-Fetch-Dest on iframe navigations.
-    const document = loadedFrame.contentDocument;
-    const header = document.querySelector("header.hd");
+    // The chat header already sits above the canvas, so hide the page's
+    // own Datasette header. The frame stays covered by the loading
+    // indicator until this has happened, so the header never flashes.
+    const header = loadedFrame.contentDocument.querySelector("header.hd");
     if (header) header.style.display = "none";
+    // When this page starts navigating away (a link or form inside the
+    // canvas), cover the frame until the next page is ready. Downloads
+    // don't unload the page, so they never trigger this.
+    loadedFrame.contentWindow.addEventListener("pagehide", () => {
+      if (loadedFrame === currentFrame) canvas.classList.add("agent-canvas-loading");
+    });
     showUrl(url);
     // Give nested app frames a chance to paint before uncovering this page.
-    requestAnimationFrame(() => requestAnimationFrame(() => promoteFrame(loadedFrame)));
+    requestAnimationFrame(() => requestAnimationFrame(() => revealFrame(loadedFrame)));
   }
 
   // Navigate the visible frame so the visit joins the browser history
@@ -153,6 +168,7 @@ function setupCanvas() {
     }
     if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
     pendingFrame = null;
+    canvas.classList.add("agent-canvas-loading");
     try {
       currentFrame.contentWindow.location.assign(url);
     } catch (err) {

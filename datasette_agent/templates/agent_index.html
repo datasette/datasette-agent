@@ -3,7 +3,7 @@
 {% block title %}Datasette Agent{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
 {% endblock %}
 
 {% block content %}
@@ -36,7 +36,7 @@
 <ul class="agent-conversations">
   {% for conv in conversations %}
   <li>
-    <a href="/-/agent/{{ conv.id }}">{{ conv.title or "Untitled conversation" }}</a>
+    <a href="{{ urls.path('/-/agent/' ~ conv.id) }}">{{ conv.title or "Untitled conversation" }}</a>
     <span class="agent-timestamp">{{ conv.updated_at | agent_format_datetime }}</span>
   </li>
   {% endfor %}
@@ -76,7 +76,7 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     } catch (e) {}
   }
   try {
-    const resp = await fetch("/-/agent/api/conversations", {
+    const resp = await fetch({{ urls.path("/-/agent/api/conversations")|tojson }}, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
@@ -87,7 +87,7 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     }
     // Store the initial message to send after redirect
     sessionStorage.setItem("agent_pending_message", message);
-    window.location.href = "/-/agent/" + data.conversation_id;
+    window.location.href = {{ urls.path("/-/agent/")|tojson }} + data.conversation_id;
   } catch (err) {
     btn.disabled = false;
     btn.textContent = "Start chat";

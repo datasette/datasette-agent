@@ -11,6 +11,8 @@ import html as html_module
 import json
 from urllib.parse import urlsplit
 
+from datasette.utils import PrefixedUrlString
+
 from .tools import AgentTool
 
 # Path prefixes the canvas refuses to show - the agent's own chat UI
@@ -41,10 +43,14 @@ def normalize_canvas_path(datasette, path):
             "path must be a path on this Datasette instance starting with /, "
             "not a full URL"
         )
+    # Accept paths with or without the base_url prefix. The result is a
+    # PrefixedUrlString so datasette.client doesn't prefix it again.
     base_url = datasette.setting("base_url") or "/"
-    if base_url != "/" and not path.startswith(base_url):
+    if base_url != "/" and path.startswith(base_url):
+        path = PrefixedUrlString(path)
+    else:
         path = datasette.urls.path(path)
-    local = path[len(base_url) - 1 :] if base_url != "/" else path
+    local = "/" + path[len(base_url) :]
     if any(
         local == prefix or local.startswith(prefix + "/") for prefix in BLOCKED_PREFIXES
     ):

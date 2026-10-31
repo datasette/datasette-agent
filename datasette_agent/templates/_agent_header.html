@@ -1,6 +1,6 @@
 {% macro agent_header(title, export_url, export_title, model_id=None, export_open=False) %}
 <div class="agent-header">
-  <a class="agent-back-link" href="/-/agent" aria-label="Back to conversations" title="Back to conversations">
+  <a class="agent-back-link" href="{{ urls.path('/-/agent') }}" aria-label="Back to conversations" title="Back to conversations">
     <svg viewBox="4 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 19-7-7 7-7"/><path d="M5 12h14"/></svg>
   </a>
   <h1>{{ title }}</h1>

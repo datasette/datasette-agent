@@ -2,6 +2,7 @@ document.querySelectorAll(".agent-patterns-preview").forEach((preview) => {
   const backLink = preview.querySelector(".agent-back-link");
   const toggle = preview.querySelector(".agent-canvas-toggle");
   const narrow = preview.classList.contains("agent-patterns-narrow");
+  const backHref = backLink.getAttribute("href");
 
   function setView(view) {
     preview.dataset.agentView = view;
@@ -12,7 +13,7 @@ document.querySelectorAll(".agent-patterns-preview").forEach((preview) => {
       const label = view === "canvas" ? "Back to chat" : "Back to conversations";
       backLink.setAttribute("aria-label", label);
       backLink.setAttribute("title", label);
-      backLink.href = view === "canvas" ? "#chat" : "/-/agent";
+      backLink.setAttribute("href", view === "canvas" ? "#chat" : backHref);
     }
   }
 

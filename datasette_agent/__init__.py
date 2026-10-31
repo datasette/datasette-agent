@@ -254,16 +254,6 @@ def extra_js_urls(datasette, request):
 
 
 @hookimpl
-def extra_css_urls(datasette, request):
-    # Browsers send this header for every iframe navigation, including links
-    # followed within the canvas. Loading CSS in the head avoids a visible
-    # header before the canvas load handler can hide it.
-    if request and request.headers.get("sec-fetch-dest") == "iframe":
-        return [datasette.static("agent-canvas-page.css", plugin="datasette-agent")]
-    return []
-
-
-@hookimpl
 def database_actions(datasette, actor, database, request):
     from datasette.utils import tilde_encode
 
