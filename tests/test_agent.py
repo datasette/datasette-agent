@@ -153,27 +153,41 @@ async def test_agent_index(datasette_instance, cookies):
 @pytest.mark.asyncio
 async def test_agent_index_paginates_own_conversations(datasette_instance, cookies):
     from datasette_agent.schema import ensure_tables
+    from datasette_agent.views import AGENT_INDEX_PAGE_SIZE
 
     db = datasette_instance.get_internal_database()
     await ensure_tables(db)
     start = datetime(2026, 10, 31, tzinfo=timezone.utc)
-    for index in range(102):
+    count = AGENT_INDEX_PAGE_SIZE + 2
+    for index in range(count):
         timestamp = (start + timedelta(minutes=index)).isoformat()
         await db.execute_write(
             "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            [f"test-{index:03d}", "user", f"Conversation {index:03d}", timestamp, timestamp],
+            [
+                f"test-{index:03d}",
+                "user",
+                f"Conversation {index:03d}",
+                timestamp,
+                timestamp,
+            ],
         )
     await db.execute_write(
         "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?)",
-        ["other-user", "someone-else", "Private conversation", start.isoformat(), start.isoformat()],
+        [
+            "other-user",
+            "someone-else",
+            "Private conversation",
+            start.isoformat(),
+            start.isoformat(),
+        ],
     )
 
     first = await datasette_instance.client.get("/-/agent", cookies=cookies)
     assert first.status_code == 200
-    assert first.text.count('class="agent-conversation-row"') == 100
-    assert "Conversation 101" in first.text
+    assert first.text.count('class="agent-conversation-row"') == AGENT_INDEX_PAGE_SIZE
+    assert f"Conversation {count - 1:03d}" in first.text
     assert "Conversation 002" in first.text
     assert "Conversation 001" not in first.text
     assert "Private conversation" not in first.text
@@ -186,10 +200,77 @@ async def test_agent_index_paginates_own_conversations(datasette_instance, cooki
     assert "Conversation 000" in second.text
     assert 'href="/-/agent?page=1"' in second.text
 
-    out_of_range = await datasette_instance.client.get("/-/agent?page=999", cookies=cookies)
+    out_of_range = await datasette_instance.client.get(
+        "/-/agent?page=999", cookies=cookies
+    )
     assert "Page 2 of 2" in out_of_range.text
-    invalid = await datasette_instance.client.get("/-/agent?page=invalid", cookies=cookies)
+    invalid = await datasette_instance.client.get(
+        "/-/agent?page=invalid", cookies=cookies
+    )
     assert "Page 1 of 2" in invalid.text
+
+
+@pytest.mark.asyncio
+async def test_agent_index_searches_own_conversation_titles(
+    datasette_instance, cookies
+):
+    from datasette_agent.schema import ensure_tables
+    from datasette_agent.views import AGENT_INDEX_PAGE_SIZE
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    start = datetime(2026, 10, 31, tzinfo=timezone.utc)
+    for index in range(AGENT_INDEX_PAGE_SIZE + 2):
+        timestamp = (start + timedelta(minutes=index)).isoformat()
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                f"owl-{index:03d}",
+                "user",
+                f"Owl sighting {index:03d}",
+                timestamp,
+                timestamp,
+            ],
+        )
+    for conversation_id, actor_id, title in (
+        ("fox", "user", "Fox sighting"),
+        ("percent", "user", "100% complete"),
+        ("underscore", "user", "snake_case"),
+        ("private", "someone-else", "Private Owl sighting"),
+    ):
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [conversation_id, actor_id, title, start.isoformat(), start.isoformat()],
+        )
+
+    first = await datasette_instance.client.get("/-/agent?q=oWl", cookies=cookies)
+    assert first.status_code == 200
+    assert first.text.count('class="agent-conversation-row"') == AGENT_INDEX_PAGE_SIZE
+    assert f"{AGENT_INDEX_PAGE_SIZE + 2} matching" in first.text
+    assert 'href="/-/agent?q=oWl&amp;page=2"' in first.text
+    assert 'value="oWl"' in first.text
+    assert "Fox sighting" not in first.text
+    assert "Private Owl sighting" not in first.text
+
+    second = await datasette_instance.client.get(
+        "/-/agent?q=oWl&page=2", cookies=cookies
+    )
+    assert second.text.count('class="agent-conversation-row"') == 2
+    assert 'href="/-/agent?q=oWl&amp;page=1"' in second.text
+
+    percent = await datasette_instance.client.get("/-/agent?q=%25", cookies=cookies)
+    assert percent.text.count('class="agent-conversation-row"') == 1
+    assert "100% complete" in percent.text
+    underscore = await datasette_instance.client.get("/-/agent?q=_", cookies=cookies)
+    assert underscore.text.count('class="agent-conversation-row"') == 1
+    assert "snake_case" in underscore.text
+
+    missing = await datasette_instance.client.get("/-/agent?q=missing", cookies=cookies)
+    assert "0 matching" in missing.text
+    assert "No conversation titles match" in missing.text
+    assert 'value="missing"' in missing.text
 
 
 @pytest.mark.asyncio

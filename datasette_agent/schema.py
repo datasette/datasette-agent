@@ -1,6 +1,5 @@
 import asyncio
 
-
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     id TEXT PRIMARY KEY,

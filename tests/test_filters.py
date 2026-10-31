@@ -76,8 +76,13 @@ def test_format_recent_datetime_uses_local_day():
     pacific = timezone(timedelta(hours=-7))
     now = datetime(2026, 10, 31, 12, tzinfo=pacific)
     assert format_recent_datetime("2026-10-31T22:02:00+00:00", now) == "Today, 3:02 PM"
-    assert format_recent_datetime("2026-10-30T22:02:00+00:00", now) == "Yesterday, 3:02 PM"
-    assert format_recent_datetime("2026-10-29T22:02:00+00:00", now) == "Oct 29, 2026 · 3:02 PM"
+    assert (
+        format_recent_datetime("2026-10-30T22:02:00+00:00", now) == "Yesterday, 3:02 PM"
+    )
+    assert (
+        format_recent_datetime("2026-10-29T22:02:00+00:00", now)
+        == "Oct 29, 2026 · 3:02 PM"
+    )
     assert format_recent_datetime("not a date", now) == "not a date"
 
 

@@ -751,6 +751,48 @@
   font-size: 0.85rem;
 }
 
+.agent-history-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.agent-history-search label {
+  flex-basis: 100%;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.agent-history-search input {
+  flex: 1;
+  min-width: 12rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.agent-history-search button {
+  padding: 0.55rem 0.9rem;
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  cursor: pointer;
+  font: inherit;
+}
+
+.agent-history-search button:hover,
+.agent-history-search button:focus-visible {
+  background: #edf4ff;
+}
+
+.agent-history-empty {
+  color: #666;
+}
+
 /* Model pinned to a conversation, shown in the chat header */
 .agent-model-badge {
   font-family:

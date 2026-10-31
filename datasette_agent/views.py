@@ -82,12 +82,18 @@ async def agent_index(request, datasette):
     actor_id = _actor_id(request)
     where = "actor_id = ?" if actor_id else "actor_id IS NULL"
     params = [actor_id] if actor_id else []
+    q = (request.args.get("q") or "").strip()
+    if q:
+        where += " AND instr(lower(coalesce(title, '')), lower(?)) > 0"
+        params.append(q)
     total_conversations = (
         await db.execute(
             f"SELECT count(*) AS count FROM agent_conversations WHERE {where}", params
         )
     ).first()["count"]
-    page_count = max(1, (total_conversations + AGENT_INDEX_PAGE_SIZE - 1) // AGENT_INDEX_PAGE_SIZE)
+    page_count = max(
+        1, (total_conversations + AGENT_INDEX_PAGE_SIZE - 1) // AGENT_INDEX_PAGE_SIZE
+    )
     try:
         requested_page = max(1, int(request.args.get("page", "1")))
     except (TypeError, ValueError):
@@ -111,6 +117,7 @@ async def agent_index(request, datasette):
                 "page": page,
                 "page_count": page_count,
                 "total_conversations": total_conversations,
+                "q": q,
             },
             request=request,
         )

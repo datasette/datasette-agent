@@ -316,7 +316,13 @@ async def _finish_turn(writer, pending):
 
 
 async def run_agent(
-    datasette, actor, conversation_id, user_message, writer, references=None, canvas_url=None
+    datasette,
+    actor,
+    conversation_id,
+    user_message,
+    writer,
+    references=None,
+    canvas_url=None,
 ):
     db = datasette.get_internal_database()
     await ensure_tables(db)
