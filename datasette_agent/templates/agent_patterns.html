@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Agent controls{% endblock %}
+
+{% block extra_head %}
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
+<link type="text/css" rel="stylesheet" href="{{ static('agent-patterns.css', plugin='datasette-agent') }}">
+{% endblock %}
+
+{% block content %}
+{% from "_agent_header.html" import agent_header with context %}
+<main class="agent-patterns">
+  <h1>Agent controls</h1>
+  <p>Live previews of the controls used in an agent conversation.</p>
+
+  <section class="agent-patterns-example">
+    <h2>Wide conversation header</h2>
+    <div class="agent-patterns-scroll">
+      <div class="agent-chat agent-has-canvas agent-patterns-preview agent-patterns-wide">
+        {{ agent_header("Build a colorful app", urls.path("/-/patterns/agent/markdown"), "agent-pattern", model_id="gpt-5.6-sol") }}
+      </div>
+    </div>
+  </section>
+
+  <section class="agent-patterns-example">
+    <h2>Narrow conversation header</h2>
+    <div class="agent-chat agent-has-canvas agent-patterns-preview agent-patterns-narrow" data-agent-view="chat">
+      {{ agent_header("Build a colorful app", urls.path("/-/patterns/agent/markdown"), "agent-pattern") }}
+    </div>
+  </section>
+
+  <section class="agent-patterns-example">
+    <h2>Export menu</h2>
+    <div class="agent-patterns-export-demo">
+      <div class="chat-export-menu" data-markdown-url="{{ urls.path('/-/patterns/agent/markdown') }}" data-title="agent-pattern" data-open="true"></div>
+    </div>
+  </section>
+</main>
+<script src="{{ static('chat-export.js', plugin='datasette-agent') }}"></script>
+<script src="{{ static('agent-patterns.js', plugin='datasette-agent') }}"></script>
+{% endblock %}

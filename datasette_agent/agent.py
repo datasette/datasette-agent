@@ -23,7 +23,7 @@ from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
-async def _build_system_prompt(datasette, actor):
+async def _build_system_prompt(datasette, actor, canvas_url=None):
     parts = [
         "You are a helpful data analysis assistant. "
         "You have access to tools that let you explore and query databases. "
@@ -79,6 +79,13 @@ async def _build_system_prompt(datasette, actor):
         parts.append("\nAvailable databases and tables:")
         for db_name, tables in db_info.items():
             parts.append(f"\n  {db_name}: {', '.join(tables)}")
+    if canvas_url:
+        parts.append(
+            "\nThe user has this page open in the canvas next to the chat: "
+            f"{canvas_url}\n"
+            'If they refer to "this" table, query or page, they probably '
+            "mean that one."
+        )
     return "\n".join(parts)
 
 
@@ -86,7 +93,9 @@ async def _send_sse(writer, event, data):
     await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
+async def _run_chain(
+    datasette, actor, conversation_id, writer, prompt_text, canvas_url=None
+):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages.
 
@@ -117,7 +126,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         supports_browser_tasks=True,
     )
 
-    system_prompt = await _build_system_prompt(datasette, actor)
+    system_prompt = await _build_system_prompt(datasette, actor, canvas_url)
     prior_messages = await load_messages(db, conversation_id)
 
     # A conversation is pinned to one model for its whole life. The
@@ -307,7 +316,7 @@ async def _finish_turn(writer, pending):
 
 
 async def run_agent(
-    datasette, actor, conversation_id, user_message, writer, references=None
+    datasette, actor, conversation_id, user_message, writer, references=None, canvas_url=None
 ):
     db = datasette.get_internal_database()
     await ensure_tables(db)
@@ -347,7 +356,12 @@ async def run_agent(
         )
 
         pending = await _run_chain(
-            datasette, actor, conversation_id, writer, user_message
+            datasette,
+            actor,
+            conversation_id,
+            writer,
+            user_message,
+            canvas_url=canvas_url,
         )
 
         # Auto-set title from the first user message if not yet set.

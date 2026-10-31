@@ -14,6 +14,29 @@
   border-bottom: 1px solid #ddd;
 }
 
+.agent-back-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 2.25rem;
+  height: 2.25rem;
+  margin-right: -0.5rem;
+  text-decoration: none;
+}
+
+.agent-back-link:hover svg {
+  opacity: 0.7;
+}
+
+.agent-back-link:active svg {
+  opacity: 0.5;
+}
+
+.agent-back-link svg {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+
 .agent-header h1 {
   font-size: 1.2rem;
   margin: 0;
@@ -1226,4 +1249,297 @@
 
 .agent-ref-chip-remove:hover {
   opacity: 1;
+}
+
+/* Canvas: a Datasette page in an iframe next to the chat.
+   Wide screens (tablet landscape, desktop) put chat in a third and the
+   canvas in two thirds; narrow screens show one at a time with a
+   Chat | Canvas switch that slides between them. */
+.agent-panes,
+.agent-chat-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-canvas,
+.agent-view-switch,
+.agent-canvas-toggle {
+  display: none;
+}
+
+body.agent-workspace section.content {
+  margin: 0;
+}
+
+body.agent-workspace footer.ft {
+  display: none;
+}
+
+body.agent-workspace .agent-chat {
+  max-width: none;
+  height: calc(100vh - var(--agent-chat-top, 3rem));
+  height: calc(100dvh - var(--agent-chat-top, 3rem));
+}
+
+body.agent-workspace .agent-header {
+  padding: 0.5rem 1rem;
+}
+
+body.agent-workspace .agent-header > a {
+  white-space: nowrap;
+}
+
+body.agent-workspace .agent-header h1 {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.agent-workspace .agent-chat-pane {
+  padding: 0 1rem;
+  background: #fff;
+}
+
+.agent-canvas {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: #fff;
+}
+
+.agent-canvas::before {
+  content: "Loading…";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #666;
+  z-index: 1;
+}
+
+.agent-canvas-ready::before {
+  display: none;
+}
+
+/* The visible page is navigating: hide it until the next page has
+   loaded and had its Datasette header removed. The indicator itself
+   waits a moment so quick loads don't flicker. */
+.agent-canvas.agent-canvas-loading::before {
+  display: grid;
+  z-index: 3;
+  animation: agent-canvas-loading-in 0s linear 0.2s both;
+}
+
+.agent-canvas-loading .agent-canvas-frame-ready {
+  visibility: hidden;
+}
+
+@keyframes agent-canvas-loading-in {
+  from { visibility: hidden; }
+  to { visibility: visible; }
+}
+
+.agent-canvas-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.agent-canvas-frame-ready {
+  z-index: 2;
+}
+
+.agent-canvas-opened {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.agent-canvas-opened a {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.agent-canvas-toggle {
+  margin-left: auto;
+  background: #fff;
+  border: 2px solid #e9ecef;
+  border-radius: 8px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.agent-canvas-hidden .agent-canvas-toggle {
+  background: #e9ecef;
+  color: #555;
+  box-shadow: none;
+}
+
+.agent-view-switch {
+  margin-left: auto;
+  background: #e9ecef;
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.agent-view-switch button {
+  position: relative;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #555;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.agent-view-switch button[aria-pressed="true"] {
+  background: #fff;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.agent-view-switch-badge {
+  display: none;
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9480f;
+}
+
+.agent-canvas-unseen .agent-view-switch-badge {
+  display: block;
+}
+
+/* Wide: chat one third, canvas two thirds */
+@media (min-width: 900px) {
+  .agent-has-canvas .agent-canvas-toggle {
+    display: inline-block;
+    margin-left: 0;
+  }
+
+  .agent-has-canvas:not(.agent-canvas-hidden) .agent-panes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  .agent-has-canvas:not(.agent-canvas-hidden) .agent-chat-pane {
+    border-right: 1px solid #ddd;
+  }
+
+  .agent-has-canvas:not(.agent-canvas-hidden) .agent-canvas {
+    display: flex;
+  }
+
+  .agent-canvas-hidden .agent-chat-pane {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+}
+
+/* Narrow: one view at a time, sliding between them */
+@media (max-width: 899px) {
+  .agent-has-canvas .agent-view-switch {
+    display: inline-flex;
+  }
+
+  .agent-has-canvas .agent-model-badge {
+    display: none;
+  }
+
+  .agent-has-canvas .agent-header h1 {
+    flex: 1;
+  }
+
+  .agent-has-canvas .chat-export-menu,
+  .agent-has-canvas .agent-view-switch {
+    margin-left: 0;
+  }
+
+  .agent-has-canvas[data-agent-view="canvas"] .chat-export-menu {
+    display: none;
+  }
+
+  .agent-has-canvas .agent-header {
+    gap: 0.6rem;
+  }
+
+  .agent-has-canvas .agent-header h1 {
+    font-size: 1rem;
+  }
+
+  .agent-has-canvas .agent-panes {
+    display: block;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .agent-has-canvas .agent-chat-pane,
+  .agent-has-canvas .agent-canvas {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.38s ease,
+      box-shadow 0.38s ease,
+      visibility 0s linear 0s;
+  }
+
+  .agent-has-canvas .agent-canvas {
+    z-index: 2;
+  }
+
+  .agent-has-canvas[data-agent-view="chat"] .agent-canvas {
+    transform: translateX(100%);
+    visibility: hidden;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      box-shadow 0.38s ease,
+      visibility 0s linear 0.38s;
+  }
+
+  .agent-has-canvas[data-agent-view="canvas"] .agent-canvas {
+    transform: none;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+  }
+
+  .agent-has-canvas[data-agent-view="canvas"] .agent-chat-pane {
+    transform: translateX(-30%);
+    opacity: 0.5;
+    visibility: hidden;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.38s ease,
+      visibility 0s linear 0.38s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-pane,
+  .agent-canvas,
+  .agent-view-switch button {
+    transition: none !important;
+  }
 }

@@ -150,6 +150,25 @@ async def test_agent_index(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_agent_patterns(datasette_instance, cookies):
+    denied = await datasette_instance.client.get("/-/patterns/agent")
+    assert denied.status_code == 403
+
+    response = await datasette_instance.client.get("/-/patterns/agent", cookies=cookies)
+    assert response.status_code == 200
+    assert "Wide conversation header" in response.text
+    assert "Narrow conversation header" in response.text
+    assert "Close canvas" in response.text
+    assert 'data-open="true"' in response.text
+
+    markdown = await datasette_instance.client.get(
+        "/-/patterns/agent/markdown", cookies=cookies
+    )
+    assert markdown.status_code == 200
+    assert "Sample content for the Export menu" in markdown.text
+
+
+@pytest.mark.asyncio
 async def test_menu_link_added_for_users_with_permission(datasette_instance, cookies):
     """An authenticated user with datasette-agent must see a link to
     /-/agent in Datasette's top-right menu dropdown."""
@@ -254,6 +273,52 @@ async def test_conversation_page(datasette_instance, cookies):
     )
     assert response.status_code == 200
     assert "Chat" in response.text
+
+
+@pytest.mark.asyncio
+async def test_conversation_page_skips_whitespace_only_assistant_text(
+    datasette_instance, cookies
+):
+    """Models often emit a "\\n\\n" text part right before a batch of tool
+    calls. That must not render as an empty assistant bubble (which would
+    otherwise get a copy button with nothing to copy)."""
+    from datasette_agent.messages import insert_message
+    from datasette_agent.schema import ensure_tables
+    from datetime import datetime, timezone
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01WSCONVAAAAAAAAAAAAAAAAAA"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Whitespace", now, now],
+    )
+    for msg in [
+        {"role": "user", "parts": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "text": "\n\n"},
+                {
+                    "type": "tool_call",
+                    "name": "sql_query",
+                    "arguments": {"sql": "select 1"},
+                    "tool_call_id": "call_1",
+                },
+            ],
+        },
+        {"role": "assistant", "parts": [{"type": "text", "text": "Real answer"}]},
+    ]:
+        await insert_message(db, conversation_id, msg)
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}", cookies=cookies
+    )
+    assert response.status_code == 200
+    assert response.text.count('class="agent-message agent-message-assistant"') == 1
+    assert "Real answer" in response.text
 
 
 @pytest.mark.asyncio
@@ -561,7 +626,10 @@ async def test_stream_endpoint_headers(datasette_instance, cookies):
     assert "text/event-stream" in response.headers.get("content-type", "")
     # Content-Encoding: none is needed for SSE streaming on Fly.io
     assert response.headers.get("content-encoding") == "none"
-    assert response.headers.get("cache-control") == "no-cache"
+    # The view sends no-cache; newer Datasette replaces Cache-Control on
+    # responses for signed-in actors with "private, no-store". Either
+    # stops proxies and browsers caching the stream.
+    assert response.headers.get("cache-control") in ("no-cache", "private, no-store")
 
 
 @pytest.mark.asyncio

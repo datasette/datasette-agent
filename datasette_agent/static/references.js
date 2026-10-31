@@ -214,7 +214,7 @@ export function attachReferencePicker(textarea, options = {}) {
     const seq = ++requestSeq;
     try {
       const resp = await fetch(
-        SEARCH_URL + "?q=" + encodeURIComponent(query),
+        (textarea.dataset.referenceSearchUrl || SEARCH_URL) + "?q=" + encodeURIComponent(query),
         {signal: controller.signal}
       );
       if (!resp.ok) return;

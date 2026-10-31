@@ -3,7 +3,7 @@
 {% block title %}Datasette Agent{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
 {% endblock %}
 
 {% block content %}
@@ -11,7 +11,7 @@
 
 <form id="new-chat-form">
   <div class="agent-new-chat">
-    <textarea id="new-message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="3"></textarea>
+    <textarea id="new-message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="3" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
     <button type="submit">Start chat</button>
   </div>
   {% if models|length > 1 %}
@@ -36,7 +36,7 @@
 <ul class="agent-conversations">
   {% for conv in conversations %}
   <li>
-    <a href="/-/agent/{{ conv.id }}">{{ conv.title or "Untitled conversation" }}</a>
+    <a href="{{ urls.path('/-/agent/' ~ conv.id) }}">{{ conv.title or "Untitled conversation" }}</a>
     <span class="agent-timestamp">{{ conv.updated_at | agent_format_datetime }}</span>
   </li>
   {% endfor %}
@@ -44,7 +44,7 @@
 {% endif %}
 
 <script type="module">
-import {attachReferencePicker} from "/-/static-plugins/datasette-agent/references.js";
+import {attachReferencePicker} from {{ static('references.js', plugin='datasette-agent')|tojson }};
 const referencePicker = attachReferencePicker(
   document.getElementById("new-message"),
   {placement: "below"}
@@ -81,7 +81,7 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     } catch (e) {}
   }
   try {
-    const resp = await fetch("/-/agent/api/conversations", {
+    const resp = await fetch({{ urls.path("/-/agent/api/conversations")|tojson }}, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
@@ -96,7 +96,7 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
       "agent_pending_references",
       JSON.stringify(referencePicker.getReferences())
     );
-    window.location.href = "/-/agent/" + data.conversation_id;
+    window.location.href = {{ urls.path("/-/agent/")|tojson }} + data.conversation_id;
   } catch (err) {
     btn.disabled = false;
     btn.textContent = "Start chat";

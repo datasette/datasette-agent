@@ -3,7 +3,7 @@
 {% block title %}Background Agents{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
 {% endblock %}
 
 {% block content %}
@@ -31,7 +31,7 @@
   <tbody>
     {% for agent in agents %}
     <tr data-agent-id="{{ agent.id }}" data-agent-status="{{ agent.status }}">
-      <td><a href="/-/agent/{{ agent.conversation_id }}">{{ agent.goal[:100] }}{% if agent.goal|length > 100 %}...{% endif %}</a></td>
+      <td><a href="{{ urls.path('/-/agent/' ~ agent.conversation_id) }}">{{ agent.goal[:100] }}{% if agent.goal|length > 100 %}...{% endif %}</a></td>
       <td><span class="agent-status agent-status-{{ agent.status }}">{{ agent.status }}</span></td>
       <td class="agent-timestamp">{{ agent.created_at | agent_format_datetime }}</td>
       <td>{{ agent.final_message or agent.error or "" }}</td>
@@ -61,7 +61,7 @@ document.getElementById("new-agent-form").addEventListener("submit", async (e) =
   btn.disabled = true;
   btn.textContent = "Starting...";
   try {
-    const resp = await fetch("/-/agent/api/background", {
+    const resp = await fetch({{ urls.path("/-/agent/api/background")|tojson }}, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({goal}),
@@ -82,7 +82,7 @@ document.querySelectorAll(".agent-cancel-btn").forEach((btn) => {
     btn.disabled = true;
     btn.textContent = "Stopping...";
     try {
-      const resp = await fetch(`/-/agent/api/background/${agentId}/cancel`, {
+      const resp = await fetch({{ urls.path("/-/agent/api/background/")|tojson }} + agentId + "/cancel", {
         method: "POST",
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
