@@ -21,6 +21,37 @@ from .models import get_agent_models
 from .questions import question_row_to_dict
 from .schema import ensure_tables
 
+# Longest canvas URL the page may report back; anything longer is ignored.
+MAX_CANVAS_URL_LENGTH = 2000
+
+
+def _clean_canvas_url(value):
+    """The path the conversation page's canvas is showing, as reported by
+    the page, or None if it isn't a plausible same-site path."""
+    if not isinstance(value, str):
+        return None
+    if len(value) > MAX_CANVAS_URL_LENGTH:
+        return None
+    if not value.startswith("/") or value.startswith("//"):
+        return None
+    if any(ord(c) < 32 for c in value):
+        return None
+    return value
+
+
+def _latest_canvas_url(messages):
+    """The most recent page show_in_canvas opened in this conversation."""
+    for msg in reversed(messages):
+        if msg.get("role") != "tool" or not msg.get("tool_output"):
+            continue
+        try:
+            parsed = json.loads(msg["tool_output"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict) and parsed.get("_canvas_url"):
+            return parsed["_canvas_url"]
+    return None
+
 
 def _actor_id(request):
     if request.actor:
@@ -28,6 +59,18 @@ def _actor_id(request):
         if actor_id is not None:
             return str(actor_id)
     return None
+
+
+async def agent_patterns(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    return Response.html(
+        await datasette.render_template("agent_patterns.html", {}, request=request)
+    )
+
+
+async def agent_patterns_markdown(request, datasette):
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    return Response.text("# Agent pattern\n\nSample content for the Export menu.\n")
 
 
 async def agent_index(request, datasette):
@@ -196,14 +239,15 @@ async def agent_conversation(request, datasette):
     if not pending_tasks and pending_question is None:
         needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
 
+    render_messages = combine_tool_messages_for_render(flatten_for_render(messages))
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
             {
                 "conversation": dict(row),
-                "messages": combine_tool_messages_for_render(
-                    flatten_for_render(messages)
-                ),
+                "messages": render_messages,
+                "canvas_url": _latest_canvas_url(render_messages),
                 "conversation_id": conversation_id,
                 "background_agent": (
                     dict(background_agent) if background_agent else None
@@ -329,6 +373,7 @@ async def agent_stream(request, datasette):
     body = await request.post_body()
     data = json.loads(body)
     user_message = data.get("message", "")
+    canvas_url = _clean_canvas_url(data.get("canvas_url"))
 
     async def stream_fn(writer):
         await run_agent(
@@ -337,6 +382,7 @@ async def agent_stream(request, datasette):
             conversation_id=conversation_id,
             user_message=user_message,
             writer=writer,
+            canvas_url=canvas_url,
         )
 
     return AsgiStream(

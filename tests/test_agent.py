@@ -150,6 +150,25 @@ async def test_agent_index(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
+async def test_agent_patterns(datasette_instance, cookies):
+    denied = await datasette_instance.client.get("/-/patterns/agent")
+    assert denied.status_code == 403
+
+    response = await datasette_instance.client.get("/-/patterns/agent", cookies=cookies)
+    assert response.status_code == 200
+    assert "Wide conversation header" in response.text
+    assert "Narrow conversation header" in response.text
+    assert "Close canvas" in response.text
+    assert 'data-open="true"' in response.text
+
+    markdown = await datasette_instance.client.get(
+        "/-/patterns/agent/markdown", cookies=cookies
+    )
+    assert markdown.status_code == 200
+    assert "Sample content for the Export menu" in markdown.text
+
+
+@pytest.mark.asyncio
 async def test_menu_link_added_for_users_with_permission(datasette_instance, cookies):
     """An authenticated user with datasette-agent must see a link to
     /-/agent in Datasette's top-right menu dropdown."""
@@ -607,7 +626,10 @@ async def test_stream_endpoint_headers(datasette_instance, cookies):
     assert "text/event-stream" in response.headers.get("content-type", "")
     # Content-Encoding: none is needed for SSE streaming on Fly.io
     assert response.headers.get("content-encoding") == "none"
-    assert response.headers.get("cache-control") == "no-cache"
+    # The view sends no-cache; newer Datasette replaces Cache-Control on
+    # responses for signed-in actors with "private, no-store". Either
+    # stops proxies and browsers caching the stream.
+    assert response.headers.get("cache-control") in ("no-cache", "private, no-store")
 
 
 @pytest.mark.asyncio

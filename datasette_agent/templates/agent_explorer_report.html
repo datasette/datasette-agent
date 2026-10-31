@@ -3,7 +3,7 @@
 {% block title %}Report: {{ report.database_name }}{% if report.table_name %} / {{ report.table_name }}{% endif %}{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
 {% endblock %}
 
 {% block content %}
@@ -19,7 +19,7 @@
 {% endif %}
 
 {% if report.agent_conversation_id %}
-<p><a href="/-/agent/{{ report.agent_conversation_id }}">View agent conversation</a></p>
+<p><a href="{{ urls.path('/-/agent/' ~ report.agent_conversation_id) }}">View agent conversation</a></p>
 {% endif %}
 
 {% if report.agent_error %}
@@ -36,7 +36,7 @@
 <div id="report-content" class="explorer-report-rendered"></div>
 
 <script type="module">
-import * as smd from "/-/static-plugins/datasette-agent/smd.js";
+import * as smd from {{ static('smd.js', plugin='datasette-agent')|tojson }};
 
 const reportId = {{ report.id|tojson }};
 const contentEl = document.getElementById("report-content");
@@ -69,7 +69,7 @@ if (initialStatus === "completed" || initialStatus === "error") {
 async function pollForUpdates() {
   if (!polling) return;
   try {
-    const resp = await fetch(`/-/agent/api/explore/${reportId}`);
+    const resp = await fetch({{ urls.path("/-/agent/api/explore/")|tojson }} + reportId);
     if (!resp.ok) return;
     const data = await resp.json();
 

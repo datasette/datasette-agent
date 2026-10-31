@@ -37,6 +37,8 @@ def register_routes():
     from . import views
 
     return [
+        (r"^/-/patterns/agent$", views.agent_patterns),
+        (r"^/-/patterns/agent/markdown$", views.agent_patterns_markdown),
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/api/models$", views.api_models),
@@ -394,7 +396,13 @@ def register_commands(cli):
 @hookimpl
 def register_agent_tools(datasette):
     from .background_tools import get_background_tools
+    from .canvas_tools import get_canvas_tools
     from .query_tools import get_query_tools
     from .sql_tools import get_default_tools
 
-    return get_default_tools() + get_query_tools() + get_background_tools()
+    return (
+        get_default_tools()
+        + get_query_tools()
+        + get_background_tools()
+        + get_canvas_tools()
+    )

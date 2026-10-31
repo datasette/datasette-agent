@@ -84,7 +84,7 @@ async def save_query(
     # Analyze first: invalid SQL or operations the actor may not perform
     # come straight back to the model without bothering the user.
     analyze_response = await datasette.client.get(
-        "{}/-/queries/analyze".format(datasette.urls.database(database)),
+        datasette.urls.database(database) + "/-/queries/analyze",
         params={"sql": sql},
         cookies=cookies,
     )
@@ -133,7 +133,7 @@ async def save_query(
     if description:
         query_data["description"] = description
     store_response = await datasette.client.post(
-        "{}/-/queries/store".format(datasette.urls.database(database)),
+        datasette.urls.database(database) + "/-/queries/store",
         json={"query": query_data},
         cookies=cookies,
     )

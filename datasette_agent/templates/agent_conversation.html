@@ -3,20 +3,16 @@
 {% block title %}Agent - {{ conversation.title or "Chat" }}{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
 {% endblock %}
 
 {% block content %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
-  <div class="agent-header">
-    <a href="/-/agent">&larr; Back</a>
-    <h1>{{ conversation.title or "Chat" }}</h1>
-    {% if conversation.model_id %}
-    <span class="agent-model-badge" title="Model used for this conversation">{{ conversation.model_id }}</span>
-    {% endif %}
-    <div class="chat-export-menu" data-markdown-url="/-/agent/{{ conversation_id }}/markdown" data-title="{{ conversation.title or 'chat' }}"></div>
-  </div>
+{% from "_agent_header.html" import agent_header with context %}
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if canvas_url %} data-canvas-url="{{ canvas_url }}"{% endif %} data-agent-view="chat">
+  {{ agent_header(conversation.title or "Chat", urls.path("/-/agent/" ~ conversation_id ~ "/markdown"), conversation.title or "chat", model_id=conversation.model_id) }}
 
+  <div class="agent-panes">
+  <div class="agent-chat-pane">
   <div class="agent-messages" id="messages">
     {% set in_tool_group = namespace(value=false) %}
     {% for msg in messages %}
@@ -94,6 +90,12 @@
     <button type="submit" id="send-btn">Send</button>
   </form>
   {% endif %}
+  </div>
+
+  <section class="agent-canvas" aria-label="Canvas">
+    <iframe class="agent-canvas-frame" name="agent-canvas" title="Canvas"></iframe>
+  </section>
+  </div>
 </div>
 
 {% if pending_question_json %}
@@ -104,8 +106,9 @@
 <script type="application/json" id="pending-tasks-data">{{ pending_tasks_json | safe }}</script>
 {% endif %}
 
-<script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
-<script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
+<script type="module" src="{{ static('agent-canvas.js', plugin='datasette-agent') }}"></script>
+<script type="module" src="{{ static('agent.js', plugin='datasette-agent') }}"></script>
+<script src="{{ static('chat-export.js', plugin='datasette-agent') }}"></script>
 {% if not background_agent %}
 <script type="module">
 const conversationId = document.querySelector(".agent-chat").dataset.conversationId;

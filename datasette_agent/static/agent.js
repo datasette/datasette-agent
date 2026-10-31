@@ -372,6 +372,9 @@ function appendToolResult(name, output, id = null) {
   if (parsed && parsed._edit_sql_url && !parsed._html) {
     response.section.appendChild(createSqlEditLink(parsed._edit_sql_url));
   }
+  if (parsed && parsed._canvas_url && window.datasetteAgentCanvas) {
+    window.datasetteAgentCanvas.open(parsed._canvas_url, {source: "agent"});
+  }
   scrollToBottomIfFollowing();
 }
 
@@ -387,6 +390,11 @@ function currentConversationId() {
   return document.querySelector(".agent-chat").dataset.conversationId;
 }
 
+// Conversation endpoint URLs, including Datasette's base_url prefix.
+function conversationUrl(path) {
+  return document.querySelector(".agent-chat").dataset.conversationUrl + path;
+}
+
 function setInputEnabled(enabled) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
@@ -399,9 +407,13 @@ async function sendMessage(conversationId, message) {
   appendMessage("user", message);
   const input = document.getElementById("message-input");
   if (input) input.value = "";
+  const payload = {message};
+  const canvasUrl =
+    window.datasetteAgentCanvas && window.datasetteAgentCanvas.currentUrl();
+  if (canvasUrl) payload.canvas_url = canvasUrl;
   const result = await streamAgentEvents(
-    "/-/agent/" + conversationId + "/stream",
-    {message}
+    conversationUrl("/stream"),
+    payload
   );
   if (result && result.ok === false && result.status) {
     const detail =
@@ -415,7 +427,7 @@ async function sendMessage(conversationId, message) {
 async function answerQuestion(conversationId, questionId, answer) {
   questionPending = false;
   await streamAgentEvents(
-    "/-/agent/" + conversationId + "/question/" + questionId,
+    conversationUrl("/question/" + questionId),
     {answer}
   );
 }
@@ -526,12 +538,12 @@ const browserTaskElements = new Map(); // task id -> {statusEl, htmlEl, task}
 
 function taskUrl(taskId, action) {
   return (
-    "/-/agent/" + currentConversationId() + "/task/" + taskId + "/" + action
+    conversationUrl("/task/" + taskId + "/" + action)
   );
 }
 
 function resumeUrl() {
-  return "/-/agent/" + currentConversationId() + "/resume";
+  return conversationUrl("/resume");
 }
 
 // One-shot: resolves {ok: true, payload, timeoutMs} once per task,

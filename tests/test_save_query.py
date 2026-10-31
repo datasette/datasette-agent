@@ -297,3 +297,40 @@ async def test_save_query_unknown_database(datasette_instance, cookies):
     )
     assert result["ok"] is False
     assert "missing" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_save_query_with_base_url(tmp_path):
+    ds = Datasette(
+        memory=True,
+        settings={"base_url": "/prefix/"},
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={
+            "permissions": {
+                "datasette-agent": {"id": "user"},
+                "store-query": {"id": "user"},
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    ds.add_memory_database("data")
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+    await setup_data_table(ds)
+    conversation_id = await start_conversation(ds, cookies)
+
+    events = await call_save_query(
+        ds,
+        cookies,
+        conversation_id,
+        {"database": "data", "name": "all_notes", "sql": "select * from notes"},
+    )
+    questions = [e for e in events if e["event"] == "question"]
+    assert len(questions) == 1, events
+    events = await answer(
+        ds, cookies, conversation_id, questions[0]["data"]["id"], True
+    )
+    tool_results = [e for e in events if e["event"] == "tool_result"]
+    result = json.loads(tool_results[0]["data"]["output"])
+    assert result["ok"] is True, result
+    assert result["url"] == "/prefix/data/all_notes"
+    assert await ds.get_query("data", "all_notes") is not None
