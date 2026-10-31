@@ -184,6 +184,10 @@ def prepare_jinja2_environment(env, datasette):
 
     env.filters["agent_format_datetime"] = format_datetime
 
+    from .date_format import format_recent_datetime
+
+    env.filters["agent_format_recent_datetime"] = format_recent_datetime
+
 
 @hookimpl
 def menu_links(datasette, actor, request):

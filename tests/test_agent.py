@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from datasette.app import Datasette
 import pytest
@@ -147,6 +148,48 @@ async def test_agent_index(datasette_instance, cookies):
     response = await datasette_instance.client.get("/-/agent", cookies=cookies)
     assert response.status_code == 200
     assert "Datasette Agent" in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_index_paginates_own_conversations(datasette_instance, cookies):
+    from datasette_agent.schema import ensure_tables
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    start = datetime(2026, 10, 31, tzinfo=timezone.utc)
+    for index in range(102):
+        timestamp = (start + timedelta(minutes=index)).isoformat()
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [f"test-{index:03d}", "user", f"Conversation {index:03d}", timestamp, timestamp],
+        )
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ["other-user", "someone-else", "Private conversation", start.isoformat(), start.isoformat()],
+    )
+
+    first = await datasette_instance.client.get("/-/agent", cookies=cookies)
+    assert first.status_code == 200
+    assert first.text.count('class="agent-conversation-row"') == 100
+    assert "Conversation 101" in first.text
+    assert "Conversation 002" in first.text
+    assert "Conversation 001" not in first.text
+    assert "Private conversation" not in first.text
+    assert 'href="/-/agent?page=2"' in first.text
+
+    second = await datasette_instance.client.get("/-/agent?page=2", cookies=cookies)
+    assert second.status_code == 200
+    assert second.text.count('class="agent-conversation-row"') == 2
+    assert "Conversation 001" in second.text
+    assert "Conversation 000" in second.text
+    assert 'href="/-/agent?page=1"' in second.text
+
+    out_of_range = await datasette_instance.client.get("/-/agent?page=999", cookies=cookies)
+    assert "Page 2 of 2" in out_of_range.text
+    invalid = await datasette_instance.client.get("/-/agent?page=invalid", cookies=cookies)
+    assert "Page 1 of 2" in invalid.text
 
 
 @pytest.mark.asyncio

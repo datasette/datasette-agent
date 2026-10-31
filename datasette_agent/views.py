@@ -24,6 +24,7 @@ from .schema import ensure_tables
 
 # Longest canvas URL the page may report back; anything longer is ignored.
 MAX_CANVAS_URL_LENGTH = 2000
+AGENT_INDEX_PAGE_SIZE = 100
 
 
 def _clean_canvas_url(value):
@@ -79,21 +80,26 @@ async def agent_index(request, datasette):
     db = datasette.get_internal_database()
     await ensure_tables(db)
     actor_id = _actor_id(request)
-    if actor_id:
-        conversations = (
-            await db.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_conversations "
-                "WHERE actor_id = ? ORDER BY updated_at DESC",
-                [actor_id],
-            )
-        ).rows
-    else:
-        conversations = (
-            await db.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_conversations "
-                "WHERE actor_id IS NULL ORDER BY updated_at DESC",
-            )
-        ).rows
+    where = "actor_id = ?" if actor_id else "actor_id IS NULL"
+    params = [actor_id] if actor_id else []
+    total_conversations = (
+        await db.execute(
+            f"SELECT count(*) AS count FROM agent_conversations WHERE {where}", params
+        )
+    ).first()["count"]
+    page_count = max(1, (total_conversations + AGENT_INDEX_PAGE_SIZE - 1) // AGENT_INDEX_PAGE_SIZE)
+    try:
+        requested_page = max(1, int(request.args.get("page", "1")))
+    except (TypeError, ValueError):
+        requested_page = 1
+    page = min(requested_page, page_count)
+    conversations = (
+        await db.execute(
+            "SELECT id, title, updated_at FROM agent_conversations "
+            f"WHERE {where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params, AGENT_INDEX_PAGE_SIZE, (page - 1) * AGENT_INDEX_PAGE_SIZE],
+        )
+    ).rows
     models, default_model = await get_agent_models(datasette, request.actor)
     return Response.html(
         await datasette.render_template(
@@ -102,6 +108,9 @@ async def agent_index(request, datasette):
                 "conversations": conversations,
                 "models": models,
                 "default_model": default_model,
+                "page": page,
+                "page_count": page_count,
+                "total_conversations": total_conversations,
             },
             request=request,
         )
