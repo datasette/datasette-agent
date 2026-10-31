@@ -41,8 +41,7 @@
   <span class="agent-history-count">{{ total_conversations }} {% if q %}matching{% else %}total{% endif %}</span>
 </div>
 <form class="agent-history-search" action="{{ urls.path('/-/agent') }}" method="get" role="search">
-  <label for="agent-history-query">Search conversation titles</label>
-  <input id="agent-history-query" type="search" name="q" value="{{ q }}">
+  <input id="agent-history-query" type="search" name="q" value="{{ q }}" placeholder="Search conversation titles" aria-label="Search conversation titles">
   <button type="submit">Search</button>
 </form>
 {% if conversations %}

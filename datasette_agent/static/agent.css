@@ -759,12 +759,6 @@
   margin: 0.25rem 0 1rem;
 }
 
-.agent-history-search label {
-  flex-basis: 100%;
-  color: #555;
-  font-size: 0.9rem;
-}
-
 .agent-history-search input {
   flex: 1;
   min-width: 12rem;

@@ -251,6 +251,7 @@ async def test_agent_index_searches_own_conversation_titles(
     assert f"{AGENT_INDEX_PAGE_SIZE + 2} matching" in first.text
     assert 'href="/-/agent?q=oWl&amp;page=2"' in first.text
     assert 'value="oWl"' in first.text
+    assert 'placeholder="Search conversation titles"' in first.text
     assert "Fox sighting" not in first.text
     assert "Private Owl sighting" not in first.text
 
