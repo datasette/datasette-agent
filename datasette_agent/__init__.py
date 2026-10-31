@@ -222,7 +222,8 @@ def extra_body_script(datasette, request):
         if not request or not await datasette.allowed(
             action="datasette-agent", actor=request.actor
         ):
-            return None
+            # Datasette renders a None result as <script>None</script>
+            return ""
         return _agent_jump_config_script(datasette)
 
     return inner

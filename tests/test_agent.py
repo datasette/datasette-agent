@@ -365,6 +365,7 @@ async def test_jump_section_script_hidden_without_permission(datasette_instance)
     assert response.status_code == 200
     assert "agent-jump.js" not in response.text
     assert "datasetteAgentJumpConfig" not in response.text
+    assert "<script>None</script>" not in response.text
 
 
 @pytest.mark.asyncio
