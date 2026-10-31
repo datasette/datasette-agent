@@ -21,17 +21,17 @@ from .questions import question_row_to_dict
 from .references import add_reference_urls, search_references
 from .schema import ensure_tables
 
-# Longest canvas URL the page may report back; anything longer is ignored.
-MAX_CANVAS_URL_LENGTH = 2000
+# Longest panel URL the page may report back; anything longer is ignored.
+MAX_PANEL_URL_LENGTH = 2000
 AGENT_INDEX_PAGE_SIZE = 100
 
 
-def _clean_canvas_url(value):
-    """The path the conversation page's canvas is showing, as reported by
+def _clean_panel_url(value):
+    """The path the conversation page's panel is showing, as reported by
     the page, or None if it isn't a plausible same-site path."""
     if not isinstance(value, str):
         return None
-    if len(value) > MAX_CANVAS_URL_LENGTH:
+    if len(value) > MAX_PANEL_URL_LENGTH:
         return None
     if not value.startswith("/") or value.startswith("//"):
         return None
@@ -40,8 +40,8 @@ def _clean_canvas_url(value):
     return value
 
 
-def _latest_canvas_url(messages):
-    """The most recent page show_in_canvas opened in this conversation."""
+def _latest_panel_url(messages):
+    """The most recent page show_in_panel opened in this conversation."""
     for msg in reversed(messages):
         if msg.get("role") != "tool" or not msg.get("tool_output"):
             continue
@@ -49,8 +49,8 @@ def _latest_canvas_url(messages):
             parsed = json.loads(msg["tool_output"])
         except (json.JSONDecodeError, TypeError):
             continue
-        if isinstance(parsed, dict) and parsed.get("_canvas_url"):
-            return parsed["_canvas_url"]
+        if isinstance(parsed, dict) and parsed.get("_panel_url"):
+            return parsed["_panel_url"]
     return None
 
 
@@ -275,7 +275,7 @@ async def agent_conversation(request, datasette):
             {
                 "conversation": dict(row),
                 "messages": render_messages,
-                "canvas_url": _latest_canvas_url(render_messages),
+                "panel_url": _latest_panel_url(render_messages),
                 "conversation_id": conversation_id,
                 "background_agent": (
                     dict(background_agent) if background_agent else None
@@ -402,7 +402,7 @@ async def agent_stream(request, datasette):
     data = json.loads(body)
     user_message = data.get("message", "")
     references = data.get("references") or []
-    canvas_url = _clean_canvas_url(data.get("canvas_url"))
+    panel_url = _clean_panel_url(data.get("panel_url"))
 
     async def stream_fn(writer):
         await run_agent(
@@ -412,7 +412,7 @@ async def agent_stream(request, datasette):
             user_message=user_message,
             writer=writer,
             references=references,
-            canvas_url=canvas_url,
+            panel_url=panel_url,
         )
 
     return AsgiStream(

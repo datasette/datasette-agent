@@ -343,7 +343,7 @@ def register_commands(cli):
 @hookimpl
 def register_agent_tools(datasette):
     from .background_tools import get_background_tools
-    from .canvas_tools import get_canvas_tools
+    from .panel_tools import get_panel_tools
     from .query_tools import get_query_tools
     from .sql_tools import get_default_tools
 
@@ -351,5 +351,5 @@ def register_agent_tools(datasette):
         get_default_tools()
         + get_query_tools()
         + get_background_tools()
-        + get_canvas_tools()
+        + get_panel_tools()
     )

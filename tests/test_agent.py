@@ -282,7 +282,7 @@ async def test_agent_patterns(datasette_instance, cookies):
     assert response.status_code == 200
     assert "Wide conversation header" in response.text
     assert "Narrow conversation header" in response.text
-    assert "Close canvas" in response.text
+    assert "Close panel" in response.text
     assert 'data-open="true"' in response.text
 
     markdown = await datasette_instance.client.get(

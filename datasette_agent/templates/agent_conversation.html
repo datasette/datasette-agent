@@ -8,7 +8,7 @@
 
 {% block content %}
 {% from "_agent_header.html" import agent_header with context %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if canvas_url %} data-canvas-url="{{ canvas_url }}"{% endif %} data-agent-view="chat">
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if panel_url %} data-panel-url="{{ panel_url }}"{% endif %} data-agent-view="chat">
   {{ agent_header(conversation.title or "Chat", urls.path("/-/agent/" ~ conversation_id ~ "/markdown"), conversation.title or "chat", model_id=conversation.model_id) }}
 
   <div class="agent-panes">
@@ -92,8 +92,8 @@
   {% endif %}
   </div>
 
-  <section class="agent-canvas" aria-label="Canvas">
-    <iframe class="agent-canvas-frame" name="agent-canvas" title="Canvas"></iframe>
+  <section class="agent-panel" aria-label="Panel">
+    <iframe class="agent-panel-frame" name="agent-panel" title="Panel"></iframe>
   </section>
   </div>
 </div>
@@ -106,7 +106,7 @@
 <script type="application/json" id="pending-tasks-data">{{ pending_tasks_json | safe }}</script>
 {% endif %}
 
-<script type="module" src="{{ static('agent-canvas.js', plugin='datasette-agent') }}"></script>
+<script type="module" src="{{ static('agent-panel.js', plugin='datasette-agent') }}"></script>
 <script type="module" src="{{ static('agent.js', plugin='datasette-agent') }}"></script>
 <script src="{{ static('chat-export.js', plugin='datasette-agent') }}"></script>
 {% if not background_agent %}

@@ -1407,10 +1407,10 @@
   opacity: 1;
 }
 
-/* Canvas: a Datasette page in an iframe next to the chat.
+/* Panel: a Datasette page in an iframe next to the chat.
    Wide screens (tablet landscape, desktop) put chat in a third and the
-   canvas in two thirds; narrow screens show one at a time with a
-   Chat | Canvas switch that slides between them. */
+   panel in two thirds; narrow screens show one at a time with a
+   Chat | Panel switch that slides between them. */
 .agent-panes,
 .agent-chat-pane {
   flex: 1;
@@ -1419,9 +1419,9 @@
   flex-direction: column;
 }
 
-.agent-canvas,
+.agent-panel,
 .agent-view-switch,
-.agent-canvas-toggle {
+.agent-panel-toggle {
   display: none;
 }
 
@@ -1459,7 +1459,7 @@ body.agent-workspace .agent-chat-pane {
   background: #fff;
 }
 
-.agent-canvas {
+.agent-panel {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -1467,7 +1467,7 @@ body.agent-workspace .agent-chat-pane {
   background: #fff;
 }
 
-.agent-canvas::before {
+.agent-panel::before {
   content: "Loading…";
   position: absolute;
   inset: 0;
@@ -1477,29 +1477,29 @@ body.agent-workspace .agent-chat-pane {
   z-index: 1;
 }
 
-.agent-canvas-ready::before {
+.agent-panel-ready::before {
   display: none;
 }
 
 /* The visible page is navigating: hide it until the next page has
    loaded and had its Datasette header removed. The indicator itself
    waits a moment so quick loads don't flicker. */
-.agent-canvas.agent-canvas-loading::before {
+.agent-panel.agent-panel-loading::before {
   display: grid;
   z-index: 3;
-  animation: agent-canvas-loading-in 0s linear 0.2s both;
+  animation: agent-panel-loading-in 0s linear 0.2s both;
 }
 
-.agent-canvas-loading .agent-canvas-frame-ready {
+.agent-panel-loading .agent-panel-frame-ready {
   visibility: hidden;
 }
 
-@keyframes agent-canvas-loading-in {
+@keyframes agent-panel-loading-in {
   from { visibility: hidden; }
   to { visibility: visible; }
 }
 
-.agent-canvas-frame {
+.agent-panel-frame {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1508,22 +1508,22 @@ body.agent-workspace .agent-chat-pane {
   background: #fff;
 }
 
-.agent-canvas-frame-ready {
+.agent-panel-frame-ready {
   z-index: 2;
 }
 
-.agent-canvas-opened {
+.agent-panel-opened {
   margin: 0;
   font-size: 0.85rem;
   color: #555;
 }
 
-.agent-canvas-opened a {
+.agent-panel-opened a {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   word-break: break-all;
 }
 
-.agent-canvas-toggle {
+.agent-panel-toggle {
   margin-left: auto;
   background: #fff;
   border: 2px solid #e9ecef;
@@ -1538,7 +1538,7 @@ body.agent-workspace .agent-chat-pane {
   transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.agent-canvas-hidden .agent-canvas-toggle {
+.agent-panel-hidden .agent-panel-toggle {
   background: #e9ecef;
   color: #555;
   box-shadow: none;
@@ -1583,31 +1583,31 @@ body.agent-workspace .agent-chat-pane {
   background: #d9480f;
 }
 
-.agent-canvas-unseen .agent-view-switch-badge {
+.agent-panel-unseen .agent-view-switch-badge {
   display: block;
 }
 
-/* Wide: chat one third, canvas two thirds */
+/* Wide: chat one third, panel two thirds */
 @media (min-width: 900px) {
-  .agent-has-canvas .agent-canvas-toggle {
+  .agent-has-panel .agent-panel-toggle {
     display: inline-block;
     margin-left: 0;
   }
 
-  .agent-has-canvas:not(.agent-canvas-hidden) .agent-panes {
+  .agent-has-panel:not(.agent-panel-hidden) .agent-panes {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   }
 
-  .agent-has-canvas:not(.agent-canvas-hidden) .agent-chat-pane {
+  .agent-has-panel:not(.agent-panel-hidden) .agent-chat-pane {
     border-right: 1px solid #ddd;
   }
 
-  .agent-has-canvas:not(.agent-canvas-hidden) .agent-canvas {
+  .agent-has-panel:not(.agent-panel-hidden) .agent-panel {
     display: flex;
   }
 
-  .agent-canvas-hidden .agent-chat-pane {
+  .agent-panel-hidden .agent-chat-pane {
     width: 100%;
     max-width: 800px;
     margin: 0 auto;
@@ -1616,43 +1616,43 @@ body.agent-workspace .agent-chat-pane {
 
 /* Narrow: one view at a time, sliding between them */
 @media (max-width: 899px) {
-  .agent-has-canvas .agent-view-switch {
+  .agent-has-panel .agent-view-switch {
     display: inline-flex;
   }
 
-  .agent-has-canvas .agent-model-badge {
+  .agent-has-panel .agent-model-badge {
     display: none;
   }
 
-  .agent-has-canvas .agent-header h1 {
+  .agent-has-panel .agent-header h1 {
     flex: 1;
   }
 
-  .agent-has-canvas .chat-export-menu,
-  .agent-has-canvas .agent-view-switch {
+  .agent-has-panel .chat-export-menu,
+  .agent-has-panel .agent-view-switch {
     margin-left: 0;
   }
 
-  .agent-has-canvas[data-agent-view="canvas"] .chat-export-menu {
+  .agent-has-panel[data-agent-view="panel"] .chat-export-menu {
     display: none;
   }
 
-  .agent-has-canvas .agent-header {
+  .agent-has-panel .agent-header {
     gap: 0.6rem;
   }
 
-  .agent-has-canvas .agent-header h1 {
+  .agent-has-panel .agent-header h1 {
     font-size: 1rem;
   }
 
-  .agent-has-canvas .agent-panes {
+  .agent-has-panel .agent-panes {
     display: block;
     position: relative;
     overflow: hidden;
   }
 
-  .agent-has-canvas .agent-chat-pane,
-  .agent-has-canvas .agent-canvas {
+  .agent-has-panel .agent-chat-pane,
+  .agent-has-panel .agent-panel {
     display: flex;
     position: absolute;
     inset: 0;
@@ -1663,11 +1663,11 @@ body.agent-workspace .agent-chat-pane {
       visibility 0s linear 0s;
   }
 
-  .agent-has-canvas .agent-canvas {
+  .agent-has-panel .agent-panel {
     z-index: 2;
   }
 
-  .agent-has-canvas[data-agent-view="chat"] .agent-canvas {
+  .agent-has-panel[data-agent-view="chat"] .agent-panel {
     transform: translateX(100%);
     visibility: hidden;
     transition:
@@ -1676,12 +1676,12 @@ body.agent-workspace .agent-chat-pane {
       visibility 0s linear 0.38s;
   }
 
-  .agent-has-canvas[data-agent-view="canvas"] .agent-canvas {
+  .agent-has-panel[data-agent-view="panel"] .agent-panel {
     transform: none;
     box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
   }
 
-  .agent-has-canvas[data-agent-view="canvas"] .agent-chat-pane {
+  .agent-has-panel[data-agent-view="panel"] .agent-chat-pane {
     transform: translateX(-30%);
     opacity: 0.5;
     visibility: hidden;
@@ -1694,7 +1694,7 @@ body.agent-workspace .agent-chat-pane {
 
 @media (prefers-reduced-motion: reduce) {
   .agent-chat-pane,
-  .agent-canvas,
+  .agent-panel,
   .agent-view-switch button {
     transition: none !important;
   }

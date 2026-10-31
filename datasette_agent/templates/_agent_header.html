@@ -10,8 +10,8 @@
   <div class="chat-export-menu" data-markdown-url="{{ export_url }}" data-title="{{ export_title }}"{% if export_open %} data-open="true"{% endif %}></div>
   <div class="agent-view-switch" role="group" aria-label="View">
     <button type="button" data-agent-view="chat" aria-pressed="true">Chat</button>
-    <button type="button" data-agent-view="canvas" aria-pressed="false">Canvas<span class="agent-view-switch-badge" title="The agent opened a new page"></span></button>
+    <button type="button" data-agent-view="panel" aria-pressed="false">Panel<span class="agent-view-switch-badge" title="The agent opened a new page"></span></button>
   </div>
-  <button type="button" class="agent-canvas-toggle">Close canvas</button>
+  <button type="button" class="agent-panel-toggle">Close panel</button>
 </div>
 {% endmacro %}

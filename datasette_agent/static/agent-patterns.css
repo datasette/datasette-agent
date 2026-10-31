@@ -54,7 +54,7 @@
   display: inline;
 }
 
-.agent-patterns-wide .agent-canvas-toggle {
+.agent-patterns-wide .agent-panel-toggle {
   display: inline-block;
   margin-left: 0;
 }
@@ -81,11 +81,11 @@
   display: inline-flex;
 }
 
-.agent-patterns-narrow .agent-canvas-toggle {
+.agent-patterns-narrow .agent-panel-toggle {
   display: none;
 }
 
-.agent-patterns-narrow[data-agent-view="canvas"] .chat-export-menu {
+.agent-patterns-narrow[data-agent-view="panel"] .chat-export-menu {
   display: none;
 }
 

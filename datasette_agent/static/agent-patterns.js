@@ -1,6 +1,6 @@
 document.querySelectorAll(".agent-patterns-preview").forEach((preview) => {
   const backLink = preview.querySelector(".agent-back-link");
-  const toggle = preview.querySelector(".agent-canvas-toggle");
+  const toggle = preview.querySelector(".agent-panel-toggle");
   const narrow = preview.classList.contains("agent-patterns-narrow");
   const backHref = backLink.getAttribute("href");
 
@@ -10,10 +10,10 @@ document.querySelectorAll(".agent-patterns-preview").forEach((preview) => {
       button.setAttribute("aria-pressed", String(button.dataset.agentView === view));
     });
     if (narrow) {
-      const label = view === "canvas" ? "Back to chat" : "Back to conversations";
+      const label = view === "panel" ? "Back to chat" : "Back to conversations";
       backLink.setAttribute("aria-label", label);
       backLink.setAttribute("title", label);
-      backLink.setAttribute("href", view === "canvas" ? "#chat" : backHref);
+      backLink.setAttribute("href", view === "panel" ? "#chat" : backHref);
     }
   }
 
@@ -23,12 +23,12 @@ document.querySelectorAll(".agent-patterns-preview").forEach((preview) => {
   });
 
   toggle.addEventListener("click", () => {
-    const hidden = preview.classList.toggle("agent-canvas-hidden");
-    toggle.textContent = hidden ? "Show canvas" : "Close canvas";
+    const hidden = preview.classList.toggle("agent-panel-hidden");
+    toggle.textContent = hidden ? "Show panel" : "Close panel";
   });
 
   backLink.addEventListener("click", (event) => {
-    if (narrow && preview.dataset.agentView === "canvas") {
+    if (narrow && preview.dataset.agentView === "panel") {
       event.preventDefault();
       setView("chat");
     }

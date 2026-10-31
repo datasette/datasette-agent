@@ -67,8 +67,8 @@ async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=Fals
     )
 
     agent_tools = await get_agent_tools(datasette)
-    # There is no canvas in the terminal.
-    agent_tools = [t for t in agent_tools if t.name != "show_in_canvas"]
+    # There is no panel in the terminal.
+    agent_tools = [t for t in agent_tools if t.name != "show_in_panel"]
     agent_tools = await filter_tools_for_actor(datasette, actor, agent_tools)
     # supports_questions stays False: CLI questions are answered directly
     # through the callback rather than persisted for web replay.

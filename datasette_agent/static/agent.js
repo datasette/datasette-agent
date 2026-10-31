@@ -375,8 +375,8 @@ function appendToolResult(name, output, id = null) {
   if (parsed && parsed._edit_sql_url && !parsed._html) {
     response.section.appendChild(createSqlEditLink(parsed._edit_sql_url));
   }
-  if (parsed && parsed._canvas_url && window.datasetteAgentCanvas) {
-    window.datasetteAgentCanvas.open(parsed._canvas_url, {source: "agent"});
+  if (parsed && parsed._panel_url && window.datasetteAgentPanel) {
+    window.datasetteAgentPanel.open(parsed._panel_url, {source: "agent"});
   }
   scrollToBottomIfFollowing();
 }
@@ -420,9 +420,9 @@ async function sendMessage(conversationId, message, references = []) {
   if (referencePicker) referencePicker.clear();
   const payload = {message};
   if (references && references.length) payload.references = references;
-  const canvasUrl =
-    window.datasetteAgentCanvas && window.datasetteAgentCanvas.currentUrl();
-  if (canvasUrl) payload.canvas_url = canvasUrl;
+  const panelUrl =
+    window.datasetteAgentPanel && window.datasetteAgentPanel.currentUrl();
+  if (panelUrl) payload.panel_url = panelUrl;
   const result = await streamAgentEvents(
     conversationUrl("/stream"),
     payload

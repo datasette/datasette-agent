@@ -1,25 +1,25 @@
-// Canvas: a same-origin iframe next to the chat that shows Datasette
-// pages. The agent opens pages with the show_in_canvas tool (agent.js
-// calls window.datasetteAgentCanvas.open), and same-site links in the
-// chat open there too. Wide screens show chat and canvas side by side;
-// narrow screens show one at a time with a Chat | Canvas switch.
+// Panel: a same-origin iframe next to the chat that shows Datasette
+// pages. The agent opens pages with the show_in_panel tool (agent.js
+// calls window.datasetteAgentPanel.open), and same-site links in the
+// chat open there too. Wide screens show chat and panel side by side;
+// narrow screens show one at a time with a Chat | Panel switch.
 
 const chat = document.querySelector(".agent-chat");
-const canvas = chat && chat.querySelector(".agent-canvas");
+const panel = chat && chat.querySelector(".agent-panel");
 
-// Below this width the canvas and chat take turns; keep in sync with
+// Below this width the panel and chat take turns; keep in sync with
 // the media queries in agent.css.
 const narrowQuery = window.matchMedia("(max-width: 899px)");
 
-// Paths that must never load inside the canvas: the agent UI itself.
+// Paths that must never load inside the panel: the agent UI itself.
 const AGENT_PATH = /\/-\/agent(\/|$)/;
 
-function setupCanvas() {
-  const firstFrame = canvas.querySelector(".agent-canvas-frame");
+function setupPanel() {
+  const firstFrame = panel.querySelector(".agent-panel-frame");
   const backLink = chat.querySelector(".agent-header > a");
   const backHref = backLink.getAttribute("href");
-  const toggle = chat.querySelector(".agent-canvas-toggle");
-  const storageKey = "datasette-agent-canvas:" + chat.dataset.conversationId;
+  const toggle = chat.querySelector(".agent-panel-toggle");
+  const storageKey = "datasette-agent-panel:" + chat.dataset.conversationId;
 
   let currentUrl = null;
   let hidden = false;
@@ -53,28 +53,28 @@ function setupCanvas() {
     chat.querySelectorAll(".agent-view-switch button").forEach(button => {
       button.setAttribute("aria-pressed", String(button.dataset.agentView === view));
     });
-    if (view === "canvas") chat.classList.remove("agent-canvas-unseen");
+    if (view === "panel") chat.classList.remove("agent-panel-unseen");
     updateBackLink();
   }
 
   function updateBackLink() {
-    const inCanvas = narrowQuery.matches && chat.dataset.agentView === "canvas";
-    const label = inCanvas ? "Back to chat" : "Back to conversations";
+    const inPanel = narrowQuery.matches && chat.dataset.agentView === "panel";
+    const label = inPanel ? "Back to chat" : "Back to conversations";
     backLink.setAttribute("aria-label", label);
     backLink.setAttribute("title", label);
-    backLink.setAttribute("href", inCanvas ? "#chat" : backHref);
+    backLink.setAttribute("href", inPanel ? "#chat" : backHref);
   }
 
   function setHidden(value) {
     hidden = value;
-    chat.classList.toggle("agent-canvas-hidden", hidden);
-    toggle.textContent = hidden ? "Show canvas" : "Close canvas";
+    chat.classList.toggle("agent-panel-hidden", hidden);
+    toggle.textContent = hidden ? "Show panel" : "Close panel";
     save();
   }
 
   function activate() {
-    if (chat.classList.contains("agent-has-canvas")) return;
-    chat.classList.add("agent-has-canvas");
+    if (chat.classList.contains("agent-has-panel")) return;
+    chat.classList.add("agent-has-panel");
     document.body.classList.add("agent-workspace");
     window.scrollTo(0, 0);
     measure();
@@ -89,9 +89,9 @@ function setupCanvas() {
     if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
     const nextFrame = currentFrame ? document.createElement("iframe") : firstFrame;
     if (currentFrame) {
-      nextFrame.className = "agent-canvas-frame";
-      nextFrame.title = "Canvas";
-      canvas.append(nextFrame);
+      nextFrame.className = "agent-panel-frame";
+      nextFrame.title = "Panel";
+      panel.append(nextFrame);
     }
     pendingFrame = nextFrame;
     if (!observedFrames.has(nextFrame)) {
@@ -107,10 +107,10 @@ function setupCanvas() {
     currentFrame = nextFrame;
     pendingFrame = null;
     if (previousFrame && previousFrame !== nextFrame) previousFrame.remove();
-    nextFrame.name = "agent-canvas";
-    nextFrame.classList.add("agent-canvas-frame-ready");
-    canvas.classList.add("agent-canvas-ready");
-    canvas.classList.remove("agent-canvas-loading");
+    nextFrame.name = "agent-panel";
+    nextFrame.classList.add("agent-panel-frame-ready");
+    panel.classList.add("agent-panel-ready");
+    panel.classList.remove("agent-panel-loading");
   }
 
   // Uncover a frame once its page is ready: a fresh frame replaces the
@@ -118,7 +118,7 @@ function setupCanvas() {
   // indicator.
   function revealFrame(frame) {
     if (frame === pendingFrame) promoteFrame(frame);
-    else if (frame === currentFrame) canvas.classList.remove("agent-canvas-loading");
+    else if (frame === currentFrame) panel.classList.remove("agent-panel-loading");
   }
 
   function frameLoaded(loadedFrame) {
@@ -138,21 +138,21 @@ function setupCanvas() {
     }
     const url = loc.pathname + loc.search + loc.hash;
     if (AGENT_PATH.test(loc.pathname)) {
-      // A link inside the canvas led back to the agent UI (e.g. a new
+      // A link inside the panel led back to the agent UI (e.g. a new
       // chat): take the whole window there instead of nesting it.
       window.location.href = url;
       return;
     }
-    // The chat header already sits above the canvas, so hide the page's
+    // The chat header already sits above the panel, so hide the page's
     // own Datasette header. The frame stays covered by the loading
     // indicator until this has happened, so the header never flashes.
     const header = loadedFrame.contentDocument.querySelector("header.hd");
     if (header) header.style.display = "none";
     // When this page starts navigating away (a link or form inside the
-    // canvas), cover the frame until the next page is ready. Downloads
+    // panel), cover the frame until the next page is ready. Downloads
     // don't unload the page, so they never trigger this.
     loadedFrame.contentWindow.addEventListener("pagehide", () => {
-      if (loadedFrame === currentFrame) canvas.classList.add("agent-canvas-loading");
+      if (loadedFrame === currentFrame) panel.classList.add("agent-panel-loading");
     });
     showUrl(url);
     // Give nested app frames a chance to paint before uncovering this page.
@@ -160,7 +160,7 @@ function setupCanvas() {
   }
 
   // Navigate the visible frame so the visit joins the browser history
-  // and Back returns to the previous canvas page.
+  // and Back returns to the previous panel page.
   function navigateFrame(url) {
     if (!currentFrame) {
       loadFrame(url);
@@ -168,7 +168,7 @@ function setupCanvas() {
     }
     if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
     pendingFrame = null;
-    canvas.classList.add("agent-canvas-loading");
+    panel.classList.add("agent-panel-loading");
     try {
       currentFrame.contentWindow.location.assign(url);
     } catch (err) {
@@ -176,11 +176,11 @@ function setupCanvas() {
     }
   }
 
-  // source is "agent" (show_in_canvas) or "user" (a clicked link).
+  // source is "agent" (show_in_panel) or "user" (a clicked link).
   // Agent pages load in a fresh frame that replaces the visible one once
   // it has painted; links the user follows navigate the visible frame.
   // The agent never pulls the user away from the chat on a narrow
-  // screen - it flags the Canvas switch instead.
+  // screen - it flags the Panel switch instead.
   function open(url, {source = "user"} = {}) {
     activate();
     showUrl(url);
@@ -188,12 +188,12 @@ function setupCanvas() {
     else navigateFrame(url);
     if (source === "agent") {
       if (hidden) setHidden(false);
-      if (narrowQuery.matches && chat.dataset.agentView !== "canvas") {
-        chat.classList.add("agent-canvas-unseen");
+      if (narrowQuery.matches && chat.dataset.agentView !== "panel") {
+        chat.classList.add("agent-panel-unseen");
       }
     } else {
       if (hidden) setHidden(false);
-      setView("canvas");
+      setView("panel");
     }
   }
 
@@ -203,7 +203,7 @@ function setupCanvas() {
   });
 
   backLink.addEventListener("click", e => {
-    if (!narrowQuery.matches || chat.dataset.agentView !== "canvas") return;
+    if (!narrowQuery.matches || chat.dataset.agentView !== "panel") return;
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     setView("chat");
@@ -211,7 +211,7 @@ function setupCanvas() {
 
   toggle.addEventListener("click", () => setHidden(!hidden));
 
-  // Same-site links in the conversation open in the canvas. Modified
+  // Same-site links in the conversation open in the panel. Modified
   // clicks keep their normal new-tab/new-window behaviour.
   document.getElementById("messages").addEventListener("click", e => {
     if (e.defaultPrevented || e.button !== 0) return;
@@ -226,14 +226,14 @@ function setupCanvas() {
   });
 
   window.addEventListener("resize", () => {
-    if (chat.classList.contains("agent-has-canvas")) measure();
+    if (chat.classList.contains("agent-has-panel")) measure();
     updateBackLink();
   });
 
-  // Restore: this browser's last canvas page for the conversation, else
+  // Restore: this browser's last panel page for the conversation, else
   // the last page the agent opened.
   const saved = load();
-  const initial = (saved && saved.url) || chat.dataset.canvasUrl;
+  const initial = (saved && saved.url) || chat.dataset.panelUrl;
   if (initial && !AGENT_PATH.test(initial)) {
     activate();
     showUrl(initial);
@@ -241,12 +241,12 @@ function setupCanvas() {
     setHidden(Boolean(saved && saved.hidden));
   }
 
-  window.datasetteAgentCanvas = {
+  window.datasetteAgentPanel = {
     open,
     // What the user is looking at, sent along with each message. A
-    // canvas they have hidden doesn't count.
+    // panel they have hidden doesn't count.
     currentUrl: () => (hidden ? null : currentUrl),
   };
 }
 
-if (canvas) setupCanvas();
+if (panel) setupPanel();
