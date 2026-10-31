@@ -22,10 +22,6 @@ def register_actions():
             description="Access the agent chat assistant",
         ),
         Action(
-            name="datasette-agent-explore",
-            description="Launch and view AI explorer reports on databases and tables",
-        ),
-        Action(
             name="datasette-agent-background",
             description="Spawn and inspect background agents",
         ),
@@ -52,20 +48,6 @@ def register_routes():
         (
             r"^/-/agent/api/background/(?P<agent_id>[A-Za-z0-9]{26})/cancel$",
             views.api_cancel_background_agent,
-        ),
-        (
-            r"^/-/agent/explore/report/(?P<report_id>[A-Za-z0-9]{26})$",
-            views.explorer_report_page,
-        ),
-        (
-            r"^/-/agent/explore/(?P<database>[^/]+)/(?P<table>[^/]+)$",
-            views.explorer_page,
-        ),
-        (r"^/-/agent/explore/(?P<database>[^/]+)$", views.explorer_page),
-        (r"^/-/agent/api/explore$", views.api_start_explorer),
-        (
-            r"^/-/agent/api/explore/(?P<report_id>[A-Za-z0-9]{26})$",
-            views.api_explorer_report,
         ),
         (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})$",
@@ -254,46 +236,6 @@ def extra_js_urls(datasette, request):
         ):
             return []
         return [datasette.urls.static_plugins("datasette-agent", "agent-jump.js")]
-
-    return inner
-
-
-@hookimpl
-def database_actions(datasette, actor, database, request):
-    from datasette.utils import tilde_encode
-
-    async def inner():
-        if not await datasette.allowed(action="datasette-agent-explore", actor=actor):
-            return []
-        return [
-            {
-                "href": datasette.urls.path(
-                    f"/-/agent/explore/{tilde_encode(database)}"
-                ),
-                "label": "Explore with AI agent",
-                "description": "Launch an AI agent to explore this database and generate a report",
-            }
-        ]
-
-    return inner
-
-
-@hookimpl
-def table_actions(datasette, actor, database, table, request):
-    from datasette.utils import tilde_encode
-
-    async def inner():
-        if not await datasette.allowed(action="datasette-agent-explore", actor=actor):
-            return []
-        return [
-            {
-                "href": datasette.urls.path(
-                    f"/-/agent/explore/{tilde_encode(database)}/{tilde_encode(table)}"
-                ),
-                "label": "Explore with AI agent",
-                "description": "Launch an AI agent to explore this table and generate a report",
-            }
-        ]
 
     return inner
 

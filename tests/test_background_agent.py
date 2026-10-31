@@ -569,8 +569,7 @@ async def test_notification_prepended_to_user_message(datasette_instance, cookie
 @pytest.mark.asyncio
 async def test_reconcile_marks_running_rows_as_error(datasette_instance):
     """Rows left in pending/running by a previous process must be marked
-    error on startup — otherwise the row sits as `running` forever and the
-    explorer report page spins indefinitely."""
+    error on startup — otherwise the row sits as `running` forever."""
     from datasette_agent.api import reconcile_running_agents
 
     db = datasette_instance.get_internal_database()

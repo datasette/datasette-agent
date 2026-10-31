@@ -47,9 +47,7 @@ plugins:
 
 Here `model` is the default for the agent and `models` is the allowlist offered in the picker. Without a `purposes.agent` section the picker offers every tool-capable model that datasette-llm considers available, with `default_model` preselected.
 
-The same list is available as JSON from `/-/agent/api/models`, and `POST /-/agent/api/conversations` accepts an optional `{"model": "..."}` to pin a model when creating a conversation programmatically. Background agents and explorer reports always use the default model.
-
-The "Explore with AI agent" entries that appear in the database and table action menus launch a background agent that explores the selected database or table and writes a report. Reports live under `/-/agent/explore/`.
+The same list is available as JSON from `/-/agent/api/models`, and `POST /-/agent/api/conversations` accepts an optional `{"model": "..."}` to pin a model when creating a conversation programmatically. Background agents always use the default model.
 
 Visit `/-/agent/background` to launch background agents directly. Each one is given a goal and runs toward it without further input. The listing includes a Stop button for cancelling agents that are still running.
 
@@ -100,13 +98,12 @@ The approval prompt shows the SQL, parameters, required permissions and destruct
 
 ### Permissions
 
-This plugin registers three independent permissions:
+This plugin registers two independent permissions:
 
 - `datasette-agent` — required to use the chat assistant under `/-/agent`.
-- `datasette-agent-explore` — required to see the "Explore with AI agent" entries in the database/table action menus and to use the explorer routes under `/-/agent/explore/`.
 - `datasette-agent-background` — required to use the `spawn_background_agent` and `check_background_agent` tools from chat, and to access the `/-/agent/background` page and `/-/agent/api/background/*` endpoints. The background-agent endpoints require both `datasette-agent` and `datasette-agent-background`.
 
-The three permissions are independent: an actor may hold any subset. The `--root` user holds all of them.
+The two permissions are independent: an actor may hold either or both. The `--root` user holds both.
 
 ## Registering additional tools from plugins
 
