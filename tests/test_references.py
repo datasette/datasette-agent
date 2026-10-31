@@ -8,6 +8,7 @@ from datasette_agent.messages import flatten_for_render, message_dict_text
 from datasette_agent.references import (
     REFERENCES_KEY,
     normalize_references,
+    reference_url,
     resolve_references,
 )
 
@@ -96,6 +97,38 @@ async def test_references_api_escapes_like_wildcards(datasette_instance, cookies
     assert response.json()["results"] == []
 
 
+@pytest.mark.parametrize(
+    "ref,expected",
+    (
+        ({"type": "table", "database": "demo", "name": "items"}, "/prefix/demo/items"),
+        (
+            {"type": "table", "database": "demo", "name": "has/slash"},
+            "/prefix/demo/has~2Fslash",
+        ),
+        (
+            {"type": "query", "database": "demo", "name": "top_items"},
+            "/prefix/demo/top_items",
+        ),
+        ({"type": "database", "database": "demo", "name": "demo"}, "/prefix/demo"),
+        ({"type": "table", "database": "gone", "name": "items"}, None),
+    ),
+)
+def test_reference_url_uses_datasette_urls(datasette_instance, ref, expected):
+    datasette_instance._settings["base_url"] = "/prefix/"
+    assert reference_url(datasette_instance, ref) == expected
+
+
+@pytest.mark.asyncio
+async def test_references_api_results_include_url(datasette_instance, cookies):
+    response = await datasette_instance.client.get(
+        "/-/agent/api/references", cookies=cookies
+    )
+    urls = {(r["type"], r["name"]): r["url"] for r in response.json()["results"]}
+    assert urls[("table", "items")] == "/demo/items"
+    assert urls[("query", "top_items")] == "/demo/top_items"
+    assert urls[("database", "demo")] == "/demo"
+
+
 def test_normalize_references():
     assert normalize_references("nope") == []
     assert normalize_references(
@@ -176,7 +209,13 @@ async def test_stream_with_references(datasette_instance, cookies):
             {
                 "message": "How many rows in #items?",
                 "references": [
-                    {"type": "table", "database": "demo", "name": "items"},
+                    # A client-supplied url is ignored, never persisted
+                    {
+                        "type": "table",
+                        "database": "demo",
+                        "name": "items",
+                        "url": "https://example.com/",
+                    },
                     {"type": "table", "database": "demo", "name": "secrets"},
                 ],
             }
@@ -216,7 +255,7 @@ async def test_stream_with_references(datasette_instance, cookies):
     page = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert (
         'data-references=\'[{"database": "demo", "name": "items", '
-        '"type": "table"}]\''
+        '"type": "table", "url": "/demo/items"}]\''
     ) in page.text
     assert "CREATE TABLE items" not in page.text
 

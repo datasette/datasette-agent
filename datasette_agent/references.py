@@ -42,6 +42,27 @@ def _match_rank(name, q):
     return 3
 
 
+def reference_url(datasette, ref):
+    """Link for a reference's pill, or None if its database has since
+    been detached. URLs are worked out when needed rather than persisted
+    with the message, so they follow changes to base_url."""
+    if ref["database"] not in datasette.databases:
+        return None
+    if ref["type"] == "table":
+        return datasette.urls.table(ref["database"], ref["name"])
+    if ref["type"] == "query":
+        return datasette.urls.query(ref["database"], ref["name"])
+    return datasette.urls.database(ref["database"])
+
+
+def add_reference_urls(datasette, messages):
+    """Add a url to each reference on flattened render messages."""
+    for message in messages:
+        for ref in message.get("references") or []:
+            ref["url"] = reference_url(datasette, ref)
+    return messages
+
+
 async def _search_databases(datasette, actor, q):
     page = await datasette.allowed_resources("view-database", actor, limit=1000)
     results = []
@@ -146,7 +167,10 @@ async def search_references(datasette, actor, q="", limit=MAX_RESULTS):
             r["name"].lower(),
         )
     )
-    return results[:limit]
+    results = results[:limit]
+    for result in results:
+        result["url"] = reference_url(datasette, result)
+    return results
 
 
 def _truncate(text):

@@ -24,7 +24,8 @@ function referenceTitle(ref) {
 }
 
 export function createReferencePill(ref) {
-  const pill = document.createElement("span");
+  const pill = document.createElement(ref.url ? "a" : "span");
+  if (ref.url) pill.href = ref.url;
   pill.className = "agent-ref-pill agent-ref-" + ref.type;
   pill.title = referenceTitle(ref);
   const type = document.createElement("span");
@@ -251,7 +252,7 @@ export function attachReferencePicker(textarea, options = {}) {
     textarea.value = value.slice(0, trigger.start) + token + spacer + after;
     const newCaret = trigger.start + token.length + 1;
     textarea.setSelectionRange(newCaret, newCaret);
-    const picked = {type: ref.type, database: ref.database, name: ref.name};
+    const picked = {type: ref.type, database: ref.database, name: ref.name, url: ref.url};
     if (!references.some((r) => referenceKey(r) === referenceKey(picked))) {
       references.push(picked);
     }
@@ -296,7 +297,9 @@ export function attachReferencePicker(textarea, options = {}) {
   function renderChips() {
     chips.textContent = "";
     references.forEach((ref) => {
-      const pill = createReferencePill(ref);
+      // No link on composer chips: they hold a remove button, and
+      // following a link from here would lose the draft message.
+      const pill = createReferencePill({...ref, url: null});
       pill.classList.add("agent-ref-chip");
       const remove = document.createElement("button");
       remove.type = "button";

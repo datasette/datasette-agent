@@ -19,7 +19,7 @@ from .export_markdown import format_conversation_markdown
 from .messages import combine_tool_messages_for_render, flatten_for_render
 from .models import get_agent_models
 from .questions import question_row_to_dict
-from .references import search_references
+from .references import add_reference_urls, search_references
 from .schema import ensure_tables
 
 # Longest canvas URL the page may report back; anything longer is ignored.
@@ -250,7 +250,9 @@ async def agent_conversation(request, datasette):
     if not pending_tasks and pending_question is None:
         needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
 
-    render_messages = combine_tool_messages_for_render(flatten_for_render(messages))
+    render_messages = combine_tool_messages_for_render(
+        add_reference_urls(datasette, flatten_for_render(messages))
+    )
 
     return Response.html(
         await datasette.render_template(

@@ -1181,14 +1181,27 @@
   vertical-align: baseline;
 }
 
+.agent-ref-pill:any-link {
+  text-decoration: none;
+}
+
 .agent-ref-pill-name {
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: 600;
 }
 
+.agent-ref-pill:any-link:hover .agent-ref-pill-name,
+.agent-ref-pill:any-link:focus-visible .agent-ref-pill-name {
+  text-decoration: underline;
+}
+
 .agent-ref-pill-type {
   opacity: 0.7;
+}
+
+.agent-ref-pill.agent-ref-database {
+  color: #1d4f91;
 }
 
 .agent-ref-pill.agent-ref-query {
