@@ -242,7 +242,6 @@ def prefixed_datasette(tmp_path):
             "permissions": {
                 "datasette-agent": {"id": "user"},
                 "datasette-agent-background": {"id": "user"},
-                "datasette-agent-explore": {"id": "user"},
             }
         },
         internal=str(tmp_path / "internal.db"),
@@ -280,8 +279,6 @@ async def test_agent_pages_use_base_url(prefixed_datasette):
         "/-/agent",
         f"/-/agent/{conversation_id}",
         "/-/agent/background",
-        "/-/agent/explore/data",
-        "/-/agent/explore/data/items",
         "/-/patterns/agent",
     ]
     for path in pages:

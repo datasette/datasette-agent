@@ -569,8 +569,7 @@ async def test_notification_prepended_to_user_message(datasette_instance, cookie
 @pytest.mark.asyncio
 async def test_reconcile_marks_running_rows_as_error(datasette_instance):
     """Rows left in pending/running by a previous process must be marked
-    error on startup — otherwise the row sits as `running` forever and the
-    explorer report page spins indefinitely."""
+    error on startup — otherwise the row sits as `running` forever."""
     from datasette_agent.api import reconcile_running_agents
 
     db = datasette_instance.get_internal_database()
@@ -891,3 +890,34 @@ async def test_cancel_endpoint_cancels_in_flight_task(datasette_instance, cookie
     ).first()
     assert row["status"] == "error"
     assert "cancel" in (row["error"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_explore_feature_removed(tmp_path, monkeypatch):
+    """Table and database analysis was replaced by #-mentions in chat.
+    Configuration still naming the old permission must keep working."""
+    # Datasette's default handle_exception calls rich's print_exception()
+    # outside an except block, which raises for a URL matching no route.
+    monkeypatch.setattr("datasette.handle_exception.rich", None)
+    ds = Datasette(
+        memory=True,
+        config={"permissions": {"datasette-agent-explore": {"id": "user"}}},
+        internal=str(tmp_path / "internal.db"),
+    )
+    db = ds.add_memory_database("data")
+    await db.execute_write("create table items (id integer primary key)")
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "root"})}
+    ds.root_enabled = True
+
+    for path in (
+        "/-/agent/explore/data",
+        "/-/agent/explore/data/items",
+        "/-/agent/api/explore",
+        "/-/agent/explore/report/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    ):
+        assert (await ds.client.get(path, cookies=cookies)).status_code == 404, path
+
+    for path in ("/data", "/data/items"):
+        response = await ds.client.get(path, cookies=cookies)
+        assert response.status_code == 200, path
+        assert "Explore with AI agent" not in response.text, path

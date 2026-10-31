@@ -80,7 +80,7 @@ async def reconcile_running_agents(datasette):
     Background agent tasks live only in process memory (in
     datasette._background_agent_tasks), so a Datasette restart abandons
     every in-flight run. Without this pass, those rows stay marked
-    running forever and the explorer report page spins indefinitely.
+    running forever.
     """
     db = datasette.get_internal_database()
     await ensure_tables(db)
