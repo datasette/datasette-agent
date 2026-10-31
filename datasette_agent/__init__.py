@@ -42,6 +42,7 @@ def register_routes():
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/api/models$", views.api_models),
+        (r"^/-/agent/api/references$", views.api_references),
         (r"^/-/agent/background$", views.agent_background_index),
         (r"^/-/agent/api/background$", views.api_create_background_agent),
         (
@@ -182,6 +183,10 @@ def prepare_jinja2_environment(env, datasette):
         return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
     env.filters["agent_format_datetime"] = format_datetime
+
+    from .date_format import format_recent_datetime
+
+    env.filters["agent_format_recent_datetime"] = format_recent_datetime
 
 
 @hookimpl

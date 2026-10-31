@@ -2,8 +2,10 @@
 
 import pytest
 import json
+from datetime import datetime, timedelta, timezone
 
 from datasette.app import Datasette
+from datasette_agent.date_format import format_recent_datetime
 
 
 @pytest.fixture
@@ -68,6 +70,20 @@ async def test_format_datetime_passthrough_for_garbage(datasette_instance):
 async def test_format_datetime_passthrough_for_empty(datasette_instance):
     assert await _filter(datasette_instance, "agent_format_datetime", "") == ""
     assert await _filter(datasette_instance, "agent_format_datetime", None) == ""
+
+
+def test_format_recent_datetime_uses_local_day():
+    pacific = timezone(timedelta(hours=-7))
+    now = datetime(2026, 10, 31, 12, tzinfo=pacific)
+    assert format_recent_datetime("2026-10-31T22:02:00+00:00", now) == "Today, 3:02 PM"
+    assert (
+        format_recent_datetime("2026-10-30T22:02:00+00:00", now) == "Yesterday, 3:02 PM"
+    )
+    assert (
+        format_recent_datetime("2026-10-29T22:02:00+00:00", now)
+        == "Oct 29, 2026 · 3:02 PM"
+    )
+    assert format_recent_datetime("not a date", now) == "not a date"
 
 
 @pytest.mark.asyncio

@@ -7,13 +7,14 @@
 {% endblock %}
 
 {% block content %}
+<main class="agent-index">
 <h1>Datasette Agent</h1>
 
-<form id="new-chat-form">
-  <div class="agent-new-chat">
-    <textarea id="new-message" placeholder="Ask a question about your data..." rows="3"></textarea>
-    <button type="submit">Start chat</button>
+<form id="new-chat-form" class="agent-composer">
+  <div class="agent-composer-input">
+    <textarea id="new-message" aria-label="New chat message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="4" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
   </div>
+  <div class="agent-composer-footer">
   {% if models|length > 1 %}
   <div class="agent-new-chat-options">
     <label for="new-model">Model</label>
@@ -29,21 +30,52 @@
     <span class="agent-new-chat-hint">Model: <code>{{ models[0] }}</code></span>
   </div>
   {% endif %}
+    <button type="submit">Start chat</button>
+  </div>
 </form>
 
+{% if conversations or q %}
+<section class="agent-history" aria-labelledby="agent-history-title">
+<div class="agent-history-heading">
+  <h2 id="agent-history-title">Previous conversations</h2>
+  <span class="agent-history-count">{{ total_conversations }} {% if q %}matching{% else %}total{% endif %}</span>
+</div>
+<form class="agent-history-search" action="{{ urls.path('/-/agent') }}" method="get" role="search">
+  <label for="agent-history-query">Search conversation titles</label>
+  <input id="agent-history-query" type="search" name="q" value="{{ q }}">
+  <button type="submit">Search</button>
+</form>
 {% if conversations %}
-<h2>Previous conversations</h2>
 <ul class="agent-conversations">
   {% for conv in conversations %}
   <li>
-    <a href="{{ urls.path('/-/agent/' ~ conv.id) }}">{{ conv.title or "Untitled conversation" }}</a>
-    <span class="agent-timestamp">{{ conv.updated_at | agent_format_datetime }}</span>
+    <a href="{{ urls.path('/-/agent/' ~ conv.id) }}" class="agent-conversation-row">
+      <span class="agent-conversation-title">{{ conv.title or "Untitled conversation" }}</span>
+      <time class="agent-conversation-date" datetime="{{ conv.updated_at }}">{{ conv.updated_at | agent_format_recent_datetime }}</time>
+    </a>
   </li>
   {% endfor %}
 </ul>
+{% else %}
+<p class="agent-history-empty">No conversation titles match “{{ q }}”.</p>
 {% endif %}
+{% if page_count > 1 %}
+<nav class="agent-pagination" aria-label="Conversation pages">
+  {% if page > 1 %}<a href="{{ urls.path('/-/agent') }}?{% if q %}q={{ q|urlencode }}&amp;{% endif %}page={{ page - 1 }}">Previous</a>{% else %}<span aria-disabled="true">Previous</span>{% endif %}
+  <span>Page {{ page }} of {{ page_count }}</span>
+  {% if page < page_count %}<a href="{{ urls.path('/-/agent') }}?{% if q %}q={{ q|urlencode }}&amp;{% endif %}page={{ page + 1 }}">Next</a>{% else %}<span aria-disabled="true">Next</span>{% endif %}
+</nav>
+{% endif %}
+</section>
+{% endif %}
+</main>
 
-<script>
+<script type="module">
+import {attachReferencePicker} from {{ static('references.js', plugin='datasette-agent')|tojson }};
+const referencePicker = attachReferencePicker(
+  document.getElementById("new-message"),
+  {placement: "below"}
+);
 const MODEL_STORAGE_KEY = "datasette-agent-model";
 const modelSelect = document.getElementById("new-model");
 // Preselect the model used last time, if it is still on offer.
@@ -87,6 +119,10 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     }
     // Store the initial message to send after redirect
     sessionStorage.setItem("agent_pending_message", message);
+    sessionStorage.setItem(
+      "agent_pending_references",
+      JSON.stringify(referencePicker.getReferences())
+    );
     window.location.href = {{ urls.path("/-/agent/")|tojson }} + data.conversation_id;
   } catch (err) {
     btn.disabled = false;

@@ -53,6 +53,14 @@ The "Explore with AI agent" entries that appear in the database and table action
 
 Visit `/-/agent/background` to launch background agents directly. Each one is given a goal and runs toward it without further input. The listing includes a Stop button for cancelling agents that are still running.
 
+### Tagging tables, queries and databases with #
+
+Type `#` in the chat input (on `/-/agent` or in a conversation) to open an autocomplete list of the tables, views, stored queries and databases you have permission to see. Keep typing to filter it, use the up and down arrow keys to move through the matches, and press Enter or Tab (or tap a match) to tag it. Escape dismisses the list.
+
+A tagged resource shows as a pill above the input and as `#name` in the message text; deleting that text or clicking the pill's × removes the tag. When the message is sent, the schema of each tagged resource is attached to it for the model - the `CREATE TABLE`/`CREATE VIEW` statement for a table or view, the SQL, title, description and parameters for a stored query, and the schemas of every visible table plus a list of stored queries for a database - with a note telling the model it does not need to look them up. Permissions are checked again on the server when the message is sent. The schema note is kept out of the rendered conversation, where the tags appear as pills in the message, and the Markdown export lists them on a "Tagged:" line.
+
+The autocomplete list comes from `/-/agent/api/references?q=...`.
+
 ### The canvas
 
 The conversation page can show Datasette pages - tables, query results, row pages, pages from other plugins such as datasette-apps - in a canvas next to the chat. The agent opens pages there with its built-in `show_in_canvas` tool, and links in the conversation that point at this Datasette instance open there too. You can keep clicking around inside the canvas, and each message you send tells the agent which page the canvas is showing, so you can ask about "this table".

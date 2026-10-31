@@ -19,10 +19,12 @@ from .export_markdown import format_conversation_markdown
 from .messages import combine_tool_messages_for_render, flatten_for_render
 from .models import get_agent_models
 from .questions import question_row_to_dict
+from .references import add_reference_urls, search_references
 from .schema import ensure_tables
 
 # Longest canvas URL the page may report back; anything longer is ignored.
 MAX_CANVAS_URL_LENGTH = 2000
+AGENT_INDEX_PAGE_SIZE = 100
 
 
 def _clean_canvas_url(value):
@@ -78,21 +80,32 @@ async def agent_index(request, datasette):
     db = datasette.get_internal_database()
     await ensure_tables(db)
     actor_id = _actor_id(request)
-    if actor_id:
-        conversations = (
-            await db.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_conversations "
-                "WHERE actor_id = ? ORDER BY updated_at DESC",
-                [actor_id],
-            )
-        ).rows
-    else:
-        conversations = (
-            await db.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_conversations "
-                "WHERE actor_id IS NULL ORDER BY updated_at DESC",
-            )
-        ).rows
+    where = "actor_id = ?" if actor_id else "actor_id IS NULL"
+    params = [actor_id] if actor_id else []
+    q = (request.args.get("q") or "").strip()
+    if q:
+        where += " AND instr(lower(coalesce(title, '')), lower(?)) > 0"
+        params.append(q)
+    total_conversations = (
+        await db.execute(
+            f"SELECT count(*) AS count FROM agent_conversations WHERE {where}", params
+        )
+    ).first()["count"]
+    page_count = max(
+        1, (total_conversations + AGENT_INDEX_PAGE_SIZE - 1) // AGENT_INDEX_PAGE_SIZE
+    )
+    try:
+        requested_page = max(1, int(request.args.get("page", "1")))
+    except (TypeError, ValueError):
+        requested_page = 1
+    page = min(requested_page, page_count)
+    conversations = (
+        await db.execute(
+            "SELECT id, title, updated_at FROM agent_conversations "
+            f"WHERE {where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params, AGENT_INDEX_PAGE_SIZE, (page - 1) * AGENT_INDEX_PAGE_SIZE],
+        )
+    ).rows
     models, default_model = await get_agent_models(datasette, request.actor)
     return Response.html(
         await datasette.render_template(
@@ -101,6 +114,10 @@ async def agent_index(request, datasette):
                 "conversations": conversations,
                 "models": models,
                 "default_model": default_model,
+                "page": page,
+                "page_count": page_count,
+                "total_conversations": total_conversations,
+                "q": q,
             },
             request=request,
         )
@@ -117,6 +134,16 @@ async def api_models(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     models, default_model = await get_agent_models(datasette, request.actor)
     return Response.json({"models": models, "default_model": default_model})
+
+
+async def api_references(request, datasette):
+    """Search databases, tables and stored queries for the chat
+    composer's #-reference autocomplete."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    results = await search_references(
+        datasette, request.actor, request.args.get("q", "")
+    )
+    return Response.json({"results": results})
 
 
 async def api_create_conversation(request, datasette):
@@ -239,7 +266,9 @@ async def agent_conversation(request, datasette):
     if not pending_tasks and pending_question is None:
         needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
 
-    render_messages = combine_tool_messages_for_render(flatten_for_render(messages))
+    render_messages = combine_tool_messages_for_render(
+        add_reference_urls(datasette, flatten_for_render(messages))
+    )
 
     return Response.html(
         await datasette.render_template(
@@ -373,6 +402,7 @@ async def agent_stream(request, datasette):
     body = await request.post_body()
     data = json.loads(body)
     user_message = data.get("message", "")
+    references = data.get("references") or []
     canvas_url = _clean_canvas_url(data.get("canvas_url"))
 
     async def stream_fn(writer):
@@ -382,6 +412,7 @@ async def agent_stream(request, datasette):
             conversation_id=conversation_id,
             user_message=user_message,
             writer=writer,
+            references=references,
             canvas_url=canvas_url,
         )
 

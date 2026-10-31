@@ -25,7 +25,7 @@
         {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
         <details class="agent-tool-call{% if msg.tool_output is not none %} done{% else %} waiting{% endif %}">
           <summary>
-            <span class="agent-tool-name">Tool: {{ msg.tool_name }}</span>
+            <span class="agent-tool-name">{{ msg.tool_name }}</span>
             {% if msg.tool_output is none %}
             <span class="agent-tool-status">Waiting</span>
             {% endif %}
@@ -64,7 +64,7 @@
         {% set in_tool_group.value = false %}
         {% endif %}
         {% if msg.role == "user" %}
-        <div class="agent-message agent-message-user">
+        <div class="agent-message agent-message-user"{% if msg.references %} data-references='{{ msg.references | tojson }}'{% endif %}>
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
         {% elif msg.role == "assistant" and msg.content|trim %}
@@ -86,7 +86,7 @@
 
   {% if not background_agent %}
   <form id="chat-form" class="agent-input">
-    <textarea id="message-input" placeholder="Type a message..." rows="2"></textarea>
+    <textarea id="message-input" placeholder="Type a message... (# to tag a table or query)" rows="2" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
     <button type="submit" id="send-btn">Send</button>
   </form>
   {% endif %}
@@ -115,7 +115,14 @@ const conversationId = document.querySelector(".agent-chat").dataset.conversatio
 const pending = sessionStorage.getItem("agent_pending_message");
 if (pending) {
   sessionStorage.removeItem("agent_pending_message");
-  window.sendMessage(conversationId, pending);
+  let pendingReferences = [];
+  try {
+    pendingReferences = JSON.parse(
+      sessionStorage.getItem("agent_pending_references") || "[]"
+    );
+  } catch (e) {}
+  sessionStorage.removeItem("agent_pending_references");
+  window.sendMessage(conversationId, pending, pendingReferences);
 }
 </script>
 {% else %}

@@ -1,6 +1,5 @@
 import asyncio
 
-
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     id TEXT PRIMARY KEY,
@@ -10,6 +9,8 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_actor_updated
+    ON agent_conversations(actor_id, updated_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS agent_responses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
