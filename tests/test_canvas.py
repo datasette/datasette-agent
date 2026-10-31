@@ -207,8 +207,19 @@ async def test_conversation_page_has_canvas(datasette_instance, cookies):
     response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert response.status_code == 200
     assert 'class="agent-canvas"' in response.text
-    assert "agent-canvas.js" in response.text
+    assert "agent-canvas.js?_hash=" in response.text
     assert "data-canvas-url" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_iframe_page_hides_header_before_render(datasette_instance):
+    normal = await datasette_instance.client.get("/")
+    embedded = await datasette_instance.client.get(
+        "/", headers={"Sec-Fetch-Dest": "iframe"}
+    )
+    stylesheet = "/-/static-plugins/datasette-agent/agent-canvas-page.css"
+    assert stylesheet not in normal.text
+    assert stylesheet in embedded.text
 
 
 @pytest.mark.asyncio

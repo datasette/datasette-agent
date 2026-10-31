@@ -15,12 +15,17 @@ const narrowQuery = window.matchMedia("(max-width: 899px)");
 const AGENT_PATH = /\/-\/agent(\/|$)/;
 
 function setupCanvas() {
-  const frame = canvas.querySelector(".agent-canvas-frame");
+  const firstFrame = canvas.querySelector(".agent-canvas-frame");
+  const backLink = chat.querySelector(".agent-header > a");
+  const backHref = backLink.getAttribute("href");
   const toggle = chat.querySelector(".agent-canvas-toggle");
   const storageKey = "datasette-agent-canvas:" + chat.dataset.conversationId;
 
   let currentUrl = null;
   let hidden = false;
+  let currentFrame = null;
+  let pendingFrame = null;
+  const observedFrames = new WeakSet();
 
   function load() {
     try {
@@ -49,12 +54,21 @@ function setupCanvas() {
       button.setAttribute("aria-pressed", String(button.dataset.agentView === view));
     });
     if (view === "canvas") chat.classList.remove("agent-canvas-unseen");
+    updateBackLink();
+  }
+
+  function updateBackLink() {
+    const inCanvas = narrowQuery.matches && chat.dataset.agentView === "canvas";
+    const label = inCanvas ? "Back to chat" : "Back to conversations";
+    backLink.setAttribute("aria-label", label);
+    backLink.setAttribute("title", label);
+    backLink.setAttribute("href", inCanvas ? "#chat" : backHref);
   }
 
   function setHidden(value) {
     hidden = value;
     chat.classList.toggle("agent-canvas-hidden", hidden);
-    toggle.textContent = hidden ? "Show canvas" : "Hide canvas";
+    toggle.textContent = hidden ? "Show canvas" : "Close canvas";
     save();
   }
 
@@ -71,10 +85,75 @@ function setupCanvas() {
     save();
   }
 
-  function flash() {
-    canvas.classList.remove("flash");
-    void canvas.offsetWidth;
-    canvas.classList.add("flash");
+  function loadFrame(url) {
+    if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
+    const nextFrame = currentFrame ? document.createElement("iframe") : firstFrame;
+    if (currentFrame) {
+      nextFrame.className = "agent-canvas-frame";
+      nextFrame.title = "Canvas";
+      canvas.append(nextFrame);
+    }
+    pendingFrame = nextFrame;
+    if (!observedFrames.has(nextFrame)) {
+      nextFrame.addEventListener("load", () => frameLoaded(nextFrame));
+      observedFrames.add(nextFrame);
+    }
+    nextFrame.src = url;
+  }
+
+  function promoteFrame(nextFrame) {
+    if (nextFrame !== pendingFrame) return;
+    const previousFrame = currentFrame;
+    currentFrame = nextFrame;
+    pendingFrame = null;
+    if (previousFrame && previousFrame !== nextFrame) previousFrame.remove();
+    nextFrame.name = "agent-canvas";
+    nextFrame.classList.add("agent-canvas-frame-ready");
+    canvas.classList.add("agent-canvas-ready");
+  }
+
+  function frameLoaded(loadedFrame) {
+    if (loadedFrame !== pendingFrame && loadedFrame !== currentFrame) return;
+    let loc;
+    try {
+      loc = loadedFrame.contentWindow.location;
+    } catch (err) {
+      // An off-site navigation cannot be inspected, but should still be shown.
+      promoteFrame(loadedFrame);
+      return;
+    }
+    if (!loc || loc.href === "about:blank") return;
+    if (loc.origin !== window.location.origin) {
+      promoteFrame(loadedFrame);
+      return;
+    }
+    const url = loc.pathname + loc.search + loc.hash;
+    if (AGENT_PATH.test(loc.pathname)) {
+      // A link inside the canvas led back to the agent UI (e.g. a new
+      // chat): take the whole window there instead of nesting it.
+      window.location.href = url;
+      return;
+    }
+    // Fallback for pages that do not use Datasette's template hooks or
+    // browsers that do not send Sec-Fetch-Dest on iframe navigations.
+    const document = loadedFrame.contentDocument;
+    const header = document.querySelector("header.hd");
+    if (header) header.style.display = "none";
+    document.addEventListener("click", event => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const link = event.target.closest("a[href]");
+      if (!link || link.hasAttribute("download")) return;
+      if (link.target && link.target !== "_self" && link.target !== "agent-canvas") return;
+      const destination = new URL(link.href, loc.href);
+      if (destination.origin !== window.location.origin) return;
+      if (destination.pathname === loc.pathname && destination.search === loc.search && destination.hash) return;
+      event.preventDefault();
+      open(destination.pathname + destination.search + destination.hash);
+    });
+    showUrl(url);
+    // Give nested app frames a chance to paint before uncovering this page.
+    requestAnimationFrame(() => requestAnimationFrame(() => promoteFrame(loadedFrame)));
   }
 
   // source is "agent" (show_in_canvas) or "user" (a clicked link).
@@ -83,41 +162,28 @@ function setupCanvas() {
   function open(url, {source = "user"} = {}) {
     activate();
     showUrl(url);
-    frame.src = url;
+    loadFrame(url);
     if (source === "agent") {
       if (hidden) setHidden(false);
       if (narrowQuery.matches && chat.dataset.agentView !== "canvas") {
         chat.classList.add("agent-canvas-unseen");
       }
-      flash();
     } else {
       if (hidden) setHidden(false);
       setView("canvas");
     }
   }
 
-  frame.addEventListener("load", () => {
-    let loc;
-    try {
-      loc = frame.contentWindow.location;
-    } catch (err) {
-      return; // Navigated off-site: keep showing the last known URL.
-    }
-    if (!loc || loc.href === "about:blank") return;
-    if (loc.origin !== window.location.origin) return;
-    const url = loc.pathname + loc.search + loc.hash;
-    if (AGENT_PATH.test(loc.pathname)) {
-      // A link inside the canvas led back to the agent UI (e.g. a new
-      // chat): take the whole window there instead of nesting it.
-      window.location.href = url;
-      return;
-    }
-    showUrl(url);
-  });
-
   chat.querySelector(".agent-view-switch").addEventListener("click", e => {
     const button = e.target.closest("[data-agent-view]");
     if (button) setView(button.dataset.agentView);
+  });
+
+  backLink.addEventListener("click", e => {
+    if (!narrowQuery.matches || chat.dataset.agentView !== "canvas") return;
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    setView("chat");
   });
 
   toggle.addEventListener("click", () => setHidden(!hidden));
@@ -138,6 +204,7 @@ function setupCanvas() {
 
   window.addEventListener("resize", () => {
     if (chat.classList.contains("agent-has-canvas")) measure();
+    updateBackLink();
   });
 
   // Restore: this browser's last canvas page for the conversation, else
@@ -147,7 +214,7 @@ function setupCanvas() {
   if (initial && !AGENT_PATH.test(initial)) {
     activate();
     showUrl(initial);
-    frame.src = initial;
+    loadFrame(initial);
     setHidden(Boolean(saved && saved.hidden));
   }
 
