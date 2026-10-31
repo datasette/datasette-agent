@@ -712,12 +712,14 @@
 }
 
 .agent-new-chat-options select {
+  appearance: none;
   font-family: inherit;
   font-size: inherit;
-  padding: 0.25rem 0.4rem;
+  padding: 0.25rem 1.6rem 0.25rem 0.4rem;
   border: 1px solid #ccc;
   border-radius: 4px;
-  background: #fff;
+  /* padding-right can't move the browser's own arrow, so draw our own */
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23333' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 0.5rem center / 0.65rem;
 }
 
 .agent-new-chat-hint {
