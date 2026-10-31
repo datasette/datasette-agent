@@ -1082,49 +1082,6 @@ body.agent-workspace .agent-chat-pane {
   background: #fff;
 }
 
-.agent-canvas-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.3rem 0.5rem;
-  border-bottom: 1px solid #ddd;
-  background: #f6f7f9;
-}
-
-.agent-canvas-bar button,
-.agent-canvas-open {
-  border: 0;
-  background: transparent;
-  color: #555;
-  font-size: 1.1rem;
-  line-height: 1;
-  padding: 0.3rem 0.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  text-decoration: none;
-}
-
-.agent-canvas-bar button:hover,
-.agent-canvas-open:hover {
-  background: #e4e7eb;
-  color: #111;
-}
-
-.agent-canvas-url {
-  flex: 1;
-  min-width: 0;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.8rem;
-  color: #555;
-  background: #fff;
-  border: 1px solid #e1e4e8;
-  border-radius: 4px;
-  padding: 0.25rem 0.5rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .agent-canvas-frame {
   flex: 1;
   width: 100%;

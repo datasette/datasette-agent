@@ -16,8 +16,6 @@ const AGENT_PATH = /\/-\/agent(\/|$)/;
 
 function setupCanvas() {
   const frame = canvas.querySelector(".agent-canvas-frame");
-  const urlEl = canvas.querySelector(".agent-canvas-url");
-  const openLink = canvas.querySelector(".agent-canvas-open");
   const toggle = chat.querySelector(".agent-canvas-toggle");
   const storageKey = "datasette-agent-canvas:" + chat.dataset.conversationId;
 
@@ -70,9 +68,6 @@ function setupCanvas() {
 
   function showUrl(url) {
     currentUrl = url;
-    urlEl.textContent = url;
-    urlEl.title = url;
-    openLink.href = url;
     save();
   }
 
@@ -118,20 +113,6 @@ function setupCanvas() {
       return;
     }
     showUrl(url);
-    try {
-      urlEl.title = frame.contentDocument.title || url;
-    } catch (err) {}
-  });
-
-  canvas.querySelector(".agent-canvas-bar").addEventListener("click", e => {
-    const button = e.target.closest("[data-canvas-action]");
-    if (!button) return;
-    try {
-      const action = button.dataset.canvasAction;
-      if (action === "back") frame.contentWindow.history.back();
-      else if (action === "forward") frame.contentWindow.history.forward();
-      else if (action === "reload") frame.contentWindow.location.reload();
-    } catch (err) {}
   });
 
   chat.querySelector(".agent-view-switch").addEventListener("click", e => {
