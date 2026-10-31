@@ -139,30 +139,37 @@ function setupCanvas() {
     const document = loadedFrame.contentDocument;
     const header = document.querySelector("header.hd");
     if (header) header.style.display = "none";
-    document.addEventListener("click", event => {
-      if (event.defaultPrevented || event.button !== 0) return;
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      const link = event.target.closest("a[href]");
-      if (!link || link.hasAttribute("download")) return;
-      if (link.target && link.target !== "_self" && link.target !== "agent-canvas") return;
-      const destination = new URL(link.href, loc.href);
-      if (destination.origin !== window.location.origin) return;
-      if (destination.pathname === loc.pathname && destination.search === loc.search && destination.hash) return;
-      event.preventDefault();
-      open(destination.pathname + destination.search + destination.hash);
-    });
     showUrl(url);
     // Give nested app frames a chance to paint before uncovering this page.
     requestAnimationFrame(() => requestAnimationFrame(() => promoteFrame(loadedFrame)));
   }
 
+  // Navigate the visible frame so the visit joins the browser history
+  // and Back returns to the previous canvas page.
+  function navigateFrame(url) {
+    if (!currentFrame) {
+      loadFrame(url);
+      return;
+    }
+    if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
+    pendingFrame = null;
+    try {
+      currentFrame.contentWindow.location.assign(url);
+    } catch (err) {
+      currentFrame.src = url;
+    }
+  }
+
   // source is "agent" (show_in_canvas) or "user" (a clicked link).
+  // Agent pages load in a fresh frame that replaces the visible one once
+  // it has painted; links the user follows navigate the visible frame.
   // The agent never pulls the user away from the chat on a narrow
   // screen - it flags the Canvas switch instead.
   function open(url, {source = "user"} = {}) {
     activate();
     showUrl(url);
-    loadFrame(url);
+    if (source === "agent") loadFrame(url);
+    else navigateFrame(url);
     if (source === "agent") {
       if (hidden) setHidden(false);
       if (narrowQuery.matches && chat.dataset.agentView !== "canvas") {
