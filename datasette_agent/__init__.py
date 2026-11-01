@@ -354,3 +354,10 @@ def register_agent_tools(datasette):
         + get_background_tools()
         + get_panel_tools()
     )
+
+
+@hookimpl
+def register_agent_reference_types(datasette):
+    from .references import builtin_reference_types
+
+    return builtin_reference_types()

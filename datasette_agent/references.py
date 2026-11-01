@@ -1,34 +1,83 @@
-"""#-references: tag a database, table or stored (canned) query in a
-chat message.
+"""#-references: tag a database, table, stored query - or anything a
+plugin registers - in a chat message.
 
-The chat composer searches resources through search_references() as
-the user types after a ``#``. Picked references travel with the message
-to the stream endpoint, where resolve_references() re-checks
-permissions and turns them into a schema note the model sees alongside
-the user's text. That note is persisted as its own text part, marked
-with REFERENCES_KEY so the UI can render the references as pills
-instead of showing the schema dump.
+Reference types come from the ``register_agent_reference_types`` plugin
+hook, which datasette-agent implements itself for tables, queries and
+databases. Each type supplies a search function, used by the chat
+composer's autocomplete as the user types after a ``#``, and
+optionally a function returning the URL for a reference's pill.
+
+Picked references travel with the message to the stream endpoint. They
+are pointers, not content: the server checks their shape and that their
+type is registered, then adds a note listing them (plus each type's
+instructions) to the user turn. Nothing about the referenced item is
+looked up at that point - the model uses its tools to read the item,
+and those tools enforce permissions. The note is persisted as its own
+text part, marked with REFERENCES_KEY, so the UI can render the
+references as pills instead of showing the note.
+
+URLs are never taken from the client or persisted: they are computed
+by the reference's type whenever references are rendered.
 """
 
-from datasette.resources import DatabaseResource, QueryResource, TableResource
+import dataclasses
+from dataclasses import dataclass
+from typing import Callable
+
+from datasette.plugins import pm
+from datasette.utils import await_me_maybe, tilde_decode, tilde_encode
 
 REFERENCES_KEY = "agent_references"
-REFERENCE_TYPES = ("table", "query", "database")
 MAX_REFERENCES = 10
 MAX_RESULTS = 20
-# Per-reference cap on the schema text sent to the model; a database
-# with hundreds of tables would otherwise swamp the context window.
-MAX_REFERENCE_CHARS = 20000
-
-_TYPE_ORDER = {t: i for i, t in enumerate(REFERENCE_TYPES)}
+MAX_ID_CHARS = 1000
+MAX_NAME_CHARS = 500
+MAX_DESCRIPTION_CHARS = 500
 
 
-def _like_escape(value):
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+@dataclass
+class Reference:
+    """Something the user can tag with #name in a chat message."""
+
+    type: str
+    # Opaque to datasette-agent; meaningful to the plugin that
+    # registered the type (and to the tools the model uses on it).
+    id: str
+    # What goes after the "#" and on the pill.
+    name: str
+    # Shown in the autocomplete and included in the note for the model.
+    description: str = ""
+
+
+@dataclass
+class ReferenceType:
+    type: str
+    # Short label shown on pills and in the autocomplete, e.g. "table".
+    label: str
+    # async (datasette, actor, q, limit) -> list[Reference]. Must only
+    # return items the actor is allowed to see.
+    search: Callable
+    # (datasette, Reference) -> str | None
+    url: Callable | None = None
+    # Added once to the model's note when this type is referenced -
+    # typically which tool to call with the reference's id.
+    instructions: str = ""
+    # Tie-break between equally good matches of different types.
+    order: int = 100
+
+
+async def get_reference_types(datasette):
+    """Registered reference types, keyed by type."""
+    types = {}
+    for result in pm.hook.register_agent_reference_types(datasette=datasette):
+        result = await await_me_maybe(result)
+        for reference_type in result or []:
+            types.setdefault(reference_type.type, reference_type)
+    return types
 
 
 def _match_rank(name, q):
-    """0 exact, 1 prefix, 2 substring, 3 matched elsewhere (title, SQL)."""
+    """0 exact, 1 prefix, 2 substring, 3 matched elsewhere."""
     if not q:
         return 0
     name = name.lower()
@@ -42,28 +91,181 @@ def _match_rank(name, q):
     return 3
 
 
-def reference_url(datasette, ref):
-    """Link for a reference's pill, or None if its database has since
-    been detached. URLs are worked out when needed rather than persisted
-    with the message, so they follow changes to base_url."""
-    if ref["database"] not in datasette.databases:
+def _reference_url(datasette, reference_type, ref):
+    if reference_type is None or reference_type.url is None:
         return None
-    if ref["type"] == "table":
-        return datasette.urls.table(ref["database"], ref["name"])
-    if ref["type"] == "query":
-        return datasette.urls.query(ref["database"], ref["name"])
-    return datasette.urls.database(ref["database"])
+    try:
+        return reference_type.url(datasette, ref)
+    except Exception:
+        return None
 
 
-def add_reference_urls(datasette, messages):
-    """Add a url to each reference on flattened render messages."""
+def _to_json(datasette, types, ref):
+    reference_type = types.get(ref.type)
+    data = dataclasses.asdict(ref)
+    data["label"] = reference_type.label if reference_type else ref.type
+    data["url"] = _reference_url(datasette, reference_type, ref)
+    return data
+
+
+async def search_references(datasette, actor, q="", limit=MAX_RESULTS):
+    """Search every registered reference type for items matching q
+    that actor can see. Returns JSON-ready dicts."""
+    q = (q or "").strip()
+    types = await get_reference_types(datasette)
+    results = []
+    for reference_type in types.values():
+        try:
+            found = await reference_type.search(datasette, actor, q, limit)
+        except Exception:
+            # One broken plugin shouldn't break autocomplete.
+            continue
+        results.extend(ref for ref in found or [] if isinstance(ref, Reference))
+    results.sort(
+        key=lambda r: (
+            _match_rank(r.name, q),
+            types[r.type].order if r.type in types else 1000,
+            len(r.name),
+            r.name.lower(),
+        )
+    )
+    return [_to_json(datasette, types, ref) for ref in results[:limit]]
+
+
+def _legacy_id(ref):
+    """References persisted before reference types were pluggable
+    were {type, database, name}; derive their id."""
+    database = ref.get("database")
+    if not isinstance(database, str):
+        return None
+    if ref.get("type") == "database":
+        return database
+    if ref.get("type") in ("table", "query") and isinstance(ref.get("name"), str):
+        return builtin_id(database, ref["name"])
+    return None
+
+
+def coerce_reference(ref):
+    """A Reference from a client-supplied or persisted dict, or None
+    if it's malformed."""
+    if not isinstance(ref, dict):
+        return None
+    ref_type = ref.get("type")
+    ref_id = ref.get("id")
+    if ref_id is None:
+        ref_id = _legacy_id(ref)
+    name = ref.get("name")
+    description = ref.get("description")
+    if not isinstance(description, str):
+        description = ""
+    if not all(isinstance(v, str) and v for v in (ref_type, ref_id, name)):
+        return None
+    if len(ref_id) > MAX_ID_CHARS or len(name) > MAX_NAME_CHARS:
+        return None
+    return Reference(
+        type=ref_type,
+        id=ref_id,
+        name=name,
+        description=description[:MAX_DESCRIPTION_CHARS],
+    )
+
+
+def normalize_references(references, types):
+    """Validate the shape of client-supplied references, dropping
+    malformed entries, unregistered types and duplicates."""
+    if not isinstance(references, list):
+        return []
+    normalized = []
+    seen = set()
+    for item in references:
+        ref = coerce_reference(item)
+        if ref is None or ref.type not in types:
+            continue
+        key = (ref.type, ref.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(ref)
+        if len(normalized) >= MAX_REFERENCES:
+            break
+    return normalized
+
+
+def references_note(references, types):
+    """The note the model sees alongside the user's text."""
+    lines = [
+        "[Note: the user tagged the following items in their message "
+        "using #name. Use your tools to look up anything you need "
+        "about them.]",
+        "",
+    ]
+    for ref in references:
+        line = "- #{} ({} id: {})".format(ref.name, ref.type, ref.id)
+        if ref.description:
+            line += ": " + ref.description
+        lines.append(line)
+    # One copy of each instruction line, even when types share some.
+    instructions = {}
+    for ref_type in dict.fromkeys(ref.type for ref in references):
+        reference_type = types.get(ref_type)
+        if reference_type and reference_type.instructions:
+            for line in reference_type.instructions.splitlines():
+                if line.strip():
+                    instructions[line] = None
+    if instructions:
+        lines.append("")
+        lines.extend(instructions)
+    return "\n".join(lines)
+
+
+async def prepare_references(datasette, references):
+    """Turn client-supplied references into (references, note) where
+    references are JSON-ready dicts to persist. note is None when no
+    valid references were supplied."""
+    types = await get_reference_types(datasette)
+    refs = normalize_references(references, types)
+    if not refs:
+        return [], None
+    return [dataclasses.asdict(ref) for ref in refs], references_note(refs, types)
+
+
+async def add_reference_urls(datasette, messages):
+    """Add url and label to each reference on flattened render
+    messages, upgrading legacy persisted references as it goes."""
+    types = await get_reference_types(datasette)
     for message in messages:
-        for ref in message.get("references") or []:
-            ref["url"] = reference_url(datasette, ref)
+        if not message.get("references"):
+            continue
+        rendered = []
+        for item in message["references"]:
+            ref = coerce_reference(item)
+            if ref is not None:
+                rendered.append(_to_json(datasette, types, ref))
+        message["references"] = rendered
     return messages
 
 
-async def _search_databases(datasette, actor, q):
+# Built-in reference types: tables (and views), stored queries and
+# databases. Table and query ids are "database/name", each part
+# tilde-encoded so a "/" in either name stays unambiguous.
+
+
+def builtin_id(database, name):
+    return "{}/{}".format(tilde_encode(database), tilde_encode(name))
+
+
+def split_builtin_id(ref_id):
+    database, sep, name = ref_id.partition("/")
+    if not sep:
+        return None, None
+    return tilde_decode(database), tilde_decode(name)
+
+
+def _like_escape(value):
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def _search_databases(datasette, actor, q, limit):
     page = await datasette.allowed_resources("view-database", actor, limit=1000)
     results = []
     for resource in page.resources:
@@ -73,12 +275,7 @@ async def _search_databases(datasette, actor, q):
         if q and q.lower() not in name.lower():
             continue
         results.append(
-            {
-                "type": "database",
-                "database": name,
-                "name": name,
-                "description": "Database",
-            }
+            Reference(type="database", id=name, name=name, description="Database")
         )
     return results
 
@@ -117,14 +314,14 @@ async def _search_tables(datasette, actor, q, limit):
         if table in hidden[database]:
             continue
         results.append(
-            {
-                "type": "table",
-                "database": database,
-                "name": table,
-                "description": "{} in {}".format(
+            Reference(
+                type="table",
+                id=builtin_id(database, table),
+                name=table,
+                description="{} in {}".format(
                     "View" if table in views[database] else "Table", database
                 ),
-            }
+            )
         )
         if len(results) >= limit:
             break
@@ -137,201 +334,79 @@ async def _search_queries(datasette, actor, q, limit):
     # escape LIKE wildcards - keep only name and title matches.
     needle = q.lower()
     return [
-        {
-            "type": "query",
-            "database": query.database,
-            "name": query.name,
-            "description": "Query in {}{}".format(
+        Reference(
+            type="query",
+            id=builtin_id(query.database, query.name),
+            name=query.name,
+            description="Query in {}{}".format(
                 query.database, ": {}".format(query.title) if query.title else ""
             ),
-        }
+        )
         for query in page.queries
         if query.database in datasette.databases
         and (needle in query.name.lower() or needle in (query.title or "").lower())
     ]
 
 
-async def search_references(datasette, actor, q="", limit=MAX_RESULTS):
-    """Databases, tables and stored queries matching q that actor can see."""
-    q = (q or "").strip()
-    results = (
-        await _search_tables(datasette, actor, q, limit)
-        + await _search_queries(datasette, actor, q, limit)
-        + await _search_databases(datasette, actor, q)
-    )
-    results.sort(
-        key=lambda r: (
-            _match_rank(r["name"], q),
-            _TYPE_ORDER[r["type"]],
-            len(r["name"]),
-            r["name"].lower(),
-        )
-    )
-    results = results[:limit]
-    for result in results:
-        result["url"] = reference_url(datasette, result)
-    return results
-
-
-def _truncate(text):
-    if len(text) <= MAX_REFERENCE_CHARS:
-        return text
-    return text[:MAX_REFERENCE_CHARS] + "\n... (truncated)"
-
-
-async def _object_sql(db, name):
-    row = (
-        await db.execute(
-            "SELECT sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'view')",
-            [name],
-        )
-    ).first()
-    return row["sql"] if row and row["sql"] else None
-
-
-async def _describe_table_reference(datasette, actor, database, name):
-    if not await datasette.allowed(
-        action="view-table",
-        resource=TableResource(database=database, table=name),
-        actor=actor,
-    ):
+def _database_url(datasette, ref):
+    if ref.id not in datasette.databases:
         return None
-    db = datasette.get_database(database)
-    is_view = name in await db.view_names()
-    if not is_view and name not in await db.table_names():
-        return None
-    schema = await _object_sql(db, name)
-    return 'The {} "{}" in database "{}":\n{}'.format(
-        "view" if is_view else "table", name, database, schema or "(no schema)"
-    )
+    return datasette.urls.database(ref.id)
 
 
-async def _describe_database_reference(datasette, actor, database):
-    if not await datasette.allowed(
-        action="view-database",
-        resource=DatabaseResource(database=database),
-        actor=actor,
-    ):
+def _table_url(datasette, ref):
+    database, table = split_builtin_id(ref.id)
+    if database not in datasette.databases:
         return None
-    db = datasette.get_database(database)
-    hidden = set(await db.hidden_table_names())
-    schemas = []
-    for name in list(await db.table_names()) + list(await db.view_names()):
-        if name in hidden:
-            continue
-        if not await datasette.allowed(
-            action="view-table",
-            resource=TableResource(database=database, table=name),
-            actor=actor,
-        ):
-            continue
-        schema = await _object_sql(db, name)
-        if schema:
-            schemas.append(schema + ";")
-    lines = ['The database "{}" contains:'.format(database)]
-    lines.append("\n".join(schemas) if schemas else "(no tables)")
-    queries = await datasette.list_queries(database, actor=actor, limit=50)
-    if queries.queries:
-        lines.append(
-            "Stored queries in this database: {}".format(
-                ", ".join(q.name for q in queries.queries)
-            )
-        )
-    return "\n".join(lines)
+    return datasette.urls.table(database, table)
 
 
-async def _describe_query_reference(datasette, actor, database, name):
-    if not await datasette.allowed(
-        action="view-query",
-        resource=QueryResource(database=database, query=name),
-        actor=actor,
-    ):
+def _query_url(datasette, ref):
+    database, query = split_builtin_id(ref.id)
+    if database not in datasette.databases:
         return None
-    query = await datasette.get_query(database, name)
-    if query is None:
-        return None
-    lines = [
-        'The stored {} query "{}" in database "{}":'.format(
-            "write" if query.is_write else "read-only", name, database
-        )
+    return datasette.urls.query(database, query)
+
+
+_TILDE_NOTE = (
+    'Table and query ids are "database/name", with any "/" in either '
+    "part written as ~2F."
+)
+
+
+def builtin_reference_types():
+    return [
+        ReferenceType(
+            type="table",
+            label="table",
+            search=_search_tables,
+            url=_table_url,
+            instructions=(
+                "For a tagged table or view, call describe_table with the "
+                "database and table from its id.\n" + _TILDE_NOTE
+            ),
+            order=0,
+        ),
+        ReferenceType(
+            type="query",
+            label="query",
+            search=_search_queries,
+            url=_query_url,
+            instructions=(
+                "For a tagged stored query, call describe_query with the "
+                "database and query name from its id.\n" + _TILDE_NOTE
+            ),
+            order=1,
+        ),
+        ReferenceType(
+            type="database",
+            label="db",
+            search=_search_databases,
+            url=_database_url,
+            instructions=(
+                "A tagged database's id is the database name; call "
+                "list_databases_and_tables to see its tables."
+            ),
+            order=2,
+        ),
     ]
-    if query.title:
-        lines.append("Title: {}".format(query.title))
-    if query.description:
-        lines.append("Description: {}".format(query.description))
-    if query.parameters:
-        lines.append(
-            "Parameters: {}".format(", ".join(":" + p for p in query.parameters))
-        )
-    if query.hide_sql:
-        lines.append("(The SQL for this query is hidden.)")
-    else:
-        lines.append("SQL:\n{}".format(query.sql))
-    return "\n".join(lines)
-
-
-def normalize_references(references):
-    """Validate the shape of client-supplied references, dropping
-    malformed entries and duplicates. Permissions are checked later."""
-    if not isinstance(references, list):
-        return []
-    normalized = []
-    seen = set()
-    for ref in references:
-        if not isinstance(ref, dict):
-            continue
-        ref_type = ref.get("type")
-        database = ref.get("database")
-        name = ref.get("name")
-        if ref_type not in REFERENCE_TYPES:
-            continue
-        if not isinstance(database, str) or not isinstance(name, str):
-            continue
-        if not database or not name:
-            continue
-        key = (ref_type, database, name)
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append({"type": ref_type, "database": database, "name": name})
-        if len(normalized) >= MAX_REFERENCES:
-            break
-    return normalized
-
-
-async def resolve_references(datasette, actor, references):
-    """Turn client-supplied references into (references, context_text).
-
-    References the actor cannot see, or that no longer exist, are
-    dropped. context_text is None when nothing resolved.
-    """
-    resolved = []
-    sections = []
-    for ref in normalize_references(references):
-        if ref["database"] not in datasette.databases:
-            continue
-        if ref["type"] == "table":
-            text = await _describe_table_reference(
-                datasette, actor, ref["database"], ref["name"]
-            )
-        elif ref["type"] == "query":
-            text = await _describe_query_reference(
-                datasette, actor, ref["database"], ref["name"]
-            )
-        else:
-            if ref["name"] != ref["database"]:
-                continue
-            text = await _describe_database_reference(datasette, actor, ref["database"])
-        if text is None:
-            continue
-        resolved.append(ref)
-        sections.append(_truncate(text))
-    if not resolved:
-        return [], None
-    context = (
-        "[Note: the user tagged the following resources in their message "
-        "using #name. Their schemas are included automatically below, so "
-        "you do not need to look them up with list_databases_and_tables "
-        "or describe_table.]\n\n" + "\n\n".join(sections)
-    )
-    return resolved, context

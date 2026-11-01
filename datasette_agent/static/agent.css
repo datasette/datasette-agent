@@ -1246,6 +1246,8 @@
   padding: 0.1rem 0.35rem;
   border-radius: 3px;
   color: #fff;
+  /* Plugin-registered types; built-ins override below. */
+  background: #5f6b7a;
 }
 
 .agent-ref-option-type.agent-ref-table {

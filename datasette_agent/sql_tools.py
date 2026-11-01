@@ -547,7 +547,8 @@ async def _describe_table(datasette, actor, database: str, table: str):
         )
     db = datasette.get_database(database)
     table_names = await db.table_names()
-    if table not in table_names:
+    view_names = await db.view_names()
+    if table not in table_names and table not in view_names:
         return json.dumps(
             {
                 "error": f"Table '{table}' not found in database '{database}'",
@@ -743,7 +744,7 @@ def get_default_tools():
         ),
         AgentTool(
             name="describe_table",
-            description="Get column names, types, and foreign keys for a table",
+            description="Get column names, types, and foreign keys for a table or view",
             input_schema={
                 "type": "object",
                 "properties": {

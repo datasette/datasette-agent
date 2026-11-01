@@ -1,12 +1,11 @@
-// #-references: type # in a chat textarea to search databases, tables and
-// stored queries, pick one with arrow keys + Enter (or a tap), and the
-// pick becomes a pill. The message text keeps a readable "#name" token;
-// the picked references travel alongside it so the server can attach
-// their schemas for the model.
+// #-references: type # in a chat textarea to search databases, tables,
+// stored queries and anything plugins register, pick one with arrow keys
+// + Enter (or a tap), and the pick becomes a pill. The message text keeps a readable "#name" token;
+// the picked references travel alongside it so the server can tell
+// the model what was tagged.
 
 const SEARCH_URL = "/-/agent/api/references";
 const SEARCH_DEBOUNCE_MS = 120;
-const TYPE_LABELS = {table: "table", query: "query", database: "db"};
 
 // Match "#query" ending at the caret, where # starts the text or follows
 // whitespace/an opening bracket (so "a#b" or a URL fragment doesn't
@@ -14,23 +13,22 @@ const TYPE_LABELS = {table: "table", query: "query", database: "db"};
 const TRIGGER_RE = /(^|[\s(\[])#([^\s#]*)$/;
 
 export function referenceKey(ref) {
-  return ref.type + "\u0000" + ref.database + "\u0000" + ref.name;
+  return ref.type + "\u0000" + ref.id;
 }
 
-function referenceTitle(ref) {
-  if (ref.type === "database") return "Database " + ref.name;
-  const kind = ref.type === "query" ? "Query" : "Table";
-  return kind + " " + ref.name + " in " + ref.database;
+// The CSS class for a reference type; plugin types can be any string.
+function typeClass(ref) {
+  return "agent-ref-" + String(ref.type).replace(/[^\w-]/g, "_");
 }
 
 export function createReferencePill(ref) {
   const pill = document.createElement(ref.url ? "a" : "span");
   if (ref.url) pill.href = ref.url;
-  pill.className = "agent-ref-pill agent-ref-" + ref.type;
-  pill.title = referenceTitle(ref);
+  pill.className = "agent-ref-pill " + typeClass(ref);
+  pill.title = ref.description || ref.name;
   const type = document.createElement("span");
   type.className = "agent-ref-pill-type";
-  type.textContent = TYPE_LABELS[ref.type] || ref.type;
+  type.textContent = ref.label || ref.type;
   const name = document.createElement("span");
   name.className = "agent-ref-pill-name";
   name.textContent = ref.name;
@@ -108,7 +106,7 @@ export function attachReferencePicker(textarea, options = {}) {
   list.className = "agent-ref-list";
   list.id = listId;
   list.setAttribute("role", "listbox");
-  list.setAttribute("aria-label", "Tag a table, query or database");
+  list.setAttribute("aria-label", "Tag an item");
   popup.appendChild(list);
   const hint = document.createElement("div");
   hint.className = "agent-ref-hint";
@@ -172,8 +170,8 @@ export function attachReferencePicker(textarea, options = {}) {
       const empty = document.createElement("li");
       empty.className = "agent-ref-empty";
       empty.textContent = query
-        ? "No tables, queries or databases match “" + query + "”"
-        : "No tables, queries or databases available";
+        ? "Nothing matches “" + query + "”"
+        : "Nothing available to tag";
       list.appendChild(empty);
     }
     results.forEach((ref, i) => {
@@ -182,8 +180,8 @@ export function attachReferencePicker(textarea, options = {}) {
       li.id = listId + "-" + i;
       li.setAttribute("role", "option");
       const type = document.createElement("span");
-      type.className = "agent-ref-option-type agent-ref-" + ref.type;
-      type.textContent = TYPE_LABELS[ref.type] || ref.type;
+      type.className = "agent-ref-option-type " + typeClass(ref);
+      type.textContent = ref.label || ref.type;
       const text = document.createElement("span");
       text.className = "agent-ref-option-text";
       const name = document.createElement("span");
@@ -252,7 +250,14 @@ export function attachReferencePicker(textarea, options = {}) {
     textarea.value = value.slice(0, trigger.start) + token + spacer + after;
     const newCaret = trigger.start + token.length + 1;
     textarea.setSelectionRange(newCaret, newCaret);
-    const picked = {type: ref.type, database: ref.database, name: ref.name, url: ref.url};
+    const picked = {
+      type: ref.type,
+      id: ref.id,
+      name: ref.name,
+      description: ref.description,
+      label: ref.label,
+      url: ref.url,
+    };
     if (!references.some((r) => referenceKey(r) === referenceKey(picked))) {
       references.push(picked);
     }

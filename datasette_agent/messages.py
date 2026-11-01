@@ -26,7 +26,7 @@ def _utc_now():
 
 
 def make_user_message_dict(text, references=None, references_context=None):
-    """A user MessageDict, optionally followed by the schema note for
+    """A user MessageDict, optionally followed by the note listing
     #-tagged references. The note is a second text part flagged with
     the reference list so the UI renders pills instead of the note."""
     parts = [{"type": "text", "text": text}]
@@ -255,7 +255,7 @@ def flatten_for_render(rows):
         for part in msg.get("parts", []):
             ptype = part.get("type")
             if ptype == "text" and REFERENCES_KEY in part:
-                # Schema note for #-references: attach the references to
+                # Note for #-references: attach the references to
                 # the user text they belong to rather than rendering the
                 # note itself.
                 if out and out[-1]["role"] == msg_role:
