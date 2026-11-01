@@ -136,8 +136,9 @@ async def api_models(request, datasette):
 
 
 async def api_references(request, datasette):
-    """Search databases, tables and stored queries for the chat
-    composer's #-reference autocomplete."""
+    """Search every registered reference type (tables, queries,
+    databases and anything plugins add) for the chat composer's
+    #-reference autocomplete."""
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     results = await search_references(
         datasette, request.actor, request.args.get("q", "")
@@ -266,7 +267,7 @@ async def agent_conversation(request, datasette):
         needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
 
     render_messages = combine_tool_messages_for_render(
-        add_reference_urls(datasette, flatten_for_render(messages))
+        await add_reference_urls(datasette, flatten_for_render(messages))
     )
 
     return Response.html(
@@ -361,7 +362,9 @@ async def agent_conversation_markdown(request, datasette):
     ).rows
 
     title = row["title"] or "Chat"
-    markdown = format_conversation_markdown(title, flatten_for_render(messages))
+    markdown = format_conversation_markdown(
+        title, await add_reference_urls(datasette, flatten_for_render(messages))
+    )
 
     # Sanitize title for filename
     safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[

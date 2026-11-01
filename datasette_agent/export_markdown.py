@@ -37,10 +37,8 @@ def format_conversation_markdown(title, messages):
             references = msg.get("references")
             if references:
                 tagged = ", ".join(
-                    (
-                        "`{}` ({} in {})".format(r["name"], r["type"], r["database"])
-                        if r["type"] != "database"
-                        else "`{}` (database)".format(r["name"])
+                    "`{}` ({})".format(
+                        r["name"], r.get("description") or r.get("label") or r["type"]
                     )
                     for r in references
                 )

@@ -4,12 +4,20 @@ import sqlite3
 from datasette.app import Datasette
 import pytest
 
+from datasette import hookimpl
+from datasette.plugins import pm
+
 from datasette_agent.messages import flatten_for_render, message_dict_text
 from datasette_agent.references import (
     REFERENCES_KEY,
+    Reference,
+    ReferenceType,
+    add_reference_urls,
+    builtin_id,
+    builtin_reference_types,
     normalize_references,
-    reference_url,
-    resolve_references,
+    prepare_references,
+    split_builtin_id,
 )
 
 
@@ -64,11 +72,11 @@ async def test_references_api_search(datasette_instance, cookies):
     )
     assert response.status_code == 200
     results = response.json()["results"]
-    found = [(r["type"], r["database"], r["name"]) for r in results]
+    found = [(r["type"], r["id"], r["name"]) for r in results]
     # Exact match first, then prefix/substring matches
-    assert found[0] == ("table", "demo", "items")
-    assert ("table", "demo", "big_items") in found
-    assert ("query", "demo", "top_items") in found
+    assert found[0] == ("table", "demo/items", "items")
+    assert ("table", "demo/big_items", "big_items") in found
+    assert ("query", "demo/top_items", "top_items") in found
     assert results[0]["description"] == "Table in demo"
 
 
@@ -100,97 +108,270 @@ async def test_references_api_escapes_like_wildcards(datasette_instance, cookies
 @pytest.mark.parametrize(
     "ref,expected",
     (
-        ({"type": "table", "database": "demo", "name": "items"}, "/prefix/demo/items"),
+        ({"type": "table", "id": "demo/items", "name": "items"}, "/prefix/demo/items"),
         (
-            {"type": "table", "database": "demo", "name": "has/slash"},
+            {"type": "table", "id": "demo/has~2Fslash", "name": "has/slash"},
             "/prefix/demo/has~2Fslash",
         ),
         (
-            {"type": "query", "database": "demo", "name": "top_items"},
+            {"type": "query", "id": "demo/top_items", "name": "top_items"},
             "/prefix/demo/top_items",
         ),
+        ({"type": "database", "id": "demo", "name": "demo"}, "/prefix/demo"),
+        ({"type": "table", "id": "gone/items", "name": "items"}, None),
+        # Legacy persisted shape
+        ({"type": "table", "database": "demo", "name": "items"}, "/prefix/demo/items"),
         ({"type": "database", "database": "demo", "name": "demo"}, "/prefix/demo"),
-        ({"type": "table", "database": "gone", "name": "items"}, None),
     ),
 )
-def test_reference_url_uses_datasette_urls(datasette_instance, ref, expected):
+@pytest.mark.asyncio
+async def test_reference_urls_use_datasette_urls(datasette_instance, ref, expected):
     datasette_instance._settings["base_url"] = "/prefix/"
-    assert reference_url(datasette_instance, ref) == expected
+    messages = await add_reference_urls(
+        datasette_instance, [{"role": "user", "references": [ref]}]
+    )
+    assert messages[0]["references"][0]["url"] == expected
+
+
+def test_builtin_id_round_trip():
+    ref_id = builtin_id("my/db", "a/b~c")
+    assert "/" in ref_id
+    assert split_builtin_id(ref_id) == ("my/db", "a/b~c")
+    assert builtin_id("demo", "items") == "demo/items"
 
 
 @pytest.mark.asyncio
-async def test_references_api_results_include_url(datasette_instance, cookies):
+async def test_references_api_results_include_url_and_label(
+    datasette_instance, cookies
+):
     response = await datasette_instance.client.get(
         "/-/agent/api/references", cookies=cookies
     )
-    urls = {(r["type"], r["name"]): r["url"] for r in response.json()["results"]}
-    assert urls[("table", "items")] == "/demo/items"
-    assert urls[("query", "top_items")] == "/demo/top_items"
-    assert urls[("database", "demo")] == "/demo"
+    results = {(r["type"], r["name"]): r for r in response.json()["results"]}
+    assert results[("table", "items")]["url"] == "/demo/items"
+    assert results[("table", "items")]["label"] == "table"
+    assert results[("table", "items")]["id"] == "demo/items"
+    assert results[("query", "top_items")]["url"] == "/demo/top_items"
+    assert results[("database", "demo")]["url"] == "/demo"
+    assert results[("database", "demo")]["label"] == "db"
 
 
 def test_normalize_references():
-    assert normalize_references("nope") == []
+    types = {t.type: t for t in builtin_reference_types()}
+    assert normalize_references("nope", types) == []
     assert normalize_references(
         [
+            {"type": "table", "id": "demo/items", "name": "items"},
+            {"type": "table", "id": "demo/items", "name": "items"},
+            # Legacy shape is upgraded; same id so it's a duplicate
             {"type": "table", "database": "demo", "name": "items"},
-            {"type": "table", "database": "demo", "name": "items"},
-            {"type": "bogus", "database": "demo", "name": "items"},
-            {"type": "table", "database": "", "name": "items"},
-            {"type": "table", "database": "demo", "name": 5},
+            {"type": "bogus", "id": "x", "name": "items"},
+            {"type": "table", "id": "", "name": "items"},
+            {"type": "table", "id": "demo/x", "name": 5},
+            {"type": "table", "id": "demo/x", "name": "x" * 1000},
+            {
+                "type": "query",
+                "id": "demo/top_items",
+                "name": "top_items",
+                "description": "d" * 1000,
+                "url": "javascript:alert(1)",
+            },
             "string",
-        ]
-    ) == [{"type": "table", "database": "demo", "name": "items"}]
+        ],
+        types,
+    ) == [
+        Reference(type="table", id="demo/items", name="items"),
+        Reference(
+            type="query", id="demo/top_items", name="top_items", description="d" * 500
+        ),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_resolve_references(datasette_instance):
+async def test_prepare_references(datasette_instance):
     await datasette_instance.invoke_startup()
-    references, context = await resolve_references(
+    references, note = await prepare_references(
         datasette_instance,
         {"id": "user"},
         [
-            {"type": "table", "database": "demo", "name": "items"},
-            {"type": "table", "database": "demo", "name": "big_items"},
-            {"type": "query", "database": "demo", "name": "top_items"},
-            {"type": "query", "database": "demo", "name": "hidden_sql"},
-            {"type": "database", "database": "demo", "name": "demo"},
-            # Dropped: forbidden, missing, unknown database
-            {"type": "table", "database": "demo", "name": "secrets"},
-            {"type": "table", "database": "demo", "name": "missing"},
-            {"type": "table", "database": "nope", "name": "items"},
+            {
+                "type": "table",
+                "id": "demo/items",
+                "name": "items",
+                "description": "Table in demo",
+            },
+            {"type": "query", "id": "demo/top_items", "name": "top_items"},
+            {"type": "query", "id": "demo/hidden_sql", "name": "hidden_sql"},
+            {"type": "table", "id": "demo/big_items", "name": "big_items"},
+            {"type": "database", "id": "demo", "name": "demo"},
+            # Kept as pointers, but with no context: forbidden, missing
+            {"type": "table", "id": "demo/secrets", "name": "secrets"},
+            {"type": "table", "id": "demo/missing", "name": "missing"},
+            {"type": "table", "id": "nope/items", "name": "nope_items"},
+            {"type": "bogus", "id": "x", "name": "x"},
         ],
     )
-    assert [r["name"] for r in references] == [
-        "items",
-        "big_items",
-        "top_items",
-        "hidden_sql",
-        "demo",
+    assert references[:3] == [
+        {
+            "type": "table",
+            "id": "demo/items",
+            "name": "items",
+            "description": "Table in demo",
+        },
+        {
+            "type": "query",
+            "id": "demo/top_items",
+            "name": "top_items",
+            "description": "",
+        },
+        {
+            "type": "query",
+            "id": "demo/hidden_sql",
+            "name": "hidden_sql",
+            "description": "",
+        },
     ]
-    assert "tagged the following resources" in context
+    assert [r["name"] for r in references][3:] == [
+        "big_items",
+        "demo",
+        "secrets",
+        "missing",
+        "nope_items",
+    ]
+    assert "tagged the following items" in note
+    # Table schema is indented under its reference line
     assert (
-        'The table "items" in database "demo":\n'
-        "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, qty INT)"
-    ) in context
-    assert 'The view "big_items"' in context
-    assert "Title: Top items" in context
-    assert "select * from items where qty > :min" in context
-    assert "select 'shh'" not in context
-    assert "(The SQL for this query is hidden.)" in context
-    assert 'The database "demo" contains:' in context
-    # The database summary respects table permissions too
-    assert "secrets" not in context
+        "- #items (table id: demo/items): Table in demo\n"
+        "  CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, qty INT)"
+    ) in note
+    assert "  CREATE VIEW big_items AS SELECT * FROM items WHERE qty > 10" in note
+    # Query details
+    assert (
+        "- #top_items (query id: demo/top_items)\n"
+        "  Read-only query\n"
+        "  Title: Top items\n"
+        "  Parameters: :min\n"
+        "  SQL:\n"
+        "  select * from items where qty > :min"
+    ) in note
+    assert "select 'shh'" not in note
+    assert "(The SQL for this query is hidden.)" in note
+    # Database: names of visible tables and views, not their schemas
+    assert (
+        "- #demo (database id: demo)\n" "  Tables: items\n" "  Views: big_items"
+    ) in note
+    # Forbidden or missing tables get a bare pointer, no schema
+    assert "- #secrets (table id: demo/secrets)\n\n" in note
+    assert "CREATE TABLE secrets" not in note
+    assert "- #missing (table id: demo/missing)\n\n" in note
+    assert "describe_table" in note
+    assert "describe_query" in note
+    # Shared instruction lines appear once
+    assert note.count("~2F") == 1
 
 
 @pytest.mark.asyncio
-async def test_resolve_references_nothing_resolves(datasette_instance):
-    await datasette_instance.invoke_startup()
-    assert await resolve_references(
+async def test_prepare_references_nothing_valid(datasette_instance):
+    assert await prepare_references(
+        datasette_instance, {"id": "user"}, [{"type": "bogus", "id": "x", "name": "x"}]
+    ) == ([], None)
+
+
+class NotesPlugin:
+    """Registers a "note" reference type, as a plugin like
+    datasette-apps would."""
+
+    NOTES = {"n1": "Shopping list", "n2": "Secret plans"}
+
+    # Plain (non-async) functions work too.
+    def context(self, datasette, actor, ref):
+        if ref.id == "boom":
+            raise ValueError("broken context")
+        if ref.id == "huge":
+            return "x" * 30000
+        if ref.id == "n2" and (actor or {}).get("id") != "admin":
+            return None
+        if ref.id in self.NOTES:
+            return "Body of " + self.NOTES[ref.id]
+        return None
+
+    @hookimpl
+    def register_agent_reference_types(self, datasette):
+        async def search(datasette, actor, q, limit):
+            if q == "explode":
+                raise ValueError("broken plugin")
+            return [
+                Reference(type="note", id=note_id, name=name.replace(" ", "_"))
+                for note_id, name in self.NOTES.items()
+                # Only the owner sees the secret one
+                if (note_id != "n2" or (actor or {}).get("id") == "admin")
+                and q.lower() in name.lower()
+            ]
+
+        return [
+            ReferenceType(
+                type="note",
+                label="note",
+                search=search,
+                url=lambda datasette, ref: datasette.urls.path("/-/notes/" + ref.id),
+                instructions="Use read_note with the id of a tagged note.",
+                context=self.context,
+            )
+        ]
+
+
+@pytest.fixture
+def notes_plugin():
+    plugin = NotesPlugin()
+    pm.register(plugin, name="test-notes-plugin")
+    try:
+        yield plugin
+    finally:
+        pm.unregister(name="test-notes-plugin")
+
+
+@pytest.mark.asyncio
+async def test_plugin_reference_type(datasette_instance, cookies, notes_plugin):
+    response = await datasette_instance.client.get(
+        "/-/agent/api/references?q=shop", cookies=cookies
+    )
+    assert response.json()["results"] == [
+        {
+            "type": "note",
+            "id": "n1",
+            "name": "Shopping_list",
+            "description": "",
+            "label": "note",
+            "url": "/-/notes/n1",
+        }
+    ]
+    # Permission filtering is the plugin's search function's job
+    response = await datasette_instance.client.get(
+        "/-/agent/api/references?q=secret", cookies=cookies
+    )
+    assert response.json()["results"] == []
+
+    references, note = await prepare_references(
         datasette_instance,
         {"id": "user"},
-        [{"type": "table", "database": "demo", "name": "secrets"}],
-    ) == ([], None)
+        [{"type": "note", "id": "n1", "name": "Shopping_list"}],
+    )
+    assert references == [
+        {"type": "note", "id": "n1", "name": "Shopping_list", "description": ""}
+    ]
+    assert "- #Shopping_list (note id: n1)\n  Body of Shopping list" in note
+    assert "Use read_note with the id of a tagged note." in note
+
+
+@pytest.mark.asyncio
+async def test_broken_plugin_search_does_not_break_others(
+    datasette_instance, cookies, notes_plugin
+):
+    response = await datasette_instance.client.get(
+        "/-/agent/api/references?q=explode", cookies=cookies
+    )
+    assert response.status_code == 200
+    assert response.json()["results"] == []
 
 
 @pytest.mark.asyncio
@@ -212,11 +393,12 @@ async def test_stream_with_references(datasette_instance, cookies):
                     # A client-supplied url is ignored, never persisted
                     {
                         "type": "table",
-                        "database": "demo",
+                        "id": "demo/items",
                         "name": "items",
+                        "description": "Table in demo",
                         "url": "https://example.com/",
                     },
-                    {"type": "table", "database": "demo", "name": "secrets"},
+                    {"type": "nope", "id": "x", "name": "secrets"},
                 ],
             }
         ),
@@ -236,11 +418,17 @@ async def test_stream_with_references(datasette_instance, cookies):
     text_part, context_part = msg["parts"]
     assert text_part == {"type": "text", "text": "How many rows in #items?"}
     assert context_part[REFERENCES_KEY] == [
-        {"type": "table", "database": "demo", "name": "items"}
+        {
+            "type": "table",
+            "id": "demo/items",
+            "name": "items",
+            "description": "Table in demo",
+        }
     ]
+    assert "#items (table id: demo/items)" in context_part["text"]
     assert "CREATE TABLE items" in context_part["text"]
     assert "secrets" not in context_part["text"]
-    # The schema note isn't part of the user-visible text
+    # The note isn't part of the user-visible text
     assert message_dict_text(msg) == "How many rows in #items?"
 
     # The title comes from the user's text, not the schema note
@@ -254,16 +442,18 @@ async def test_stream_with_references(datasette_instance, cookies):
     # Rendered page shows the user text with the references attached
     page = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert (
-        'data-references=\'[{"database": "demo", "name": "items", '
-        '"type": "table", "url": "/demo/items"}]\''
+        'data-references=\'[{"description": "Table in demo", "id": "demo/items", '
+        '"label": "table", "name": "items", "type": "table", "url": "/demo/items"}]\''
     ) in page.text
+    assert "table id: demo/items" not in page.text
     assert "CREATE TABLE items" not in page.text
 
-    # Markdown export mentions the tag but not the schema dump
+    # Markdown export mentions the tag but not the note
     markdown = await ds.client.get(
         f"/-/agent/{conversation_id}/markdown", cookies=cookies
     )
-    assert "Tagged: `items` (table in demo)" in markdown.text
+    assert "Tagged: `items` (Table in demo)" in markdown.text
+    assert "table id: demo/items" not in markdown.text
     assert "CREATE TABLE items" not in markdown.text
 
 
@@ -293,3 +483,58 @@ def test_flatten_attaches_references_to_user_text():
     assert flattened[0]["references"] == [
         {"type": "table", "database": "d", "name": "items"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_describe_query_tool(datasette_instance):
+    from datasette_agent.query_tools import describe_query
+
+    await datasette_instance.invoke_startup()
+    actor = {"id": "user"}
+    result = json.loads(
+        await describe_query(datasette_instance, actor, "demo", "top_items")
+    )
+    assert result["ok"]
+    assert result["title"] == "Top items"
+    assert result["sql"] == "select * from items where qty > :min"
+    assert result["parameters"] == ["min"]
+    hidden = json.loads(
+        await describe_query(datasette_instance, actor, "demo", "hidden_sql")
+    )
+    assert hidden["sql"] is None
+    assert hidden["sql_hidden"] is True
+    missing = json.loads(
+        await describe_query(datasette_instance, actor, "demo", "nope")
+    )
+    assert not missing["ok"]
+
+
+@pytest.mark.asyncio
+async def test_describe_table_tool_handles_views(datasette_instance):
+    from datasette_agent.sql_tools import _describe_table
+
+    await datasette_instance.invoke_startup()
+    result = json.loads(
+        await _describe_table(datasette_instance, {"id": "user"}, "demo", "big_items")
+    )
+    assert [c["name"] for c in result["columns"]] == ["id", "name", "qty"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_reference_context(datasette_instance, notes_plugin):
+    def refs(*ids):
+        return [{"type": "note", "id": i, "name": "note_" + i} for i in ids]
+
+    _, note = await prepare_references(
+        datasette_instance, {"id": "user"}, refs("n2", "boom", "huge")
+    )
+    # The context function decides who sees what
+    assert "Secret plans" not in note
+    # An exception just means no context; the message still goes
+    assert "- #note_boom (note id: boom)\n\n" in note
+    # Context is truncated
+    assert "  " + "x" * 20000 + "\n  ... (truncated)" in note
+    assert "x" * 20001 not in note
+
+    _, note = await prepare_references(datasette_instance, {"id": "admin"}, refs("n2"))
+    assert "  Body of Secret plans" in note

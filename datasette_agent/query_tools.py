@@ -1,4 +1,5 @@
-"""Built-in save_query tool: store a query in Datasette's stored queries.
+"""Built-in stored query tools: describe_query reads one, save_query
+stores a new one.
 
 Validation and persistence go through Datasette's own JSON endpoints
 (GET /db/-/queries/analyze, POST /db/-/queries/store) called via
@@ -13,7 +14,8 @@ with the full SQL displayed to the user.
 import html as html_module
 import json
 
-from datasette.resources import DatabaseResource
+from datasette.resources import DatabaseResource, QueryResource
+from datasette.utils import named_parameters
 
 from .tools import AgentTool
 
@@ -163,8 +165,62 @@ async def save_query(
     )
 
 
+async def describe_query(datasette, actor, database, name):
+    """Title, description, parameters and SQL of a stored query."""
+    if not await datasette.allowed(
+        action="view-query",
+        resource=QueryResource(database=database, query=name),
+        actor=actor,
+    ):
+        return _error("Permission denied")
+    if database not in datasette.databases:
+        return _error(f"Database '{database}' not found")
+    query = await datasette.get_query(database, name)
+    if query is None:
+        return _error(f"Query '{name}' not found in database '{database}'")
+    return json.dumps(
+        {
+            "ok": True,
+            "database": database,
+            "name": name,
+            "title": query.title,
+            "description": query.description,
+            "is_write": bool(query.is_write),
+            # Queries configured without an explicit parameter list
+            # take theirs from the SQL, as the query page does.
+            "parameters": list(query.parameters or named_parameters(query.sql)),
+            # Some queries hide their SQL from users; respect that.
+            "sql": None if query.hide_sql else query.sql,
+            "sql_hidden": bool(query.hide_sql),
+            "url": datasette.urls.query(database, name),
+        }
+    )
+
+
 def get_query_tools():
     return [
+        AgentTool(
+            name="describe_query",
+            description=(
+                "Get the title, description, parameters and SQL of a "
+                "Datasette stored query"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "database": {
+                        "type": "string",
+                        "description": "Database the query belongs to",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the stored query",
+                    },
+                },
+                "required": ["database", "name"],
+            },
+            fn=describe_query,
+        ),
         AgentTool(
             name="save_query",
             description=SAVE_QUERY_DESCRIPTION,
@@ -199,5 +255,5 @@ def get_query_tools():
                 "required": ["database", "name", "sql"],
             },
             fn=save_query,
-        )
+        ),
     ]
