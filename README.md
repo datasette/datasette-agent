@@ -55,7 +55,7 @@ Visit `/-/agent/background` to launch background agents directly. Each one is gi
 
 Type `#` in the chat input (on `/-/agent` or in a conversation) to open an autocomplete list of the tables, views, stored queries and databases you have permission to see. Keep typing to filter it, use the up and down arrow keys to move through the matches, and press Enter or Tab (or tap a match) to tag it. Escape dismisses the list.
 
-A tagged item shows as a pill above the input and as `#name` in the message text; deleting that text or clicking the pill's × removes the tag. When the message is sent, a note listing the tagged items is attached to it for the model, along with instructions on which tool to use for each kind of item - `describe_table` for a table or view, `describe_query` for a stored query, `list_databases_and_tables` for a database. Nothing about the items is looked up at that point: the model reads them with its tools, and those tools check permissions. The note is kept out of the rendered conversation, where the tags appear as pills in the message, and the Markdown export lists them on a "Tagged:" line.
+A tagged item shows as a pill above the input and as `#name` in the message text; deleting that text or clicking the pill's × removes the tag. When the message is sent, a note listing the tagged items is attached to it for the model, with details for each item the user is allowed to see: the `CREATE TABLE`/`CREATE VIEW` statement for a table or view; the title, description, parameters and SQL (unless hidden) for a stored query; and the names of the visible tables and views for a database. Permissions are checked again on the server when the message is sent - an item the user can't see is listed without details. The model can use `describe_table` and `describe_query` to look up more. The note is kept out of the rendered conversation, where the tags appear as pills in the message, and the Markdown export lists them on a "Tagged:" line.
 
 Plugins can add their own kinds of taggable item - see [Registering reference types for # tagging](#registering-reference-types-for--tagging).
 
@@ -371,11 +371,12 @@ def register_agent_reference_types(datasette):
 - `search` - `async def search(datasette, actor, q, limit)` returning a list of `Reference` objects matching `q` (an empty `q` should return everything, up to `limit`). Only return items `actor` can see. An exception here is ignored so it can't break autocomplete for other types.
 - `url` - optional `def url(datasette, ref)` returning the URL a pill links to, or `None`. URLs are always computed on the server, never taken from the client.
 - `instructions` - optional text added to the model's note when an item of this type is tagged, usually telling it which tool to call with the reference's `id`.
+- `context` - optional `async def context(datasette, actor, ref)` (a plain function works too) returning text to include in the model's note under the reference, such as the item's content or schema, or `None`. It runs when the message is sent. **References come from the client, so this function must check that `actor` is allowed to see the item** and return `None` if not, or if the item doesn't exist. Text over 20,000 characters is truncated; an exception means no context.
 - `order` - optional tie-break when results of different types match equally well; built-ins use 0-2, the default is 100.
 
 `Reference` fields are `type`, `id` (an opaque string your tools can use to find the item), `name` (shown after the `#` and on the pill) and `description` (shown in the autocomplete list and included in the model's note).
 
-References are pointers, not content: when a message is sent, datasette-agent only checks the reference's shape and that its type is registered, then lists it for the model. Since anyone can send any id, the tools the model uses to read an item must do their own permission checks.
+When a message is sent, datasette-agent checks each reference's shape and that its type is registered, then lists it for the model along with any `context` text. Since anyone can send any id, both `context` and the tools the model uses to read an item must do their own permission checks.
 
 ## Rendering custom HTML from tools
 

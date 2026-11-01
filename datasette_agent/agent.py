@@ -349,9 +349,10 @@ async def run_agent(
 
     try:
         # #-tagged items: validate their shape and attach a note
-        # listing them to the user turn for the model.
+        # listing them - with details such as schemas, where the type
+        # provides them and the actor may see them - to the user turn.
         references, references_context = await prepare_references(
-            datasette, references or []
+            datasette, actor, references or []
         )
 
         # Persist the user turn as a MessageDict.

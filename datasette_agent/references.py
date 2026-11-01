@@ -25,7 +25,13 @@ from dataclasses import dataclass
 from typing import Callable
 
 from datasette.plugins import pm
-from datasette.utils import await_me_maybe, tilde_decode, tilde_encode
+from datasette.resources import DatabaseResource, QueryResource, TableResource
+from datasette.utils import (
+    await_me_maybe,
+    named_parameters,
+    tilde_decode,
+    tilde_encode,
+)
 
 REFERENCES_KEY = "agent_references"
 MAX_REFERENCES = 10
@@ -33,6 +39,9 @@ MAX_RESULTS = 20
 MAX_ID_CHARS = 1000
 MAX_NAME_CHARS = 500
 MAX_DESCRIPTION_CHARS = 500
+# Per-reference cap on context text, so tagging a huge item can't
+# swamp the model's context window.
+MAX_CONTEXT_CHARS = 20000
 
 
 @dataclass
@@ -62,6 +71,12 @@ class ReferenceType:
     # Added once to the model's note when this type is referenced -
     # typically which tool to call with the reference's id.
     instructions: str = ""
+    # Optional async (datasette, actor, Reference) -> str | None, run
+    # when a message is sent: text to include in the model's note under
+    # the reference, such as a table's schema. References come from the
+    # client, so this MUST check the actor can see the item and return
+    # None if not (or if the item doesn't exist).
+    context: Callable | None = None
     # Tie-break between equally good matches of different types.
     order: int = 100
 
@@ -191,19 +206,41 @@ def normalize_references(references, types):
     return normalized
 
 
-def references_note(references, types):
+def _truncate(text):
+    if len(text) <= MAX_CONTEXT_CHARS:
+        return text
+    return text[:MAX_CONTEXT_CHARS] + "\n... (truncated)"
+
+
+async def _reference_context(datasette, actor, reference_type, ref):
+    if reference_type is None or reference_type.context is None:
+        return None
+    try:
+        text = await await_me_maybe(reference_type.context(datasette, actor, ref))
+    except Exception:
+        # A failing plugin shouldn't stop the message being sent.
+        return None
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return _truncate(text.strip())
+
+
+async def references_note(datasette, actor, references, types):
     """The note the model sees alongside the user's text."""
     lines = [
         "[Note: the user tagged the following items in their message "
-        "using #name. Use your tools to look up anything you need "
-        "about them.]",
-        "",
+        "using #name. Details are included below where available; use "
+        "your tools to look up anything else you need about them.]",
     ]
     for ref in references:
         line = "- #{} ({} id: {})".format(ref.name, ref.type, ref.id)
         if ref.description:
             line += ": " + ref.description
+        lines.append("")
         lines.append(line)
+        context = await _reference_context(datasette, actor, types.get(ref.type), ref)
+        if context:
+            lines.extend("  " + l if l else "" for l in context.splitlines())
     # One copy of each instruction line, even when types share some.
     instructions = {}
     for ref_type in dict.fromkeys(ref.type for ref in references):
@@ -218,7 +255,7 @@ def references_note(references, types):
     return "\n".join(lines)
 
 
-async def prepare_references(datasette, references):
+async def prepare_references(datasette, actor, references):
     """Turn client-supplied references into (references, note) where
     references are JSON-ready dicts to persist. note is None when no
     valid references were supplied."""
@@ -226,7 +263,8 @@ async def prepare_references(datasette, references):
     refs = normalize_references(references, types)
     if not refs:
         return [], None
-    return [dataclasses.asdict(ref) for ref in refs], references_note(refs, types)
+    note = await references_note(datasette, actor, refs, types)
+    return [dataclasses.asdict(ref) for ref in refs], note
 
 
 async def add_reference_urls(datasette, messages):
@@ -348,6 +386,97 @@ async def _search_queries(datasette, actor, q, limit):
     ]
 
 
+async def _object_sql(db, name):
+    row = (
+        await db.execute(
+            "SELECT sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'view')",
+            [name],
+        )
+    ).first()
+    return row["sql"] if row and row["sql"] else None
+
+
+async def _table_context(datasette, actor, ref):
+    """The CREATE TABLE / CREATE VIEW statement."""
+    database, table = split_builtin_id(ref.id)
+    if database not in datasette.databases:
+        return None
+    if not await datasette.allowed(
+        action="view-table",
+        resource=TableResource(database=database, table=table),
+        actor=actor,
+    ):
+        return None
+    return await _object_sql(datasette.get_database(database), table)
+
+
+async def _query_context(datasette, actor, ref):
+    """Title, description, parameters and (unless hidden) SQL."""
+    database, name = split_builtin_id(ref.id)
+    if database not in datasette.databases:
+        return None
+    if not await datasette.allowed(
+        action="view-query",
+        resource=QueryResource(database=database, query=name),
+        actor=actor,
+    ):
+        return None
+    query = await datasette.get_query(database, name)
+    if query is None:
+        return None
+    lines = ["{} query".format("Write" if query.is_write else "Read-only")]
+    if query.title:
+        lines.append("Title: {}".format(query.title))
+    if query.description:
+        lines.append("Description: {}".format(query.description))
+    parameters = list(query.parameters or named_parameters(query.sql))
+    if parameters:
+        lines.append("Parameters: {}".format(", ".join(":" + p for p in parameters)))
+    if query.hide_sql:
+        lines.append("(The SQL for this query is hidden.)")
+    else:
+        lines.append("SQL:\n{}".format(query.sql))
+    return "\n".join(lines)
+
+
+async def _database_context(datasette, actor, ref):
+    """Names of the tables and views the actor can see - not their
+    schemas, which could be enormous."""
+    database = ref.id
+    if database not in datasette.databases:
+        return None
+    if not await datasette.allowed(
+        action="view-database",
+        resource=DatabaseResource(database=database),
+        actor=actor,
+    ):
+        return None
+    sql, params = await datasette.allowed_resources_sql(
+        action="view-table", actor=actor
+    )
+    params = dict(params)
+    params["agent_ref_database"] = database
+    allowed = {
+        row["child"]
+        for row in (
+            await datasette.get_internal_database().execute(
+                "SELECT child FROM ({}) WHERE parent = :agent_ref_database".format(sql),
+                params,
+            )
+        ).rows
+    }
+    db = datasette.get_database(database)
+    hidden = set(await db.hidden_table_names())
+    tables = [t for t in await db.table_names() if t in allowed and t not in hidden]
+    views = [v for v in await db.view_names() if v in allowed]
+    return "\n".join(
+        [
+            "Tables: {}".format(", ".join(tables) if tables else "(none)"),
+            "Views: {}".format(", ".join(views) if views else "(none)"),
+        ]
+    )
+
+
 def _database_url(datasette, ref):
     if ref.id not in datasette.databases:
         return None
@@ -381,9 +510,11 @@ def builtin_reference_types():
             label="table",
             search=_search_tables,
             url=_table_url,
+            context=_table_context,
             instructions=(
-                "For a tagged table or view, call describe_table with the "
-                "database and table from its id.\n" + _TILDE_NOTE
+                "Schemas of tagged tables and views are included above where "
+                "available; otherwise call describe_table with the database "
+                "and table from the id.\n" + _TILDE_NOTE
             ),
             order=0,
         ),
@@ -392,9 +523,11 @@ def builtin_reference_types():
             label="query",
             search=_search_queries,
             url=_query_url,
+            context=_query_context,
             instructions=(
-                "For a tagged stored query, call describe_query with the "
-                "database and query name from its id.\n" + _TILDE_NOTE
+                "Details of tagged stored queries are included above; "
+                "describe_query (database and query name from the id) "
+                "returns the same information.\n" + _TILDE_NOTE
             ),
             order=1,
         ),
@@ -403,9 +536,11 @@ def builtin_reference_types():
             label="db",
             search=_search_databases,
             url=_database_url,
+            context=_database_context,
             instructions=(
-                "A tagged database's id is the database name; call "
-                "list_databases_and_tables to see its tables."
+                "A tagged database's id is the database name. Its tables "
+                "and views are listed above; call describe_table with the "
+                "database name and a table or view name to see its columns."
             ),
             order=2,
         ),
