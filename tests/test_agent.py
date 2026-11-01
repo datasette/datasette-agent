@@ -88,39 +88,10 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
 
 
 @pytest.mark.asyncio
-async def test_system_prompt_hides_dbs_without_execute_sql(tmp_path):
-    """The system prompt lists the databases the agent can use. If the
-    actor lacks execute-sql on a database, naming it in the prompt is
-    misleading — the model will be told it can query something it can't."""
-    from datasette_agent.agent import _build_system_prompt
-
-    ds = Datasette(
-        memory=True,
-        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
-        config={
-            "permissions": {"datasette-agent": {"id": "user"}},
-            "databases": {
-                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
-            },
-        },
-        internal=str(tmp_path / "internal.db"),
-    )
-    public = ds.add_memory_database("public")
-    private = ds.add_memory_database("private")
-    await public.execute_write("CREATE TABLE IF NOT EXISTS p (id INTEGER PRIMARY KEY)")
-    await private.execute_write("CREATE TABLE IF NOT EXISTS s (id INTEGER PRIMARY KEY)")
-    await ds.invoke_startup()
-
-    prompt = await _build_system_prompt(ds, {"id": "user"})
-    assert "public" in prompt
-    assert "private" not in prompt
-
-
-@pytest.mark.asyncio
-async def test_system_prompt_includes_underscore_databases(tmp_path):
-    """Databases whose name starts with `_` (e.g. `_internal`, custom
-    underscore-prefixed databases) must appear in the system prompt
-    listing — the agent should see anything the actor can query."""
+async def test_system_prompt_does_not_change_with_schema_or_actor(tmp_path):
+    """Any change to the system prompt invalidates the provider's prompt
+    cache for the whole conversation, so it must not depend on the schema
+    or on who is asking. The model finds tables with its tools instead."""
     from datasette_agent.agent import _build_system_prompt
 
     ds = Datasette(
@@ -129,12 +100,17 @@ async def test_system_prompt_includes_underscore_databases(tmp_path):
         config={"permissions": {"datasette-agent": {"id": "user"}}},
         internal=str(tmp_path / "internal.db"),
     )
-    db = ds.add_memory_database("_custom")
-    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    db = ds.add_memory_database("mydatabase")
+    await db.execute_write("CREATE TABLE before_table (id INTEGER PRIMARY KEY)")
     await ds.invoke_startup()
 
-    prompt = await _build_system_prompt(ds, {"id": "user"})
-    assert "_custom" in prompt
+    before = await _build_system_prompt(ds, {"id": "user"})
+    await db.execute_write("CREATE TABLE after_table (id INTEGER PRIMARY KEY)")
+    assert await _build_system_prompt(ds, {"id": "user"}) == before
+    assert await _build_system_prompt(ds, {"id": "other"}) == before
+    assert "mydatabase" not in before
+    assert "before_table" not in before
+    assert "list_databases_and_tables" in before
 
 
 @pytest.mark.asyncio

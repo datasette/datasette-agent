@@ -404,6 +404,8 @@ Output includes:
 agent:
   list_databases_and_tables
     List all available databases and their tables
+  list_tables
+    List the tables in one database. Use this if list_databases_and_tables says there are too many tables to list
   describe_table
     Get column names, types, and foreign keys for a table
   sql_query

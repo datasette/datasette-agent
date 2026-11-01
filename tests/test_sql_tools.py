@@ -16,6 +16,7 @@ import json
 from urllib.parse import urlencode
 
 from datasette.app import Datasette
+from datasette.database import Database
 import pytest
 
 
@@ -177,7 +178,7 @@ async def test_sql_query_both_mode_returns_rows_and_html(datasette_with_data):
 
 @pytest.mark.asyncio
 async def test_sql_query_user_mode_hides_rows_from_model(datasette_with_data):
-    """`user` mode replaces the bulky `rows` array with a `row_count`
+    """`user` mode replaces the bulky `rows` array with a `num_rows_shown_to_user`
     summary the model can reason over, parks the full rows under `_rows`
     for export, and renders the HTML table for the user."""
     await _seed_items(datasette_with_data)
@@ -191,7 +192,7 @@ async def test_sql_query_user_mode_hides_rows_from_model(datasette_with_data):
     )
     data = json.loads(out)
     assert data["columns"] == ["id", "name", "qty"]
-    assert data["row_count"] == 3
+    assert data["num_rows_shown_to_user"] == 3
     assert "rows" not in data  # model-visible bulk rows are gone
     assert "_html" in data
     assert "_rows" in data
@@ -240,7 +241,7 @@ async def test_sql_query_user_mode_preserves_large_user_visible_payload(
     )
     assert len(out) > 10000
     data = json.loads(out)
-    assert data["row_count"] == 10
+    assert data["num_rows_shown_to_user"] == 10
     assert len(data["_rows"]) == 10
     assert "<table" in data["_html"]
 
@@ -250,8 +251,8 @@ async def test_sql_query_user_mode_strips_to_summary_for_model(
     datasette_with_data,
 ):
     """After prepare_tool_output_for_model (i.e. what the model actually
-    sees in history rebuild), `user` mode leaves columns + row_count +
-    truncated, but nothing rowset-shaped."""
+    sees in history rebuild), `user` mode leaves columns +
+    num_rows_shown_to_user + has_more_rows, but nothing rowset-shaped."""
     from datasette_agent.messages import prepare_tool_output_for_model
 
     await _seed_items(datasette_with_data)
@@ -267,8 +268,95 @@ async def test_sql_query_user_mode_strips_to_summary_for_model(
     assert "_html" not in stripped
     assert "_rows" not in stripped
     assert "rows" not in stripped
-    assert stripped["row_count"] == 3
+    assert stripped["num_rows_shown_to_user"] == 3
+    assert stripped["has_more_rows"] is False
     assert stripped["columns"] == ["id", "name", "qty"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["user", "both"])
+async def test_sql_query_shows_single_row_to_model_without_count(
+    datasette_with_data, display
+):
+    """Small models mistake the number of rows for the answer - a COUNT(*) of 3
+    returns 1 row - so a single row is shown to the model as well as the user,
+    without a count."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    raw = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select count(*) as n from items",
+        display=display,
+    )
+    assert "<table" in json.loads(raw)["_html"]
+    stripped = json.loads(prepare_tool_output_for_model(raw))
+    assert stripped["rows"] == [{"n": 3}]
+    assert "num_rows_shown_to_user" not in stripped
+    assert "note" not in stripped
+
+
+@pytest.mark.asyncio
+async def test_sql_query_both_mode_counts_rows_when_model_copy_is_cut():
+    """The user's table has every returned row but the model's copy is cut to
+    fit the output limit, so the model needs telling what the user can see."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    ds = Datasette(memory=True)
+    await ds.invoke_startup()
+    raw = await _get_sql_tool().fn(
+        datasette=ds,
+        actor={"id": "user"},
+        database="_memory",
+        sql=(
+            "with recursive n(i) as (select 1 union all select i + 1 from n "
+            "where i < 1500) select i, 'some text to fill the limit' as t from n"
+        ),
+        display="both",
+    )
+    assert "<td>1000</td>" in json.loads(raw)["_html"]
+    stripped = json.loads(prepare_tool_output_for_model(raw))
+    assert stripped["num_rows_shown_to_user"] == 1000
+    assert stripped["has_more_rows"] is True
+    assert len(stripped["rows"]) < 1000
+
+
+@pytest.mark.asyncio
+async def test_sql_query_user_mode_says_how_to_read_hidden_rows(datasette_with_data):
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    raw = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items",
+        display="user",
+    )
+    stripped = json.loads(prepare_tool_output_for_model(raw))
+    assert stripped["num_rows_shown_to_user"] == 3
+    assert "display set to both" in stripped["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["model", "both", "user"])
+async def test_sql_query_has_more_rows(display):
+    ds = Datasette(memory=True, settings={"max_returned_rows": 2})
+    await ds.invoke_startup()
+    out = await _get_sql_tool().fn(
+        datasette=ds,
+        actor={"id": "user"},
+        database="_memory",
+        sql="select value from json_each('[1, 2, 3]')",
+        display=display,
+    )
+    data = json.loads(out)
+    assert data["has_more_rows"] is True
+    assert "truncated" not in data
 
 
 @pytest.mark.asyncio
@@ -443,6 +531,119 @@ async def test_list_databases_hides_dbs_without_execute_sql(tmp_path):
     names = {d["database_name"] for d in result["databases"]}
     assert "public" in names
     assert "private" not in names
+
+
+async def _datasette_with_tables(tmp_path, table_counts, config=None):
+    ds = Datasette(config=config, internal=str(tmp_path / "internal.db"))
+    ds.remove_database("_memory")
+    for name, count in table_counts.items():
+        db = ds.add_database(
+            Database(ds, path=str(tmp_path / f"{name}.db"), is_mutable=True), name=name
+        )
+
+        def create_tables(conn, name=name, count=count):
+            for i in range(count):
+                conn.execute(f"CREATE TABLE {name}_table_{i:04d} (id INTEGER)")
+
+        await db.execute_write_fn(create_tables)
+    await ds.invoke_startup()
+    return ds
+
+
+@pytest.mark.asyncio
+async def test_list_databases_and_tables_keeps_every_database_when_too_long(tmp_path):
+    """A listing too long for the model must not silently lose databases, or
+    the model has no way of knowing they exist."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+    from datasette_agent.sql_tools import _list_databases_and_tables
+
+    ds = await _datasette_with_tables(tmp_path, {"small": 5, "big": 700})
+    output = prepare_tool_output_for_model(
+        await _list_databases_and_tables(ds, {"id": "user"})
+    )
+    result = json.loads(output)
+    assert "agent_output_truncated" not in result
+    assert result["databases"] == [
+        {"database_name": "small", "table_count": 5},
+        {"database_name": "big", "table_count": 700},
+    ]
+    assert "list_tables" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_list_tables_tool_requires_database():
+    from datasette_agent.sql_tools import get_default_tools
+
+    tool = next(t for t in get_default_tools() if t.name == "list_tables")
+    assert tool.input_schema["required"] == ["database"]
+    assert list(tool.input_schema["properties"]) == ["database"]
+
+
+@pytest.mark.asyncio
+async def test_list_tables_returns_tables_for_one_database(tmp_path):
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(tmp_path, {"one": 2, "two": 1})
+    result = json.loads(await _list_tables(ds, {"id": "user"}, "one"))
+    assert result == {
+        "database": "one",
+        "table_names": ["one_table_0000", "one_table_0001"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_tables_unknown_database_lists_only_permitted(tmp_path):
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(
+        tmp_path,
+        {"public": 1, "private": 1},
+        config={
+            "databases": {
+                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
+            }
+        },
+    )
+    result = json.loads(await _list_tables(ds, {"id": "user"}, "nope"))
+    assert result["error"] == "Database 'nope' not found"
+    assert result["available_databases"] == ["public"]
+
+
+@pytest.mark.asyncio
+async def test_list_tables_permission_denied(tmp_path):
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(
+        tmp_path,
+        {"private": 1},
+        config={
+            "databases": {
+                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
+            }
+        },
+    )
+    result = json.loads(await _list_tables(ds, {"id": "user"}, "private"))
+    assert result == {"error": "Permission denied"}
+
+
+@pytest.mark.asyncio
+async def test_list_tables_too_long_says_how_to_find_the_rest(tmp_path):
+    from datasette_agent.messages import (
+        MODEL_TOOL_OUTPUT_LIMIT,
+        prepare_tool_output_for_model,
+    )
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(tmp_path, {"big": 1500})
+    raw = await _list_tables(ds, {"id": "user"}, "big")
+    assert len(raw) <= MODEL_TOOL_OUTPUT_LIMIT
+
+    result = json.loads(prepare_tool_output_for_model(raw))
+    assert "agent_output_truncated" not in result
+    assert result["table_count"] == 1500
+    assert 0 < len(result["table_names"]) < 1500
+    assert result["table_names"][0] == "big_table_0000"
+    assert "sqlite_master" in result["note"]
 
 
 @pytest.mark.asyncio
@@ -840,7 +1041,7 @@ async def test_sql_query_bound_parameters(datasette_with_data, display, legacy_p
         params=params,
     )
     data = json.loads(out)
-    assert data["_rows" if display == "user" else "rows"] == [
+    assert data["rows"] == [
         {
             "text": "O'Reilly & friends",
             "integer_value": 3,

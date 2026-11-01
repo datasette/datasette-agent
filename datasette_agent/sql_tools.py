@@ -15,7 +15,21 @@ from datasette.write_sql import (
     operation_is_write,
 )
 
+from .messages import MODEL_TOOL_OUTPUT_LIMIT
 from .tools import AgentTool
+
+_TOO_MANY_TABLES_NOTE = (
+    "There are too many tables to list them all here. "
+    "Call list_tables with a database name to see the tables in that database."
+)
+_SOME_TABLES_NOTE = (
+    "Only some of the tables are listed. To find a table, use sql_query to search "
+    "for it: select name from sqlite_master where type = 'table' and name like '%word%'"
+)
+_USER_DISPLAY_NOTE = (
+    "The user can see these rows but you cannot. "
+    "To read the values, run the query again with display set to both."
+)
 
 _SQL_PARAMS_SCHEMA = {
     "type": "array",
@@ -515,19 +529,80 @@ def _success_html(database, results):
     )
 
 
-async def _list_databases_and_tables(datasette, actor):
-    databases = []
-    for db_name, db in datasette.databases.items():
-        if not await datasette.allowed(
+async def _databases_with_execute_sql(datasette, actor):
+    return [
+        db_name
+        for db_name in datasette.databases
+        if await datasette.allowed(
             action="execute-sql",
             resource=DatabaseResource(database=db_name),
             actor=actor,
-        ):
-            continue
+        )
+    ]
+
+
+async def _list_databases_and_tables(datasette, actor):
+    databases = []
+    for db_name in await _databases_with_execute_sql(datasette, actor):
+        db = datasette.get_database(db_name)
         databases.append(
             {"database_name": db_name, "table_names": await db.table_names()}
         )
-    return json.dumps({"databases": databases})
+    output = json.dumps({"databases": databases})
+    if len(output) <= MODEL_TOOL_OUTPUT_LIMIT:
+        return output
+    # Too long for the model, and the generic truncation would drop whole
+    # databases - keep them all and say how to get their tables instead
+    return json.dumps(
+        {
+            "databases": [
+                {
+                    "database_name": database["database_name"],
+                    "table_count": len(database["table_names"]),
+                }
+                for database in databases
+            ],
+            "note": _TOO_MANY_TABLES_NOTE,
+        }
+    )
+
+
+async def _list_tables(datasette, actor, database: str):
+    if not await datasette.allowed(
+        action="execute-sql",
+        resource=DatabaseResource(database=database),
+        actor=actor,
+    ):
+        return json.dumps({"error": "Permission denied"})
+    if database not in datasette.databases:
+        return json.dumps(
+            {
+                "error": f"Database '{database}' not found",
+                "available_databases": await _databases_with_execute_sql(
+                    datasette, actor
+                ),
+            }
+        )
+    table_names = await datasette.get_database(database).table_names()
+    output = json.dumps({"database": database, "table_names": table_names})
+    if len(output) <= MODEL_TOOL_OUTPUT_LIMIT:
+        return output
+    # Leave room for the other keys, so the generic truncation stays out of it
+    remaining = MODEL_TOOL_OUTPUT_LIMIT - len(_SOME_TABLES_NOTE) - len(database) - 100
+    shown = []
+    for table_name in table_names:
+        remaining -= len(json.dumps(table_name)) + 2
+        if remaining < 0:
+            break
+        shown.append(table_name)
+    return json.dumps(
+        {
+            "database": database,
+            "table_count": len(table_names),
+            "table_names": shown,
+            "note": _SOME_TABLES_NOTE,
+        }
+    )
 
 
 async def _describe_table(datasette, actor, database: str, table: str):
@@ -605,33 +680,38 @@ async def _sql_query(
         query_ms = round((time.perf_counter() - start) * 1000, 2)
         rows = [dict(row) for row in result.rows]
 
-        if display == "user":
+        # A single row costs little and is often the answer, such as a COUNT(*)
+        if display == "user" and len(rows) > 1:
             # Hide bulk rows from the model: surface a summary the model
-            # can reason over (columns + row_count) and stash the actual
-            # rows under _rows for export.
+            # can reason over (columns + num_rows_shown_to_user) and stash the
+            # actual rows under _rows for export.
             payload = {
                 "columns": result.columns,
-                "row_count": len(rows),
-                "truncated": result.truncated,
+                "num_rows_shown_to_user": len(rows),
+                "note": _USER_DISPLAY_NOTE,
+                "has_more_rows": result.truncated,
                 "query_ms": query_ms,
                 "_html": _render_rows_html(result.columns, rows, result.truncated),
                 "_rows": rows,
                 "_edit_sql_url": edit_sql_url,
             }
-        elif display == "both":
+        elif display in ("both", "user"):
             payload = {
                 "columns": result.columns,
                 "rows": rows,
-                "truncated": result.truncated,
+                "has_more_rows": result.truncated,
                 "query_ms": query_ms,
                 "_html": _render_rows_html(result.columns, rows, result.truncated),
                 "_edit_sql_url": edit_sql_url,
             }
+            # The model's copy of the rows may be cut to fit the output limit
+            if len(rows) > 1:
+                payload["num_rows_shown_to_user"] = len(rows)
         else:  # "model" — unchanged default
             payload = {
                 "columns": result.columns,
                 "rows": rows,
-                "truncated": result.truncated,
+                "has_more_rows": result.truncated,
                 "query_ms": query_ms,
                 "_edit_sql_url": edit_sql_url,
             }
@@ -742,6 +822,21 @@ def get_default_tools():
             fn=_list_databases_and_tables,
         ),
         AgentTool(
+            name="list_tables",
+            description="List the tables in one database. Use this if list_databases_and_tables says there are too many tables to list",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "database": {
+                        "type": "string",
+                        "description": "The database name",
+                    },
+                },
+                "required": ["database"],
+            },
+            fn=_list_tables,
+        ),
+        AgentTool(
             name="describe_table",
             description="Get column names, types, and foreign keys for a table",
             input_schema={
@@ -787,8 +882,8 @@ def get_default_tools():
                             "AND renders an HTML table the user sees — pick "
                             "this when you'll comment on the data you're "
                             "answering with. 'user' renders the table for "
-                            "the user but only returns columns + row_count "
-                            "to you — pick this for 'show me…' style "
+                            "the user but only returns columns + "
+                            "num_rows_shown_to_user to you — pick this for 'show me…' style "
                             "queries where you don't need to read the rows."
                         ),
                     },

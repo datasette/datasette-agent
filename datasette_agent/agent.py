@@ -1,7 +1,6 @@
 import json
 from datetime import datetime, timezone
 
-from datasette.resources import DatabaseResource
 from datasette_llm import LLM
 
 from .context import current_conversation_id
@@ -26,20 +25,20 @@ from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
 
 async def _build_system_prompt(datasette, actor):
-    parts = [
+    return (
         "You are a helpful data analysis assistant. "
-        "You have access to tools that let you explore and query databases. "
+        "You have access to tools that let you explore and query SQLite databases. "
         "Use the tools to answer questions about the data. "
-        "The available databases and tables are listed below - do not call "
-        "list_databases_and_tables or describe_table if you already have the "
-        "information you need from this prompt or the conversation history. "
+        "Call list_databases_and_tables to find out which databases and tables "
+        "are available. Do not call list_databases_and_tables or describe_table "
+        "if you already have the information you need from the conversation "
+        "history, but list again if a table seems to be missing - the list can "
+        "go out of date. "
         "Only describe a table when you need column details you haven't seen yet.\n\n"
         "When calling a tool, pass the arguments directly as a flat JSON object matching "
         "the tool's parameters. Always explicitly specify the 'database' parameter for any "
-        "database tools (e.g., sql_query, describe_table) based on the available databases "
-        "listed below. For sql_query, provide your SQL in the 'sql' parameter. "
-        "Do NOT wrap tool arguments inside a 'kwargs' key (e.g., "
-        'do not use {"kwargs": {"param": "value"}}).\n\n'
+        "database tools (e.g., sql_query, describe_table), using a database name from "
+        "list_databases_and_tables. For sql_query, provide your SQL in the 'sql' parameter.\n\n"
         "Your output will be rendered as markdown. "
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
@@ -54,7 +53,7 @@ async def _build_system_prompt(datasette, actor):
         "the user. Pick this whenever your answer will reference specific "
         "data — the user gets the table inline, you get to comment on it.\n"
         "- `user`: a rendered table is shown to the user; you only see "
-        "column names and row_count, not the rows themselves. Pick this "
+        "column names and num_rows_shown_to_user, not the rows themselves. Pick this "
         'for "show me…", "list the…", or "what are the top…" requests '
         "where the user wants to read the data and you don't need to "
         "summarize the contents. This saves tokens on bulk fetches.\n\n"
@@ -65,23 +64,7 @@ async def _build_system_prompt(datasette, actor):
         "doesn't: a one-line takeaway, a caveat, a follow-up suggestion, "
         "or just a brief framing sentence. If there's nothing to add, "
         "say nothing."
-    ]
-    db_info = {}
-    for db_name, db in datasette.databases.items():
-        if not await datasette.allowed(
-            action="execute-sql",
-            resource=DatabaseResource(database=db_name),
-            actor=actor,
-        ):
-            continue
-        tables = await db.table_names()
-        if tables:
-            db_info[db_name] = tables
-    if db_info:
-        parts.append("\nAvailable databases and tables:")
-        for db_name, tables in db_info.items():
-            parts.append(f"\n  {db_name}: {', '.join(tables)}")
-    return "\n".join(parts)
+    )
 
 
 async def _send_sse(writer, event, data):
