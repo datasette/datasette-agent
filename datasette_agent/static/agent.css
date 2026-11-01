@@ -1506,6 +1506,27 @@ body.agent-workspace .agent-chat-pane {
   z-index: 2;
 }
 
+/* Covers the browser's own error page when a page refuses to be framed. */
+.agent-panel-error {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  padding: 1rem;
+  text-align: center;
+  color: #555;
+  background: #fff;
+}
+
+.agent-panel-error[hidden] {
+  display: none;
+}
+
+.agent-panel-error p {
+  margin: 0 0 0.5rem;
+}
+
 .agent-panel-opened {
   margin: 0;
   font-size: 0.85rem;

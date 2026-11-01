@@ -25,7 +25,22 @@ function setupPanel() {
   let hidden = false;
   let currentFrame = null;
   let pendingFrame = null;
+  // The page on this site the panel is navigating to, if it is known.
+  let expectedUrl = null;
+  const errorBox = panel.querySelector(".agent-panel-error");
   const observedFrames = new WeakSet();
+
+  // The path of a URL on this site, or null for anywhere else.
+  function localPath(href) {
+    const url = new URL(href, window.location.href);
+    if (url.origin !== window.location.origin) return null;
+    return url.pathname + url.search + url.hash;
+  }
+
+  function setError(url) {
+    errorBox.hidden = !url;
+    if (url) errorBox.querySelector("a").href = url;
+  }
 
   function load() {
     try {
@@ -86,6 +101,7 @@ function setupPanel() {
   }
 
   function loadFrame(url) {
+    expectedUrl = localPath(url);
     if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
     const nextFrame = currentFrame ? document.createElement("iframe") : firstFrame;
     if (currentFrame) {
@@ -123,15 +139,23 @@ function setupPanel() {
 
   function frameLoaded(loadedFrame) {
     if (loadedFrame !== pendingFrame && loadedFrame !== currentFrame) return;
-    let loc;
+    let loc, href;
     try {
       loc = loadedFrame.contentWindow.location;
+      href = loc.href;
     } catch (err) {
-      // An off-site navigation cannot be inspected, but should still be shown.
+      // An off-site navigation, or a page that refuses to be framed, cannot
+      // be inspected but should still be shown. Only reading from a
+      // cross-origin Location throws, not getting hold of it. A page on this
+      // site only looks cross-origin if the browser refused to frame it.
+      setError(expectedUrl);
+      expectedUrl = null;
       revealFrame(loadedFrame);
       return;
     }
-    if (!loc || loc.href === "about:blank") return;
+    if (href === "about:blank") return;
+    expectedUrl = null;
+    setError(null);
     if (loc.origin !== window.location.origin) {
       revealFrame(loadedFrame);
       return;
@@ -154,6 +178,12 @@ function setupPanel() {
     loadedFrame.contentWindow.addEventListener("pagehide", () => {
       if (loadedFrame === currentFrame) panel.classList.add("agent-panel-loading");
     });
+    // Remember where links in this page lead, because a blocked page's URL
+    // can't be read back from the frame.
+    loadedFrame.contentDocument.addEventListener("click", e => {
+      const link = e.target.closest("a[href]");
+      if (link && !e.defaultPrevented) expectedUrl = localPath(link.href);
+    });
     showUrl(url);
     // Give nested app frames a chance to paint before uncovering this page.
     requestAnimationFrame(() => requestAnimationFrame(() => revealFrame(loadedFrame)));
@@ -166,6 +196,8 @@ function setupPanel() {
       loadFrame(url);
       return;
     }
+    expectedUrl = localPath(url);
+    setError(null);
     if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
     pendingFrame = null;
     panel.classList.add("agent-panel-loading");
