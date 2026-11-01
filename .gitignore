@@ -9,6 +9,7 @@ venv
 *.egg-info
 .DS_Store
 .vscode
+.claude
 dist
 build
 uv.lock
