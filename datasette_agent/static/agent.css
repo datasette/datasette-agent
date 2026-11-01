@@ -262,6 +262,13 @@
   overflow: auto;
 }
 
+/* The table scrolls itself. If the wrapper capped its height too, a tall table
+   would use up all of it and push the "View SQL query" link out of view. */
+.agent-rich-result:has(> .agent-sql-result-scroll) {
+  max-height: none;
+  overflow: visible;
+}
+
 .agent-rich-result iframe {
   max-height: 800px;
 }
