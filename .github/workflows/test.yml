@@ -13,8 +13,8 @@ jobs:
     - uses: actions/setup-node@v7
       with:
         node-version: 22
-    - name: Test streaming Markdown parser
-      run: node --test tests/test_smd.mjs
+    - name: Test JavaScript
+      run: node --test tests/*.mjs
 
   test:
     runs-on: ubuntu-latest
@@ -34,4 +34,18 @@ jobs:
         pip install . --group dev
     - name: Run tests
       run: |
-        python -m pytest
+        python -m pytest --ignore=tests/test_agent_links_browser.py
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.13"
+    - name: Install dependencies and Chromium
+      run: |
+        pip install . --group dev
+        playwright install --with-deps chromium
+    - name: Test link confirmation in the browser
+      run: python -m pytest tests/test_agent_links_browser.py

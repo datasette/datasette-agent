@@ -1,5 +1,21 @@
 import * as smd from "./smd.js";
 import {attachReferencePicker, renderTextWithReferences} from "./references.js";
+import {prepareLinks, setLinkDestination, setupExternalLinks} from "./agent-links.js";
+
+setupExternalLinks(document.getElementById("messages"));
+
+function markdownRenderer(root) {
+  const renderer = smd.default_renderer(root);
+  const setAttr = renderer.set_attr;
+  renderer.set_attr = (data, type, value) => {
+    if (type === smd.HREF) {
+      setLinkDestination(data.nodes[data.index], value);
+    } else {
+      setAttr(data, type, value);
+    }
+  };
+  return renderer;
+}
 
 // Auto-follow: only programmatically scroll to bottom while the user is
 // already pinned there. If they scroll up to read earlier content, stop
@@ -93,7 +109,7 @@ function appendMessage(role, content, references = null) {
   div.appendChild(contentDiv);
   if (role === "assistant" && content) {
     // Render existing content as markdown
-    const renderer = smd.default_renderer(contentDiv);
+    const renderer = markdownRenderer(contentDiv);
     const parser = smd.parser(renderer);
     smd.parser_write(parser, content);
     smd.parser_end(parser);
@@ -131,7 +147,7 @@ function startReasoningBlock() {
   contentDiv.className = "agent-reasoning-content";
   details.appendChild(contentDiv);
   messages.appendChild(details);
-  const renderer = smd.default_renderer(contentDiv);
+  const renderer = markdownRenderer(contentDiv);
   const parser = smd.parser(renderer);
   // expectedOpen tracks the open state we set programmatically. A toggle
   // event where details.open !== expectedOpen came from the user clicking
@@ -190,7 +206,7 @@ function startAssistantMessage() {
   setAssistantCopyText(div, "");
   messages.appendChild(div);
 
-  const renderer = smd.default_renderer(contentDiv);
+  const renderer = markdownRenderer(contentDiv);
   const parser = smd.parser(renderer);
   return { messageEl: div, contentDiv, parser, rawText: "" };
 }
@@ -313,7 +329,7 @@ function createSqlEditLink(url) {
   const editLink = document.createElement("p");
   editLink.className = "agent-sql-edit-link";
   const link = document.createElement("a");
-  link.href = url;
+  setLinkDestination(link, url);
   link.target = "_blank";
   link.rel = "noopener";
   link.textContent = "View SQL query";
@@ -354,6 +370,7 @@ function appendToolResult(name, output, id = null) {
     const container = document.createElement("div");
     container.className = "agent-rich-result";
     container.insertAdjacentHTML("beforeend", parsed._html);
+    prepareLinks(container);
     if (parsed._edit_sql_url) {
       container.appendChild(createSqlEditLink(parsed._edit_sql_url));
     }
@@ -698,6 +715,7 @@ function renderBrowserTask(task) {
   // the textual placeholder - never by walking runtime markup.
   htmlEl.dataset.taskId = task.id;
   htmlEl.insertAdjacentHTML("beforeend", task.html);
+  prepareLinks(htmlEl);
   // Append first so scripts can find sibling elements in the DOM
   messages.appendChild(htmlEl);
   const entry = {statusEl, htmlEl, task, expiryTimer: null};
@@ -955,7 +973,7 @@ document.querySelectorAll(".agent-message-assistant .agent-message-content").for
   const messageEl = el.closest(".agent-message-assistant");
   if (messageEl) setAssistantCopyText(messageEl, raw);
   el.textContent = "";
-  const renderer = smd.default_renderer(el);
+  const renderer = markdownRenderer(el);
   const parser = smd.parser(renderer);
   smd.parser_write(parser, raw);
   smd.parser_end(parser);
@@ -980,7 +998,7 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   const raw = contentEl.textContent;
   if (!raw) return;
   contentEl.textContent = "";
-  const renderer = smd.default_renderer(contentEl);
+  const renderer = markdownRenderer(contentEl);
   const parser = smd.parser(renderer);
   smd.parser_write(parser, raw);
   smd.parser_end(parser);

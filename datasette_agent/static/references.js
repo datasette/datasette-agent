@@ -4,6 +4,8 @@
 // the picked references travel alongside it so the server can tell
 // the model what was tagged.
 
+import {setLinkDestination} from "./agent-links.js";
+
 const SEARCH_URL = "/-/agent/api/references";
 const SEARCH_DEBOUNCE_MS = 120;
 
@@ -23,8 +25,8 @@ function typeClass(ref) {
 
 export function createReferencePill(ref) {
   const pill = document.createElement(ref.url ? "a" : "span");
-  if (ref.url) pill.href = ref.url;
   pill.className = "agent-ref-pill " + typeClass(ref);
+  if (ref.url) setLinkDestination(pill, ref.url);
   pill.title = ref.description || ref.name;
   const type = document.createElement("span");
   type.className = "agent-ref-pill-type";
