@@ -49,7 +49,7 @@
   {% for conv in conversations %}
   <li>
     <a href="{{ urls.path('/-/agent/' ~ conv.id) }}" class="agent-conversation-row">
-      <span class="agent-conversation-title">{{ conv.title or "Untitled conversation" }}</span>
+      <span class="agent-conversation-title">{{ conv.title or "Untitled conversation" }}{% if conv.id in running %}<span class="agent-running" title="The agent is still working on this conversation"><span class="agent-running-dot" aria-hidden="true"></span><span class="agent-visually-hidden">(running)</span></span>{% endif %}</span>
       <time class="agent-conversation-date" datetime="{{ conv.updated_at }}">{{ conv.updated_at | agent_format_recent_datetime }}</time>
     </a>
   </li>

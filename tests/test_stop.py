@@ -244,6 +244,30 @@ async def test_stop_requires_post(ds):
 
 
 @pytest.mark.asyncio
+async def test_index_marks_running_conversations(ds, model_calls):
+    running_id = await _new_conversation(ds)
+    idle_id = await _new_conversation(ds)
+    turn = _start_turn(ds, running_id, "hang")
+    await asyncio.wait_for(model_calls["streaming"].wait(), 5)
+    try:
+        html = (await ds.client.get("/-/agent", cookies=_cookies(ds))).text
+        rows = {
+            conversation_id: html.split(f"/-/agent/{conversation_id}")[1].split(
+                "</li>"
+            )[0]
+            for conversation_id in (running_id, idle_id)
+        }
+        assert 'class="agent-running"' in rows[running_id]
+        assert "(running)" in rows[running_id]
+        assert "agent-running" not in rows[idle_id]
+    finally:
+        await _stop(ds, running_id)
+        await asyncio.wait_for(turn, 5)
+    html = (await ds.client.get("/-/agent", cookies=_cookies(ds))).text
+    assert 'class="agent-running"' not in html
+
+
+@pytest.mark.asyncio
 async def test_second_turn_rejected_while_running(ds, model_calls):
     conversation_id = await _new_conversation(ds)
     turn = _start_turn(ds, conversation_id, "hang")

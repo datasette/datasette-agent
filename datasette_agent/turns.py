@@ -138,4 +138,6 @@ def stop_turn(datasette, conversation_id):
     control.request_stop()
     return True
 
+
+def running_conversation_ids(datasette):
     return set(_running_turns(datasette))

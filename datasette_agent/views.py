@@ -23,6 +23,7 @@ from .schema import ensure_tables
 from .turns import (
     ALREADY_RUNNING_MESSAGE,
     get_turn,
+    running_conversation_ids,
     stop_turn,
 )
 
@@ -117,6 +118,7 @@ async def agent_index(request, datasette):
             "agent_index.html",
             {
                 "conversations": conversations,
+                "running": running_conversation_ids(datasette),
                 "models": models,
                 "default_model": default_model,
                 "page": page,

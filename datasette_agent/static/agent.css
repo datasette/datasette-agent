@@ -996,6 +996,40 @@
   white-space: nowrap;
 }
 
+/* A conversation whose turn is still running */
+.agent-running {
+  display: inline-block;
+  margin-left: 0.4em;
+  vertical-align: middle;
+}
+
+.agent-running-dot {
+  display: block;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: #007bff;
+  animation: agent-running-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes agent-running-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-running-dot {
+    animation: none;
+  }
+}
+
 .agent-pagination {
   display: flex;
   align-items: center;
