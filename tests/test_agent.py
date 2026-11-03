@@ -837,6 +837,50 @@ async def test_reasoning_streams_and_persists(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_is_first_message(datasette_instance, cookies, monkeypatch):
+    """Adapters such as OpenAI build requests from prompt.messages alone,
+    so the system prompt must be in that list on every turn, not just
+    on prompt.system. See #25."""
+    import llm_echo
+
+    from datasette_agent.agent import _build_system_prompt
+
+    seen = []
+    original_execute = llm_echo.EchoAsync.execute
+
+    async def recording_execute(self, prompt, *args, **kwargs):
+        seen.append(prompt.messages)
+        async for chunk in original_execute(self, prompt, *args, **kwargs):
+            yield chunk
+
+    monkeypatch.setattr(llm_echo.EchoAsync, "execute", recording_execute)
+    ds = datasette_instance
+    expected = await _build_system_prompt(ds, {"id": "user"})
+
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hi"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+    for message in ("First question", "Second question"):
+        response = await ds.client.post(
+            f"/-/agent/{conversation_id}/stream",
+            content=json.dumps({"message": message}),
+            headers={"Content-Type": "application/json"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200
+
+    assert len(seen) >= 2
+    for messages in seen:
+        assert messages[0].role == "system"
+        assert messages[0].parts[0].text == expected
+        assert [m.role for m in messages].count("system") == 1
+
+
+@pytest.mark.asyncio
 async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
     from llm.parts import StreamEvent
 
