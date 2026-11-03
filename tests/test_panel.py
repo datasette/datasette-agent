@@ -208,6 +208,7 @@ async def test_conversation_page_has_panel(datasette_instance, cookies):
     response = await ds.client.get(f"/-/agent/{conversation_id}", cookies=cookies)
     assert response.status_code == 200
     assert 'class="agent-panel"' in response.text
+    assert 'class="agent-panel-error" role="alert" hidden' in response.text
     assert "agent-panel.js?_hash=" in response.text
     assert "data-panel-url" not in response.text
 
