@@ -63,8 +63,8 @@ class ReferenceType:
     type: str
     # Short label shown on pills and in the autocomplete, e.g. "table".
     label: str
-    # async (datasette, actor, q, limit) -> list[Reference]. Must only
-    # return items the actor is allowed to see.
+    # Sync or async (datasette, actor, q, limit) -> list[Reference].
+    # Must only return items the actor is allowed to see.
     search: Callable
     # (datasette, Reference) -> str | None
     url: Callable | None = None
@@ -131,7 +131,9 @@ async def search_references(datasette, actor, q="", limit=MAX_RESULTS):
     results = []
     for reference_type in types.values():
         try:
-            found = await reference_type.search(datasette, actor, q, limit)
+            found = await await_me_maybe(
+                reference_type.search(datasette, actor, q, limit)
+            )
         except Exception:
             # One broken plugin shouldn't break autocomplete.
             continue

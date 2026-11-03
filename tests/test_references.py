@@ -374,6 +374,37 @@ async def test_broken_plugin_search_does_not_break_others(
     assert response.json()["results"] == []
 
 
+class SyncSearchPlugin:
+    @hookimpl
+    def register_agent_reference_types(self, datasette):
+        # A plain (non-async) search function
+        def search(datasette, actor, q, limit):
+            return [Reference(type="color", id="c1", name="crimson")]
+
+        return [ReferenceType(type="color", label="color", search=search)]
+
+
+@pytest.mark.asyncio
+async def test_plugin_reference_type_sync_search(datasette_instance, cookies):
+    pm.register(SyncSearchPlugin(), name="test-sync-search-plugin")
+    try:
+        response = await datasette_instance.client.get(
+            "/-/agent/api/references?q=crimson", cookies=cookies
+        )
+    finally:
+        pm.unregister(name="test-sync-search-plugin")
+    assert response.json()["results"] == [
+        {
+            "type": "color",
+            "id": "c1",
+            "name": "crimson",
+            "description": "",
+            "label": "color",
+            "url": None,
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_stream_with_references(datasette_instance, cookies):
     ds = datasette_instance
