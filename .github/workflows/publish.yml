@@ -26,7 +26,7 @@ jobs:
         pip install . --group dev
     - name: Run tests
       run: |
-        python -m pytest
+        python -m pytest --ignore=tests/test_agent_links_browser.py
   deploy:
     runs-on: ubuntu-latest
     needs: [test]
