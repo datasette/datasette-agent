@@ -130,17 +130,21 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
   }
 });
 
-// Keep the running indicators current. Polls every 2 seconds while a
-// listed conversation is running and every 10 seconds otherwise, and
-// not at all while the tab is hidden.
-(function pollRunning() {
+// Keep the running indicators current without polling an idle page.
+// While a listed conversation is running, poll every 2 seconds until it
+// isn't. Otherwise make no requests, and check once whenever the page is
+// shown again: switching back to the tab, focusing the window, or
+// returning to it with back/forward (which may restore a stale page).
+(function trackRunning() {
   const list = document.querySelector(".agent-conversations");
   if (!list) return;
   const url = {{ urls.path("/-/agent/api/running")|tojson }};
   const RUNNING_MS = 2000;
-  const IDLE_MS = 10000;
+  // Tab switches fire both visibilitychange and focus: one check will do.
+  const MIN_GAP_MS = 1000;
   let timer = null;
   let checking = false;
+  let lastCheck = 0;
 
   function runningIndicator() {
     // Same markup as the template's
@@ -175,27 +179,34 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     return list.querySelector(".agent-running") !== null;
   }
 
-  function schedule(ms) {
+  // Poll again only while something listed is running and the tab is
+  // visible.
+  function schedule() {
     clearTimeout(timer);
-    timer = document.hidden ? null : setTimeout(check, ms);
+    timer = null;
+    if (!document.hidden && listedRunning()) timer = setTimeout(check, RUNNING_MS);
   }
 
   async function check() {
     if (checking) return;
     checking = true;
-    let any = listedRunning();
+    lastCheck = Date.now();
     try {
       const response = await fetch(url, {cache: "no-store"});
       if (response.ok) {
         const data = await response.json();
-        any = render(new Set(data.running));
+        render(new Set(data.running));
       }
     } catch (err) {
-      // Try again on the next tick.
+      // While something is running, the next poll tries again.
     } finally {
       checking = false;
     }
-    schedule(any ? RUNNING_MS : IDLE_MS);
+    schedule();
+  }
+
+  function pageShown() {
+    if (Date.now() - lastCheck >= MIN_GAP_MS) check();
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -203,12 +214,15 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
       clearTimeout(timer);
       timer = null;
     } else {
-      // Back on the tab: catch up straight away.
-      check();
+      pageShown();
     }
   });
+  window.addEventListener("focus", pageShown);
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) pageShown();
+  });
 
-  schedule(listedRunning() ? RUNNING_MS : IDLE_MS);
+  schedule();
 })();
 </script>
 {% endblock %}
