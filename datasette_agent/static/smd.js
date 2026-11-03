@@ -1610,7 +1610,8 @@ export function default_add_token(data, type) {
     case CODE_INLINE:   slot = document.createElement("code")      ;break
     case RAW_URL:
     case LINK:          slot = document.createElement("a")         ;break
-    case IMAGE:         slot = document.createElement("img")       ;break
+    // Images are disabled: keep alt text without creating a fetching element.
+    case IMAGE:         slot = document.createElement("span")      ;break
     case LIST_UNORDERED:slot = document.createElement("ul")        ;break
     case LIST_ORDERED:  slot = document.createElement("ol")        ;break
     case LIST_ITEM:     slot = document.createElement("li")        ;break
@@ -1662,6 +1663,8 @@ export function default_add_text(data, text) {
 
 /** @type {Default_Renderer_Set_Attr} */
 export function default_set_attr(data, type, value) {
+    // Never attach image URLs, including while a response is still streaming.
+    if (type === SRC) return
     data.nodes[data.index].setAttribute(attr_to_html_attr(type), value)
 }
 

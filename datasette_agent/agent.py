@@ -40,6 +40,7 @@ async def _build_system_prompt(datasette, actor):
         "database tools (e.g., sql_query, describe_table), using a database name from "
         "list_databases_and_tables. For sql_query, provide your SQL in the 'sql' parameter.\n\n"
         "Your output will be rendered as markdown. "
+        "Markdown images are not supported; do not include them in your output. "
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
         "them from being interpreted as italic markers. "
