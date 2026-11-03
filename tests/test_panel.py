@@ -248,9 +248,7 @@ async def test_conversation_page_has_panel(datasette_instance, cookies):
 
 
 @pytest.mark.asyncio
-async def test_conversation_page_restores_latest_panel_url(
-    datasette_instance, cookies
-):
+async def test_conversation_page_restores_latest_panel_url(datasette_instance, cookies):
     from datasette_agent.messages import insert_message, make_tool_message_dict
 
     ds = datasette_instance

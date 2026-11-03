@@ -77,9 +77,20 @@ def server(request, tmp_path_factory):
     with (directory / "server.log").open("w+") as log:
         process = subprocess.Popen(
             [
-                sys.executable, "-m", "datasette", "--internal", str(internal),
-                "--config", str(config), "--secret", "link-tests", "-p", str(port),
-                "-s", "base_url", (prefix or "") + "/",
+                sys.executable,
+                "-m",
+                "datasette",
+                "--internal",
+                str(internal),
+                "--config",
+                str(config),
+                "--secret",
+                "link-tests",
+                "-p",
+                str(port),
+                "-s",
+                "base_url",
+                (prefix or "") + "/",
             ],
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -138,8 +149,11 @@ def page(browser, server):
     external_requests = []
     context.on(
         "request",
-        lambda request: external_requests.append(request)
-        if request.url.startswith("https://example.com/") else None,
+        lambda request: (
+            external_requests.append(request)
+            if request.url.startswith("https://example.com/")
+            else None
+        ),
     )
     context.route(
         "https://example.com/**",
@@ -182,7 +196,9 @@ def test_saved_external_link_requires_confirmation(page, server):
     assert page.url == server["url"]
 
 
-@pytest.mark.parametrize("gesture", ["keyboard", "middle", "Control", "Meta", "Shift", "Alt"])
+@pytest.mark.parametrize(
+    "gesture", ["keyboard", "middle", "Control", "Meta", "Shift", "Alt"]
+)
 def test_external_link_gestures_cannot_bypass_confirmation(page, gesture):
     link = page.get_by_role("link", name="External", exact=True)
     if gesture == "keyboard":
@@ -211,19 +227,26 @@ def test_internal_links_keep_panel_and_native_navigation(page, server):
     fragment.click()
     assert page.url == server["url"] + "#section"
     internal.click()
-    assert page.evaluate("window.datasetteAgentPanel.currentUrl()") == server["prefix"] + "/-/versions"
+    assert (
+        page.evaluate("window.datasetteAgentPanel.currentUrl()")
+        == server["prefix"] + "/-/versions"
+    )
     assert not page.locator(".agent-link-dialog").count()
     assert page.external_requests == []
 
 
 def test_raw_urls_and_saved_reasoning_are_protected(page):
-    raw = page.get_by_role("link", name="https://example.com/raw?secret=private", exact=True)
+    raw = page.get_by_role(
+        "link", name="https://example.com/raw?secret=private", exact=True
+    )
     assert raw.get_attribute("href") is None
     raw.click()
     page.keyboard.press("Escape")
     page.locator(".agent-reasoning summary").click()
     page.get_by_role("link", name="Reasoning external", exact=True).click()
-    assert page.locator(".agent-link-url").inner_text() == "https://example.com/reasoning"
+    assert (
+        page.locator(".agent-link-url").inner_text() == "https://example.com/reasoning"
+    )
     assert page.external_requests == []
 
 
@@ -231,7 +254,10 @@ def test_streamed_links_are_protected_before_receiving_a_href(page):
     events = []
     for event, text in [
         ("reasoning_chunk", "[Streamed reasoning](https://example.com/thinking)"),
-        ("text_chunk", "[Streamed external](https://example.com/streamed?secret=private)"),
+        (
+            "text_chunk",
+            "[Streamed external](https://example.com/streamed?secret=private)",
+        ),
     ]:
         for char in text:
             events.append(f"event: {event}\ndata: {json.dumps({'content': char})}\n\n")
@@ -247,7 +273,10 @@ def test_streamed_links_are_protected_before_receiving_a_href(page):
     link = page.get_by_role("link", name="Streamed external", exact=True)
     assert link.get_attribute("href") is None
     link.click()
-    assert page.locator(".agent-link-url").inner_text() == "https://example.com/streamed?secret=private"
+    assert (
+        page.locator(".agent-link-url").inner_text()
+        == "https://example.com/streamed?secret=private"
+    )
     page.keyboard.press("Escape")
     page.locator(".agent-reasoning summary").last.click()
     page.get_by_role("link", name="Streamed reasoning", exact=True).click()
