@@ -251,22 +251,35 @@ async def test_agent_index_searches_own_conversation_titles(
 
 
 @pytest.mark.asyncio
-async def test_agent_patterns(datasette_instance, cookies):
-    denied = await datasette_instance.client.get("/-/patterns/agent")
-    assert denied.status_code == 403
-
-    response = await datasette_instance.client.get("/-/patterns/agent", cookies=cookies)
+async def test_agent_patterns(datasette_instance):
+    # Sample content only, so it needs view-instance, like /-/patterns,
+    # not the datasette-agent permission
+    response = await datasette_instance.client.get("/-/patterns/agent")
     assert response.status_code == 200
     assert "Wide conversation header" in response.text
     assert "Narrow conversation header" in response.text
     assert "Close panel" in response.text
     assert 'data-open="true"' in response.text
 
-    markdown = await datasette_instance.client.get(
-        "/-/patterns/agent/markdown", cookies=cookies
-    )
+    markdown = await datasette_instance.client.get("/-/patterns/agent/markdown")
     assert markdown.status_code == 200
     assert "Sample content for the Export menu" in markdown.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/-/patterns/agent", "/-/patterns/agent/markdown"])
+async def test_agent_patterns_require_view_instance(tmp_path, path):
+    ds = Datasette(
+        memory=True,
+        config={
+            "allow": {"id": "root"},
+            "permissions": {"datasette-agent": True},
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    assert (await ds.client.get(path)).status_code == 403
+    root = {"ds_actor": ds.client.actor_cookie({"id": "root"})}
+    assert (await ds.client.get(path, cookies=root)).status_code == 200
 
 
 @pytest.mark.asyncio

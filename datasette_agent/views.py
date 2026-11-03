@@ -63,14 +63,15 @@ def _actor_id(request):
 
 
 async def agent_patterns(request, datasette):
-    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    # Only sample content, so gated like Datasette's own /-/patterns
+    await datasette.ensure_permission(action="view-instance", actor=request.actor)
     return Response.html(
         await datasette.render_template("agent_patterns.html", {}, request=request)
     )
 
 
 async def agent_patterns_markdown(request, datasette):
-    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    await datasette.ensure_permission(action="view-instance", actor=request.actor)
     return Response.text("# Agent pattern\n\nSample content for the Export menu.\n")
 
 
