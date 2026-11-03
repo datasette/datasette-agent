@@ -352,3 +352,24 @@ async def test_watch_asks_stale_pages_to_reload(ds, model_calls):
     finally:
         await _stop(ds, conversation_id)
         await asyncio.wait_for(turn, 5)
+
+
+@pytest.mark.asyncio
+async def test_running_api_lists_only_your_running_conversations(ds, model_calls):
+    conversation_id = await _new_conversation(ds)
+    await _new_conversation(ds)
+    url = "/-/agent/api/running"
+    assert (await ds.client.get(url, cookies=_cookies(ds))).json() == {"running": []}
+    turn = _start_turn(ds, conversation_id, "hang")
+    await asyncio.wait_for(model_calls["streaming"].wait(), 5)
+    try:
+        mine = await ds.client.get(url, cookies=_cookies(ds))
+        assert mine.json() == {"running": [conversation_id]}
+        assert mine.headers["cache-control"] in ("no-cache", "private, no-store")
+        theirs = await ds.client.get(url, cookies=_cookies(ds, "other"))
+        assert theirs.json() == {"running": []}
+        assert (await ds.client.get(url)).status_code == 403
+    finally:
+        await _stop(ds, conversation_id)
+        await asyncio.wait_for(turn, 5)
+    assert (await ds.client.get(url, cookies=_cookies(ds))).json() == {"running": []}

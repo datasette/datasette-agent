@@ -47,7 +47,7 @@
 {% if conversations %}
 <ul class="agent-conversations">
   {% for conv in conversations %}
-  <li>
+  <li data-conversation-id="{{ conv.id }}">
     <a href="{{ urls.path('/-/agent/' ~ conv.id) }}" class="agent-conversation-row">
       <span class="agent-conversation-title">{{ conv.title or "Untitled conversation" }}{% if conv.id in running %}<span class="agent-running" title="The agent is still working on this conversation"><span class="agent-running-dot" aria-hidden="true"></span><span class="agent-visually-hidden">(running)</span></span>{% endif %}</span>
       <time class="agent-conversation-date" datetime="{{ conv.updated_at }}">{{ conv.updated_at | agent_format_recent_datetime }}</time>
@@ -129,5 +129,86 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     alert("Error: " + err.message);
   }
 });
+
+// Keep the running indicators current. Polls every 2 seconds while a
+// listed conversation is running and every 10 seconds otherwise, and
+// not at all while the tab is hidden.
+(function pollRunning() {
+  const list = document.querySelector(".agent-conversations");
+  if (!list) return;
+  const url = {{ urls.path("/-/agent/api/running")|tojson }};
+  const RUNNING_MS = 2000;
+  const IDLE_MS = 10000;
+  let timer = null;
+  let checking = false;
+
+  function runningIndicator() {
+    // Same markup as the template's
+    const indicator = document.createElement("span");
+    indicator.className = "agent-running";
+    indicator.title = "The agent is still working on this conversation";
+    const dot = document.createElement("span");
+    dot.className = "agent-running-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "agent-visually-hidden";
+    label.textContent = "(running)";
+    indicator.append(dot, label);
+    return indicator;
+  }
+
+  // Returns whether any listed conversation is running.
+  function render(running) {
+    let any = false;
+    list.querySelectorAll("li[data-conversation-id]").forEach((li) => {
+      const title = li.querySelector(".agent-conversation-title");
+      const indicator = title.querySelector(".agent-running");
+      const isRunning = running.has(li.dataset.conversationId);
+      if (isRunning && !indicator) title.append(runningIndicator());
+      if (!isRunning && indicator) indicator.remove();
+      any = any || isRunning;
+    });
+    return any;
+  }
+
+  function listedRunning() {
+    return list.querySelector(".agent-running") !== null;
+  }
+
+  function schedule(ms) {
+    clearTimeout(timer);
+    timer = document.hidden ? null : setTimeout(check, ms);
+  }
+
+  async function check() {
+    if (checking) return;
+    checking = true;
+    let any = listedRunning();
+    try {
+      const response = await fetch(url, {cache: "no-store"});
+      if (response.ok) {
+        const data = await response.json();
+        any = render(new Set(data.running));
+      }
+    } catch (err) {
+      // Try again on the next tick.
+    } finally {
+      checking = false;
+    }
+    schedule(any ? RUNNING_MS : IDLE_MS);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearTimeout(timer);
+      timer = null;
+    } else {
+      // Back on the tab: catch up straight away.
+      check();
+    }
+  });
+
+  schedule(listedRunning() ? RUNNING_MS : IDLE_MS);
+})();
 </script>
 {% endblock %}

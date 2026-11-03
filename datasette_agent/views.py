@@ -81,6 +81,31 @@ async def agent_patterns_markdown(request, datasette):
     return Response.text("# Agent pattern\n\nSample content for the Export menu.\n")
 
 
+async def api_running(request, datasette):
+    """IDs of the actor's conversations with a turn running right now,
+    polled by /-/agent to keep its running indicators current."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    running = sorted(running_conversation_ids(datasette))
+    if running:
+        db = datasette.get_internal_database()
+        await ensure_tables(db)
+        actor_id = _actor_id(request)
+        where = "actor_id = ?" if actor_id else "actor_id IS NULL"
+        params = [actor_id] if actor_id else []
+        placeholders = ", ".join("?" for _ in running)
+        running = [
+            row["id"]
+            for row in (
+                await db.execute(
+                    f"SELECT id FROM agent_conversations WHERE {where} "
+                    f"AND id IN ({placeholders}) ORDER BY id",
+                    [*params, *running],
+                )
+            ).rows
+        ]
+    return Response.json({"running": running}, headers={"Cache-Control": "no-cache"})
+
+
 async def agent_index(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
