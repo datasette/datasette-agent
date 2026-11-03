@@ -399,11 +399,11 @@ function appendToolResult(name, output, id = null) {
 }
 
 // True while an ask_user() question is awaiting an answer — keeps the
-// chat input disabled across the suspended turn.
+// Send button disabled across the suspended turn.
 let questionPending = false;
 
 // True while a browser_task() is executing in this page — same
-// input-disabled semantics as questionPending.
+// Send-disabled semantics as questionPending.
 let browserTaskPending = false;
 
 // The # autocomplete for tagging tables, queries and databases. There is
@@ -422,12 +422,18 @@ function conversationUrl(path) {
   return document.querySelector(".agent-chat").dataset.conversationUrl + path;
 }
 
-function setInputEnabled(enabled) {
+// Only the Send button is disabled while the agent is busy: the message
+// input stays usable so the next message can be typed in the meantime.
+function setSendEnabled(enabled) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
   if (sendBtn) sendBtn.disabled = !enabled;
-  if (input) input.disabled = !enabled;
   if (enabled && input) input.focus();
+}
+
+function sendEnabled() {
+  const sendBtn = document.getElementById("send-btn");
+  return Boolean(sendBtn && !sendBtn.disabled);
 }
 
 async function sendMessage(conversationId, message, references = []) {
@@ -677,7 +683,7 @@ async function watchTaskDeadline(taskId) {
     browserTaskElements.has(taskId)
   ) {
     browserTaskPending = true;
-    setInputEnabled(false);
+    setSendEnabled(false);
     entry.expiryTimer = setTimeout(() => watchTaskDeadline(taskId), 5000);
   }
 }
@@ -741,7 +747,7 @@ function renderBrowserTask(task) {
 window.datasetteAgent = {claimTask, completeTask, cancelTask};
 
 async function streamAgentEvents(url, payload) {
-  setInputEnabled(false);
+  setSendEnabled(false);
 
   let currentAssistant = null;
   let currentReasoning = null;
@@ -958,7 +964,7 @@ async function streamAgentEvents(url, payload) {
     return {ok: false, error: err};
   } finally {
     if (!questionPending && !browserTaskPending) {
-      setInputEnabled(true);
+      setSendEnabled(true);
     }
   }
 }
@@ -1016,7 +1022,7 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   try {
     const question = JSON.parse(dataEl.textContent);
     questionPending = true;
-    setInputEnabled(false);
+    setSendEnabled(false);
     renderQuestionForm(question);
   } catch (err) {
     console.error("Failed to render pending question:", err);
@@ -1034,7 +1040,7 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
     const tasks = JSON.parse(dataEl.textContent);
     if (!tasks.length) return;
     browserTaskPending = true;
-    setInputEnabled(false);
+    setSendEnabled(false);
     tasks.forEach(renderBrowserTask);
   } catch (err) {
     console.error("Failed to render pending browser tasks:", err);
@@ -1053,6 +1059,9 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
 
 // Wire up form
 function submitInput() {
+  // The input stays editable while the agent is busy; Ctrl/Cmd+Enter
+  // must not send until the Send button is enabled again.
+  if (!sendEnabled()) return;
   const input = document.getElementById("message-input");
   const message = input.value.trim();
   if (!message) return;
