@@ -19,7 +19,7 @@ from .messages import (
 from .browser_tasks import BrowserTaskPending
 from .models import AGENT_PURPOSE
 from .questions import QuestionPending
-from .references import resolve_references
+from .references import prepare_references
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
@@ -324,9 +324,10 @@ async def run_agent(
         user_message = "\n".join(prefix_parts) + "\n\n" + user_message
 
     try:
-        # #-tagged databases/tables/queries: re-check permissions and
-        # attach their schemas to the user turn for the model.
-        references, references_context = await resolve_references(
+        # #-tagged items: validate their shape and attach a note
+        # listing them - with details such as schemas, where the type
+        # provides them and the actor may see them - to the user turn.
+        references, references_context = await prepare_references(
             datasette, actor, references or []
         )
 
