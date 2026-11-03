@@ -24,7 +24,7 @@ from .questions import QuestionPending
 from .references import prepare_references
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
-from .turns import TurnAlreadyRunning, track_turn
+from .turns import TurnAlreadyRunning, TurnWriter, track_turn
 
 # Returned by _run_chain when the user stopped the turn.
 STOPPED = ("stopped", {})
@@ -82,7 +82,7 @@ async def _send_sse(writer, event, data):
 async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, control):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages. control is the turn's
-    TurnControl, used to stop it.
+    TurnControl, used to stop and watch it.
 
     Returns ("question", question_dict) if a tool suspended on
     ask_user(), ("browser_task", task_dict) if it suspended on
@@ -284,6 +284,9 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, con
             # an order OpenAI rejects ("tool_calls must be followed by
             # tool messages").
             await flush_tool_messages()
+            # Everything before this response is saved: a page opened
+            # from here on renders it and replays this response's events.
+            await control.new_step(db, conversation_id)
 
             # Stopped while tools ran: they have finished and their
             # results are saved, so stop before this model call starts.
@@ -370,6 +373,7 @@ async def run_agent(
 
     try:
         async with track_turn(datasette, conversation_id) as control:
+            writer = TurnWriter(writer, control)
             try:
                 await _run_new_turn(
                     datasette,
@@ -431,6 +435,7 @@ async def _run_new_turn(
     if panel_url != await latest_panel_url(db, conversation_id):
         user_message_dict["parts"].append(make_panel_note_part(panel_url))
     await insert_message(db, conversation_id, user_message_dict)
+    await control.new_step(db, conversation_id)
 
     pending = await _run_chain(
         datasette,
@@ -477,6 +482,7 @@ async def resume_agent(datasette, actor, conversation_id, writer):
 
     try:
         async with track_turn(datasette, conversation_id) as control:
+            writer = TurnWriter(writer, control)
             try:
                 pending = await _run_chain(
                     datasette,

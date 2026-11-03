@@ -8,7 +8,7 @@
 
 {% block content %}
 {% from "_agent_header.html" import agent_header with context %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if panel_url %} data-panel-url="{{ panel_url }}"{% endif %} data-agent-view="chat">
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if turn_running %} data-turn-running="1" data-turn-watermark="{{ turn_watermark if turn_watermark is not none else '' }}"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if panel_url %} data-panel-url="{{ panel_url }}"{% endif %} data-agent-view="chat">
   {{ agent_header(conversation.title or "Chat", urls.path("/-/agent/" ~ conversation_id ~ "/markdown"), conversation.title or "chat", model_id=conversation.model_id) }}
 
   <div class="agent-panes">

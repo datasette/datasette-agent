@@ -813,6 +813,7 @@ function renderBrowserTask(task) {
 // by hand or scraping form markup.
 window.datasetteAgent = {claimTask, completeTask, cancelTask};
 
+// payload null means GET: following a turn that is already running.
 async function streamAgentEvents(url, payload) {
   setStopMode(true);
 
@@ -839,11 +840,16 @@ async function streamAgentEvents(url, payload) {
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload),
-    });
+    const response = await fetch(
+      url,
+      payload === null
+        ? {}
+        : {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+          }
+    );
 
     // A non-OK response is a JSON error body, not an event stream —
     // return it to the caller instead of feeding it to the SSE reader
@@ -983,6 +989,11 @@ async function streamAgentEvents(url, payload) {
             }
             browserTaskPending = true;
             renderBrowserTask(data);
+          } else if (eventType === "resync") {
+            // The running turn moved on (or ended) after this page was
+            // rendered: reload to pick up what has been saved since.
+            reloadKeepingDraft();
+            return {ok: true};
           } else if (eventType === "stopped") {
             streamDone = true;
             closeReasoning();
@@ -1133,6 +1144,39 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   streamAgentEvents(resumeUrl(), {});
 })();
 
+// Anything typed in the message box survives a resync reload.
+function draftKey() {
+  return "agent_draft:" + currentConversationId();
+}
+
+function reloadKeepingDraft() {
+  const input = document.getElementById("message-input");
+  try {
+    if (input && input.value) sessionStorage.setItem(draftKey(), input.value);
+  } catch (err) {}
+  window.location.reload();
+}
+
+(function restoreDraft() {
+  const input = document.getElementById("message-input");
+  if (!input) return;
+  try {
+    const draft = sessionStorage.getItem(draftKey());
+    sessionStorage.removeItem(draftKey());
+    if (draft && !input.value) input.value = draft;
+  } catch (err) {}
+})();
+
+// A turn was already running when this page loaded - the user came back
+// to it, or opened it in another tab. Follow it: the watch stream replays
+// what the turn has done since its last saved message, then continues
+// live, with the Stop button available.
+(function initWatchRunningTurn() {
+  const chat = document.querySelector(".agent-chat");
+  if (!chat || chat.dataset.turnRunning !== "1") return;
+  const after = encodeURIComponent(chat.dataset.turnWatermark || "");
+  streamAgentEvents(conversationUrl("/watch?after=" + after), null);
+})();
 
 // Wire up form
 function submitInput() {

@@ -263,3 +263,68 @@ async def test_second_turn_rejected_while_running(ds, model_calls):
     # The rejected message was never saved
     roles = [role for role, _ in await _messages(ds, conversation_id)]
     assert roles == ["user", "assistant"]
+
+
+def _page_watermark(html):
+    marker = 'data-turn-watermark="'
+    assert 'data-turn-running="1"' in html
+    return html.split(marker)[1].split('"')[0]
+
+
+@pytest.mark.asyncio
+async def test_page_opened_mid_turn_can_watch_it(ds, model_calls):
+    conversation_id = await _new_conversation(ds)
+    turn = _start_turn(ds, conversation_id, "hang")
+    await asyncio.wait_for(model_calls["streaming"].wait(), 5)
+
+    page = await ds.client.get(f"/-/agent/{conversation_id}", cookies=_cookies(ds))
+    watermark = _page_watermark(page.text)
+    # The page shows the saved user message; the streaming response is
+    # replayed by the watch stream instead
+    assert "hang" in page.text
+    assert "partial answer" not in page.text
+
+    watch = asyncio.create_task(
+        ds.client.get(
+            f"/-/agent/{conversation_id}/watch?after={watermark}",
+            cookies=_cookies(ds),
+            timeout=30,
+        )
+    )
+    await asyncio.sleep(0.1)
+    await _stop(ds, conversation_id)
+    await asyncio.wait_for(turn, 5)
+    events = _events((await asyncio.wait_for(watch, 5)).text)
+    assert events[0] == ("text_chunk", {"content": "partial answer"})
+    assert [name for name, _ in events][-2:] == ["stopped", "done"]
+
+    # Once the turn has ended the page shows everything and isn't running
+    page = await ds.client.get(f"/-/agent/{conversation_id}", cookies=_cookies(ds))
+    assert "data-turn-running" not in page.text
+    assert "partial answer" in page.text
+
+
+@pytest.mark.asyncio
+async def test_watch_asks_stale_pages_to_reload(ds, model_calls):
+    conversation_id = await _new_conversation(ds)
+    # Nothing running
+    response = await ds.client.get(
+        f"/-/agent/{conversation_id}/watch?after=0", cookies=_cookies(ds)
+    )
+    assert _events(response.text) == [("resync", {})]
+    # Running, but the page was rendered before the current step began
+    turn = _start_turn(ds, conversation_id, "hang")
+    await asyncio.wait_for(model_calls["streaming"].wait(), 5)
+    try:
+        response = await ds.client.get(
+            f"/-/agent/{conversation_id}/watch?after=0", cookies=_cookies(ds)
+        )
+        assert _events(response.text) == [("resync", {})]
+        other = await ds.client.get(
+            f"/-/agent/{conversation_id}/watch?after=0",
+            cookies=_cookies(ds, "other"),
+        )
+        assert other.status_code == 403
+    finally:
+        await _stop(ds, conversation_id)
+        await asyncio.wait_for(turn, 5)

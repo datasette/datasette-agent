@@ -1,12 +1,19 @@
-"""Chat turns running in this process, so they can be stopped.
+"""Chat turns running in this process, so they can be listed, watched
+and stopped.
 
-A turn keeps running when the browser disconnects, so stopping one goes
-through its TurnControl rather than the request that started it.
+A turn keeps running when the browser disconnects, so watching and
+stopping one go through its TurnControl rather than the request that
+started it.
 
 Stopping is cooperative around tools: a tool that has started is never
 interrupted (a write may already have happened), and the turn stops
 before its next model call. Only a model response that is streaming is
 cancelled outright.
+
+Watching: every event the turn sends is also published to watchers. The
+turn keeps the events of its current step - everything since all earlier
+messages were saved - so a page opened mid-turn can render the saved
+messages up to the step's watermark and replay the rest.
 """
 
 import asyncio
@@ -26,11 +33,66 @@ class TurnControl:
         self.streaming = False
         # Tools that have started and not finished: never cancelled.
         self.tools_running = 0
+        # Events since the current step began, and the id of the last
+        # message saved before it.
+        self.step_events = []
+        self.watermark = None
+        self.watchers = set()
 
     def request_stop(self):
         self.stop_requested = True
         if self.streaming and not self.tools_running:
             self.task.cancel()
+
+    async def new_step(self, db, conversation_id):
+        """Call when every earlier event has been saved as a message."""
+        self.watermark = await _last_message_id(db, conversation_id)
+        self.step_events = []
+
+    def publish(self, chunk):
+        self.step_events.append(chunk)
+        for queue in self.watchers:
+            queue.put_nowait(chunk)
+
+    def watch(self):
+        """A queue of this step's events so far, then each new one, then
+        None when the turn ends."""
+        queue = asyncio.Queue()
+        for chunk in self.step_events:
+            queue.put_nowait(chunk)
+        self.watchers.add(queue)
+        return queue
+
+    def close(self):
+        for queue in self.watchers:
+            queue.put_nowait(None)
+        self.watchers.clear()
+
+
+class TurnWriter:
+    """Sends a turn's events to the request that started it and to anyone
+    watching. The turn carries on if the request's client has gone."""
+
+    def __init__(self, writer, control):
+        self.writer = writer
+        self.control = control
+
+    async def write(self, chunk):
+        self.control.publish(chunk)
+        try:
+            await self.writer.write(chunk)
+        except Exception:
+            pass
+
+
+async def _last_message_id(db, conversation_id):
+    row = (
+        await db.execute(
+            "SELECT max(id) AS id FROM agent_messages WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).first()
+    return (row["id"] or 0) if row else 0
 
 
 def _running_turns(datasette):
@@ -54,10 +116,14 @@ async def track_turn(datasette, conversation_id):
     control = TurnControl(asyncio.current_task())
     turns[conversation_id] = control
     try:
+        control.watermark = await _last_message_id(
+            datasette.get_internal_database(), conversation_id
+        )
         yield control
     finally:
         if turns.get(conversation_id) is control:
             del turns[conversation_id]
+        control.close()
 
 
 def get_turn(datasette, conversation_id):
@@ -71,3 +137,5 @@ def stop_turn(datasette, conversation_id):
         return False
     control.request_stop()
     return True
+
+    return set(_running_turns(datasette))
