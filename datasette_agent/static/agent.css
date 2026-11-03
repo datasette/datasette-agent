@@ -687,6 +687,68 @@
   cursor: not-allowed;
 }
 
+/* While a turn streams, Send becomes Stop: a square then "Stop". Both
+   labels share one grid cell so the button keeps the same size, and
+   only the visible one counts as the button's name. */
+#send-btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+#send-btn .agent-send-label,
+#send-btn .agent-stop-label {
+  grid-area: 1 / 1;
+}
+
+#send-btn .agent-stop-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  visibility: hidden;
+}
+
+#send-btn.agent-stop-mode .agent-send-label {
+  visibility: hidden;
+}
+
+#send-btn.agent-stop-mode .agent-stop-label {
+  visibility: visible;
+}
+
+/* Stop has been pressed and the turn is winding down. */
+#send-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.agent-stopped-note {
+  align-self: flex-start;
+  font-size: 0.85rem;
+  color: #666;
+  padding: 0.2rem 0;
+}
+
+/* Read by screen readers only */
+.agent-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Sized to the cap height of the label so the square and "Stop" read
+   as the same weight. */
+.agent-stop-icon {
+  display: block;
+  width: 0.72em;
+  height: 0.72em;
+}
+
 /* Index page */
 .agent-new-chat {
   display: flex;
@@ -932,6 +994,40 @@
   color: #777;
   font-size: 0.82rem;
   white-space: nowrap;
+}
+
+/* A conversation whose turn is still running */
+.agent-running {
+  display: inline-block;
+  margin-left: 0.4em;
+  vertical-align: middle;
+}
+
+.agent-running-dot {
+  display: block;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: #007bff;
+  animation: agent-running-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes agent-running-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-running-dot {
+    animation: none;
+  }
 }
 
 .agent-pagination {

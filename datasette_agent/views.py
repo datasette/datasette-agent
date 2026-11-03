@@ -20,6 +20,12 @@ from .models import get_agent_models
 from .questions import question_row_to_dict
 from .references import add_reference_urls, search_references
 from .schema import ensure_tables
+from .turns import (
+    ALREADY_RUNNING_MESSAGE,
+    get_turn,
+    running_conversation_ids,
+    stop_turn,
+)
 
 # Longest panel URL the page may report back; anything longer is ignored.
 MAX_PANEL_URL_LENGTH = 2000
@@ -75,6 +81,31 @@ async def agent_patterns_markdown(request, datasette):
     return Response.text("# Agent pattern\n\nSample content for the Export menu.\n")
 
 
+async def api_running(request, datasette):
+    """IDs of the actor's conversations with a turn running right now,
+    polled by /-/agent to keep its running indicators current."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    running = sorted(running_conversation_ids(datasette))
+    if running:
+        db = datasette.get_internal_database()
+        await ensure_tables(db)
+        actor_id = _actor_id(request)
+        where = "actor_id = ?" if actor_id else "actor_id IS NULL"
+        params = [actor_id] if actor_id else []
+        placeholders = ", ".join("?" for _ in running)
+        running = [
+            row["id"]
+            for row in (
+                await db.execute(
+                    f"SELECT id FROM agent_conversations WHERE {where} "
+                    f"AND id IN ({placeholders}) ORDER BY id",
+                    [*params, *running],
+                )
+            ).rows
+        ]
+    return Response.json({"running": running}, headers={"Cache-Control": "no-cache"})
+
+
 async def agent_index(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
@@ -112,6 +143,7 @@ async def agent_index(request, datasette):
             "agent_index.html",
             {
                 "conversations": conversations,
+                "running": running_conversation_ids(datasette),
                 "models": models,
                 "default_model": default_model,
                 "page": page,
@@ -214,12 +246,20 @@ async def agent_conversation(request, datasette):
     if row["actor_id"] != actor_id:
         raise Forbidden("Forbidden")
 
+    # A turn may be running, with no page attached if the user navigated
+    # away. Show the messages saved before its current step; the page
+    # then watches the turn, which replays the step so far and continues.
+    turn = get_turn(datasette, conversation_id)
+    turn_watermark = turn.watermark if turn else None
+
     messages = (
         await db.execute(
             "SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows
+    if turn_watermark is not None:
+        messages = [m for m in messages if m["id"] <= turn_watermark]
 
     background_agent = (
         await db.execute(
@@ -264,7 +304,7 @@ async def agent_conversation(request, datasette):
     # suspended with nothing to complete or cancel; flag the page so
     # the frontend auto-resumes instead of stranding the conversation.
     needs_resume = False
-    if not pending_tasks and pending_question is None:
+    if turn is None and not pending_tasks and pending_question is None:
         needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
 
     render_messages = combine_tool_messages_for_render(
@@ -285,6 +325,8 @@ async def agent_conversation(request, datasette):
                 "pending_question_json": pending_question_json,
                 "pending_tasks_json": pending_tasks_json,
                 "needs_resume": needs_resume,
+                "turn_running": turn is not None,
+                "turn_watermark": turn_watermark,
             },
             request=request,
         )
@@ -407,6 +449,11 @@ async def agent_stream(request, datasette):
     user_message = data.get("message", "")
     references = data.get("references") or []
     panel_url = _clean_panel_url(data.get("panel_url"))
+
+    # One turn at a time per conversation (run_agent also refuses, in
+    # case two requests race past this check).
+    if get_turn(datasette, conversation_id) is not None:
+        return Response.json({"error": ALREADY_RUNNING_MESSAGE}, status=409)
 
     async def stream_fn(writer):
         await run_agent(
@@ -708,6 +755,75 @@ async def api_complete_task(request, datasette):
         return Response.json({"ok": False, "state": state}, status=400)
 
     return _resume_stream(request, datasette, task["conversation_id"])
+
+
+async def api_watch_turn(request, datasette):
+    """Follow a running turn from a page opened after it started.
+
+    ?after= is the watermark the page was rendered with. If it still
+    matches the turn's current step, stream that step's events so far and
+    then each new one until the turn ends. Otherwise - the turn has moved
+    on to a new step, or ended - send a single resync event telling the
+    page to reload.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != _actor_id(request):
+        return Response.json({"error": "Forbidden"}, status=403)
+    after = request.args.get("after")
+
+    async def stream_fn(writer):
+        turn = get_turn(datasette, conversation_id)
+        # No await between this check and watch(), so no event is missed.
+        if turn is None or str(turn.watermark) != after:
+            await writer.write("event: resync\ndata: {}\n\n")
+            return
+        queue = turn.watch()
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            await writer.write(chunk)
+
+    return AsgiStream(
+        stream_fn,
+        headers={"Cache-Control": "no-cache", "Content-Encoding": "none"},
+        content_type="text/event-stream",
+    )
+
+
+async def api_stop_turn(request, datasette):
+    """Stop the conversation's running turn, if there is one. A tool that
+    has started finishes first; the turn then ends without another
+    model call."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != _actor_id(request):
+        return Response.json({"error": "Forbidden"}, status=403)
+    stopping = stop_turn(datasette, conversation_id)
+    return Response.json({"ok": True, "stopping": stopping})
 
 
 async def api_cancel_task(request, datasette):

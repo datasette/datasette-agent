@@ -8,7 +8,7 @@
 
 {% block content %}
 {% from "_agent_header.html" import agent_header with context %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if panel_url %} data-panel-url="{{ panel_url }}"{% endif %} data-agent-view="chat">
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if turn_running %} data-turn-running="1" data-turn-watermark="{{ turn_watermark if turn_watermark is not none else '' }}"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if panel_url %} data-panel-url="{{ panel_url }}"{% endif %} data-agent-view="chat">
   {{ agent_header(conversation.title or "Chat", urls.path("/-/agent/" ~ conversation_id ~ "/markdown"), conversation.title or "chat", model_id=conversation.model_id) }}
 
   <div class="agent-panes">
@@ -87,8 +87,9 @@
   {% if not background_agent %}
   <form id="chat-form" class="agent-input">
     <textarea id="message-input" placeholder="Type a message... (# to tag a table or query)" rows="2" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
-    <button type="submit" id="send-btn">Send</button>
+    <button type="submit" id="send-btn"><span class="agent-send-label">Send</span><span class="agent-stop-label"><svg class="agent-stop-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect width="16" height="16" rx="2.5" fill="currentColor"/></svg>Stop</span></button>
   </form>
+  <div id="agent-status" class="agent-visually-hidden" role="status"></div>
   {% endif %}
   </div>
 

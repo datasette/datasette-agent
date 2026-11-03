@@ -39,6 +39,7 @@ def register_routes():
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/api/models$", views.api_models),
         (r"^/-/agent/api/references$", views.api_references),
+        (r"^/-/agent/api/running$", views.api_running),
         (r"^/-/agent/background$", views.agent_background_index),
         (r"^/-/agent/api/background$", views.api_create_background_agent),
         (
@@ -84,6 +85,14 @@ def register_routes():
         (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/resume$",
             views.api_resume_conversation,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stop$",
+            views.api_stop_turn,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/watch$",
+            views.api_watch_turn,
         ),
     ]
 

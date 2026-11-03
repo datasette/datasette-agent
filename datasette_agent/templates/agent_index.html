@@ -47,9 +47,9 @@
 {% if conversations %}
 <ul class="agent-conversations">
   {% for conv in conversations %}
-  <li>
+  <li data-conversation-id="{{ conv.id }}">
     <a href="{{ urls.path('/-/agent/' ~ conv.id) }}" class="agent-conversation-row">
-      <span class="agent-conversation-title">{{ conv.title or "Untitled conversation" }}</span>
+      <span class="agent-conversation-title">{{ conv.title or "Untitled conversation" }}{% if conv.id in running %}<span class="agent-running" title="The agent is still working on this conversation"><span class="agent-running-dot" aria-hidden="true"></span><span class="agent-visually-hidden">(running)</span></span>{% endif %}</span>
       <time class="agent-conversation-date" datetime="{{ conv.updated_at }}">{{ conv.updated_at | agent_format_recent_datetime }}</time>
     </a>
   </li>
@@ -129,5 +129,100 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     alert("Error: " + err.message);
   }
 });
+
+// Keep the running indicators current without polling an idle page.
+// While a listed conversation is running, poll every 2 seconds until it
+// isn't. Otherwise make no requests, and check once whenever the page is
+// shown again: switching back to the tab, focusing the window, or
+// returning to it with back/forward (which may restore a stale page).
+(function trackRunning() {
+  const list = document.querySelector(".agent-conversations");
+  if (!list) return;
+  const url = {{ urls.path("/-/agent/api/running")|tojson }};
+  const RUNNING_MS = 2000;
+  // Tab switches fire both visibilitychange and focus: one check will do.
+  const MIN_GAP_MS = 1000;
+  let timer = null;
+  let checking = false;
+  let lastCheck = 0;
+
+  function runningIndicator() {
+    // Same markup as the template's
+    const indicator = document.createElement("span");
+    indicator.className = "agent-running";
+    indicator.title = "The agent is still working on this conversation";
+    const dot = document.createElement("span");
+    dot.className = "agent-running-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "agent-visually-hidden";
+    label.textContent = "(running)";
+    indicator.append(dot, label);
+    return indicator;
+  }
+
+  // Returns whether any listed conversation is running.
+  function render(running) {
+    let any = false;
+    list.querySelectorAll("li[data-conversation-id]").forEach((li) => {
+      const title = li.querySelector(".agent-conversation-title");
+      const indicator = title.querySelector(".agent-running");
+      const isRunning = running.has(li.dataset.conversationId);
+      if (isRunning && !indicator) title.append(runningIndicator());
+      if (!isRunning && indicator) indicator.remove();
+      any = any || isRunning;
+    });
+    return any;
+  }
+
+  function listedRunning() {
+    return list.querySelector(".agent-running") !== null;
+  }
+
+  // Poll again only while something listed is running and the tab is
+  // visible.
+  function schedule() {
+    clearTimeout(timer);
+    timer = null;
+    if (!document.hidden && listedRunning()) timer = setTimeout(check, RUNNING_MS);
+  }
+
+  async function check() {
+    if (checking) return;
+    checking = true;
+    lastCheck = Date.now();
+    try {
+      const response = await fetch(url, {cache: "no-store"});
+      if (response.ok) {
+        const data = await response.json();
+        render(new Set(data.running));
+      }
+    } catch (err) {
+      // While something is running, the next poll tries again.
+    } finally {
+      checking = false;
+    }
+    schedule();
+  }
+
+  function pageShown() {
+    if (Date.now() - lastCheck >= MIN_GAP_MS) check();
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearTimeout(timer);
+      timer = null;
+    } else {
+      pageShown();
+    }
+  });
+  window.addEventListener("focus", pageShown);
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) pageShown();
+  });
+
+  schedule();
+})();
 </script>
 {% endblock %}
