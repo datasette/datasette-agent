@@ -14,6 +14,18 @@ const narrowQuery = window.matchMedia("(max-width: 899px)");
 // Paths that must never load inside the panel: the agent UI itself.
 const AGENT_PATH = /\/-\/agent(\/|$)/;
 
+// Whether url (absolute, or relative to this page) is an agent page.
+// Only the decoded path counts, not the query string or fragment.
+function isAgentUrl(url) {
+  let path = new URL(url, window.location.href).pathname;
+  try {
+    path = decodeURIComponent(path);
+  } catch (err) {
+    // Malformed escapes: test the path as it is.
+  }
+  return AGENT_PATH.test(path);
+}
+
 function setupPanel() {
   const firstFrame = panel.querySelector(".agent-panel-frame");
   const backLink = chat.querySelector(".agent-header > a");
@@ -161,7 +173,7 @@ function setupPanel() {
       return;
     }
     const url = loc.pathname + loc.search + loc.hash;
-    if (AGENT_PATH.test(loc.pathname)) {
+    if (isAgentUrl(href)) {
       // A link inside the panel led back to the agent UI (e.g. a new
       // chat): take the whole window there instead of nesting it.
       window.location.href = url;
@@ -214,6 +226,7 @@ function setupPanel() {
   // The agent never pulls the user away from the chat on a narrow
   // screen - it flags the Panel switch instead.
   function open(url, {source = "user"} = {}) {
+    if (isAgentUrl(url)) return;
     activate();
     showUrl(url);
     if (source === "agent") loadFrame(url);
@@ -252,7 +265,7 @@ function setupPanel() {
     if (!link || link.hasAttribute("download")) return;
     const url = new URL(link.href, window.location.href);
     if (url.origin !== window.location.origin) return;
-    if (AGENT_PATH.test(url.pathname)) return;
+    if (isAgentUrl(url)) return;
     e.preventDefault();
     open(url.pathname + url.search + url.hash, {source: "user"});
   });
@@ -266,7 +279,7 @@ function setupPanel() {
   // the last page the agent opened.
   const saved = load();
   const initial = (saved && saved.url) || chat.dataset.panelUrl;
-  if (initial && !AGENT_PATH.test(initial)) {
+  if (initial && !isAgentUrl(initial)) {
     activate();
     showUrl(initial);
     loadFrame(initial);

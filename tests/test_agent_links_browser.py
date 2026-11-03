@@ -277,3 +277,23 @@ def test_executable_link_scheme_cannot_run(page):
     link.click()
     assert page.evaluate("window.agentLinkExecuted") is None
     assert page.external_requests == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/-/agent?x=1", "/-/agent#top", "/-/versions/../agent", "/-/%61gent"],
+)
+def test_panel_refuses_agent_pages(page, server, path):
+    url = server["prefix"] + path
+    page.evaluate("url => window.datasetteAgentPanel.open(url, {source: 'agent'})", url)
+    assert page.evaluate("window.datasetteAgentPanel.currentUrl()") is None
+    assert page.locator(".agent-panel-frame").first.get_attribute("src") is None
+    # A normal page still opens
+    page.evaluate(
+        "url => window.datasetteAgentPanel.open(url, {source: 'agent'})",
+        server["prefix"] + "/-/versions",
+    )
+    assert (
+        page.evaluate("window.datasetteAgentPanel.currentUrl()")
+        == server["prefix"] + "/-/versions"
+    )

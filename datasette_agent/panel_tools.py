@@ -9,7 +9,8 @@ are stripped before the model sees the result.
 
 import html as html_module
 import json
-from urllib.parse import urlsplit
+import posixpath
+from urllib.parse import unquote, urlsplit
 
 from datasette.utils import PrefixedUrlString
 
@@ -50,7 +51,9 @@ def normalize_panel_path(datasette, path):
         path = PrefixedUrlString(path)
     else:
         path = datasette.urls.path(path)
-    local = "/" + path[len(base_url) :]
+    # Compare the path alone - not its query string or fragment - after
+    # decoding and resolving any . or .. segments, as the browser will.
+    local = posixpath.normpath(unquote(urlsplit("/" + path[len(base_url) :]).path))
     if any(
         local == prefix or local.startswith(prefix + "/") for prefix in BLOCKED_PREFIXES
     ):

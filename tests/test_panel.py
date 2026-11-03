@@ -142,6 +142,40 @@ async def test_show_in_panel_applies_base_url(tmp_path):
     assert path is None and error
 
 
+@pytest.mark.parametrize("base_url", ["/", "/prefix/"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/-/agent",
+        "/-/agent/",
+        "/-/agent?x=1",
+        "/-/agent#top",
+        "/-/agent/abc?x=1",
+        "/data/../-/agent",
+        "/./-/agent",
+        "/-/%61gent",
+    ],
+)
+def test_normalize_panel_path_blocks_agent_pages(tmp_path, base_url, path):
+    from datasette_agent.panel_tools import normalize_panel_path
+
+    ds = Datasette(memory=True, settings={"base_url": base_url})
+    if base_url != "/":
+        path = base_url.rstrip("/") + path
+    assert normalize_panel_path(ds, path) == (
+        None,
+        "The agent chat pages cannot be shown in the panel",
+    )
+
+
+@pytest.mark.parametrize("path", ["/-/agents", "/data?q=/-/agent", "/data#/-/agent"])
+def test_normalize_panel_path_allows_lookalikes(path):
+    from datasette_agent.panel_tools import normalize_panel_path
+
+    ds = Datasette(memory=True)
+    assert normalize_panel_path(ds, path) == (path, None)
+
+
 @pytest.mark.asyncio
 async def test_system_prompt_does_not_mention_panel(datasette_instance):
     # The panel URL changes between turns, and a changed system prompt
