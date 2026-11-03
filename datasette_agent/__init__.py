@@ -85,6 +85,10 @@ def register_routes():
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/resume$",
             views.api_resume_conversation,
         ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stop$",
+            views.api_stop_turn,
+        ),
     ]
 
 

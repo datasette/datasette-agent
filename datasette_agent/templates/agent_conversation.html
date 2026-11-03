@@ -87,8 +87,9 @@
   {% if not background_agent %}
   <form id="chat-form" class="agent-input">
     <textarea id="message-input" placeholder="Type a message... (# to tag a table or query)" rows="2" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
-    <button type="submit" id="send-btn">Send</button>
+    <button type="submit" id="send-btn"><span class="agent-send-label">Send</span><span class="agent-stop-label"><svg class="agent-stop-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect width="16" height="16" rx="2.5" fill="currentColor"/></svg>Stop</span></button>
   </form>
+  <div id="agent-status" class="agent-visually-hidden" role="status"></div>
   {% endif %}
   </div>
 

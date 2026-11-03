@@ -20,6 +20,11 @@ from .models import get_agent_models
 from .questions import question_row_to_dict
 from .references import add_reference_urls, search_references
 from .schema import ensure_tables
+from .turns import (
+    ALREADY_RUNNING_MESSAGE,
+    get_turn,
+    stop_turn,
+)
 
 # Longest panel URL the page may report back; anything longer is ignored.
 MAX_PANEL_URL_LENGTH = 2000
@@ -408,6 +413,11 @@ async def agent_stream(request, datasette):
     references = data.get("references") or []
     panel_url = _clean_panel_url(data.get("panel_url"))
 
+    # One turn at a time per conversation (run_agent also refuses, in
+    # case two requests race past this check).
+    if get_turn(datasette, conversation_id) is not None:
+        return Response.json({"error": ALREADY_RUNNING_MESSAGE}, status=409)
+
     async def stream_fn(writer):
         await run_agent(
             datasette=datasette,
@@ -708,6 +718,30 @@ async def api_complete_task(request, datasette):
         return Response.json({"ok": False, "state": state}, status=400)
 
     return _resume_stream(request, datasette, task["conversation_id"])
+
+
+async def api_stop_turn(request, datasette):
+    """Stop the conversation's running turn, if there is one. A tool that
+    has started finishes first; the turn then ends without another
+    model call."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != _actor_id(request):
+        return Response.json({"error": "Forbidden"}, status=403)
+    stopping = stop_turn(datasette, conversation_id)
+    return Response.json({"ok": True, "stopping": stopping})
 
 
 async def api_cancel_task(request, datasette):

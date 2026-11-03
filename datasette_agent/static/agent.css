@@ -687,6 +687,68 @@
   cursor: not-allowed;
 }
 
+/* While a turn streams, Send becomes Stop: a square then "Stop". Both
+   labels share one grid cell so the button keeps the same size, and
+   only the visible one counts as the button's name. */
+#send-btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+#send-btn .agent-send-label,
+#send-btn .agent-stop-label {
+  grid-area: 1 / 1;
+}
+
+#send-btn .agent-stop-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  visibility: hidden;
+}
+
+#send-btn.agent-stop-mode .agent-send-label {
+  visibility: hidden;
+}
+
+#send-btn.agent-stop-mode .agent-stop-label {
+  visibility: visible;
+}
+
+/* Stop has been pressed and the turn is winding down. */
+#send-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.agent-stopped-note {
+  align-self: flex-start;
+  font-size: 0.85rem;
+  color: #666;
+  padding: 0.2rem 0;
+}
+
+/* Read by screen readers only */
+.agent-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Sized to the cap height of the label so the square and "Stop" read
+   as the same weight. */
+.agent-stop-icon {
+  display: block;
+  width: 0.72em;
+  height: 0.72em;
+}
+
 /* Index page */
 .agent-new-chat {
   display: flex;
