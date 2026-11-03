@@ -987,10 +987,20 @@ def test_normalize_write_parameter_types(legacy_params):
 
 
 @pytest.mark.parametrize(
+    "statement", [{"sql": "delete from t"}, {"sql": "delete from t", "params": None}]
+)
+def test_normalize_write_missing_or_null_params(statement):
+    # Small models often send "params": null for statements with no parameters
+    from datasette_agent.sql_tools import _normalize_statements
+
+    result = _normalize_statements([statement])
+    assert result[0]["provided_params"] == {}
+
+
+@pytest.mark.parametrize(
     "params, error",
     [
         ("id=1", "params must be an array or object"),
-        (None, "params must be an array or object"),
         ({"id": []}, "must be a string, number, boolean or null"),
         (
             [{"name": "id", "value": 1}, {"name": "id", "value": 2}],

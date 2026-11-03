@@ -166,7 +166,9 @@ def _normalize_statements(statements):
             params = []
         elif isinstance(statement, Mapping):
             sql = statement.get("sql")
-            params = statement.get("params", [])
+            params = statement.get("params")
+            if params is None:
+                params = []
         else:
             raise ValueError("statement {} must be an object".format(index))
         if not sql or not isinstance(sql, str):
