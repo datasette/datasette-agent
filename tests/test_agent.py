@@ -88,6 +88,34 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "base_url,expected_link",
+    [
+        ("/", "](/sales/orders?region=west)"),
+        ("/prefix/", "](/prefix/sales/orders?region=west)"),
+    ],
+)
+async def test_system_prompt_shows_relative_markdown_link(
+    tmp_path, base_url, expected_link
+):
+    """Models otherwise invent a hostname (https://datasette.local/...) when
+    linking to pages on this instance. The prompt includes an example
+    root-relative Markdown link that respects base_url."""
+    from datasette_agent.agent import _build_system_prompt
+
+    ds = Datasette(
+        memory=True,
+        settings={"base_url": base_url},
+        internal=str(tmp_path / "internal.db"),
+    )
+    await ds.invoke_startup()
+    prompt = await _build_system_prompt(ds, {"id": "user"})
+    assert expected_link in prompt
+    assert "root-relative" in prompt
+    assert "hostname" in prompt
+
+
+@pytest.mark.asyncio
 async def test_system_prompt_does_not_change_with_schema_or_actor(tmp_path):
     """Any change to the system prompt invalidates the provider's prompt
     cache for the whole conversation, so it must not depend on the schema

@@ -32,6 +32,7 @@ STOPPED_TOOL_OUTPUT = "Cancelled: the user stopped this turn before the tool ran
 
 
 async def _build_system_prompt(datasette, actor):
+    example_path = datasette.urls.path("/sales/orders?region=west")
     return (
         "You are a helpful data analysis assistant. "
         "You have access to tools that let you explore and query SQLite databases. "
@@ -52,6 +53,13 @@ async def _build_system_prompt(datasette, actor):
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
         "them from being interpreted as italic markers. "
         "This is not necessary inside backtick code spans like `table_name`.\n\n"
+        "When you link to a page in this Datasette instance, use a "
+        "root-relative path with no scheme or hostname, for example "
+        f"[orders in the west region]({example_path}). You do not know "
+        "the hostname the user is browsing, so never invent one such as "
+        "localhost or datasette.local. Only link to paths you have seen "
+        "in tool results or know exist; if a tool result says the user "
+        "already has a rendered link, you do not need to add another.\n\n"
         "When you call sql_query, pick a `display` mode for the result:\n"
         "- `model` (default): rows come back to you only. Pick this when "
         "you need to reason over the numbers but won't be quoting them "
