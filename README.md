@@ -439,11 +439,11 @@ datasette agent chat mydata.db -c datasette.yml -p "List all tables"
 datasette agent chat mydata.db --config datasette.json
 ```
 
-Use repeatable `-s` / `--setting` options to supply individual configuration values, using the same nested keys and JSON values as `datasette serve`. For example, to use a local LM Studio model through the OpenAI-compatible Responses API with an endpoint-capable version of datasette-llm:
+Use repeatable `-s` / `--setting` options to supply individual configuration values, using the same nested keys and JSON values as `datasette serve`. For example, to use Qwen3.8 27B in LM Studio through the OpenAI-compatible Responses API with an endpoint-capable version of datasette-llm:
 
 ```bash
 datasette agent chat :memory: \
-  -s plugins.datasette-llm.default_model '{"model":"lmstudio-qwen35-27b","model_name":"qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2","api_base":"http://localhost:1234/v1","responses":true}' \
+  -s plugins.datasette-llm.default_model '{"model":"lmstudio-qwen","model_name":"qwen/qwen3.8-27b","api_base":"http://localhost:1234/v1","responses":true}' \
   -p "Use SQL to calculate 21 * 2"
 ```
 
