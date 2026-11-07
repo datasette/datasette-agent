@@ -432,10 +432,29 @@ datasette agent chat mydata.db -m gpt-5.4-mini
 datasette agent chat mydata.db -m gpt-5.4-mini -p "List all tables"
 ```
 
+Use `-c` / `--config` to load a Datasette JSON or YAML configuration file, with the same behavior as `datasette serve`:
+
+```bash
+datasette agent chat mydata.db -c datasette.yml -p "List all tables"
+datasette agent chat mydata.db --config datasette.json
+```
+
+Use repeatable `-s` / `--setting` options to supply individual configuration values, using the same nested keys and JSON values as `datasette serve`. For example, to use a local LM Studio model through the OpenAI-compatible Responses API with an endpoint-capable version of datasette-llm:
+
+```bash
+datasette agent chat :memory: \
+  -s plugins.datasette-llm.default_model '{"model":"lmstudio-qwen35-27b","model_name":"qwen3.5-27b-claude-4.6-opus-reasoning-distilled-v2","api_base":"http://localhost:1234/v1","responses":true}' \
+  -p "Use SQL to calculate 21 * 2"
+```
+
+Configuration is loaded from `-c` first, then `-s` values are merged recursively so other nested values are preserved. `-m` overrides a `default_model` supplied using either option, regardless of option order. Other settings are preserved.
+
 Options:
 
 - `-p`, `--prompt` — Send a single prompt and exit (non-interactive mode)
 - `-m`, `--model` — LLM model to use
+- `-c`, `--config` — Path to a JSON/YAML Datasette configuration file
+- `-s`, `--setting` — Repeatable configuration key and value, with support for nested keys and JSON values
 - `--root` — Run as the Datasette root actor, allowing all permissions
 - `--yes` — Automatically approve yes/no confirmation prompts
 - `--unsafe` — Equivalent to `--root --yes`

@@ -255,6 +255,7 @@ def register_commands(cli):
     import asyncio
     import click
     import json
+    from datasette.cli import Setting
 
     @cli.group()
     def agent():
@@ -300,6 +301,21 @@ def register_commands(cli):
     @click.option("-p", "--prompt", help="Initial prompt to send")
     @click.option("-m", "--model", "model_id", help="LLM model to use")
     @click.option(
+        "-c",
+        "--config",
+        "config_file",
+        type=click.File(mode="r"),
+        help="Path to JSON/YAML Datasette configuration file",
+    )
+    @click.option(
+        "-s",
+        "--setting",
+        "settings",
+        type=Setting(),
+        multiple=True,
+        help="nested.key, value setting to use in Datasette configuration",
+    )
+    @click.option(
         "--root",
         "use_root",
         is_flag=True,
@@ -312,9 +328,16 @@ def register_commands(cli):
         help="Auto-approve yes/no confirmation prompts",
     )
     @click.option("--unsafe", is_flag=True, help="Equivalent to --root --yes")
-    def chat(files, prompt, model_id, use_root, auto_approve, unsafe):
+    def chat(
+        files, prompt, model_id, config_file, settings, use_root, auto_approve, unsafe
+    ):
         "Interactive chat session with the agent"
         from datasette.app import Datasette
+        from datasette.utils import (
+            deep_dict_update,
+            pairs_to_nested_config,
+            parse_metadata,
+        )
         from .cli_chat import run_chat
 
         db_files = []
@@ -329,11 +352,14 @@ def register_commands(cli):
         if memory or not db_files:
             kwargs["memory"] = True
 
-        metadata = {}
+        config = (parse_metadata(config_file.read()) if config_file else None) or {}
+        deep_dict_update(config, pairs_to_nested_config(settings))
         if model_id:
-            metadata = {"plugins": {"datasette-llm": {"default_model": model_id}}}
+            config.setdefault("plugins", {}).setdefault("datasette-llm", {})[
+                "default_model"
+            ] = model_id
 
-        ds = Datasette(db_files, metadata=metadata, **kwargs)
+        ds = Datasette(db_files, config=config, **kwargs)
         if unsafe:
             use_root = True
             auto_approve = True
