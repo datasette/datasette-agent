@@ -171,6 +171,49 @@ async def test_background_agent_writes_messages_to_db(datasette_instance):
 
 
 @pytest.mark.asyncio
+async def test_goal_sent_to_model_once(datasette_instance, monkeypatch):
+    """The goal is saved as the opening user message and reaches the
+    model through messages= alone - not a second time as prompt text."""
+    import llm_echo
+
+    from datasette_agent.api import (
+        get_background_agent_status,
+        start_background_agent,
+    )
+
+    seen = []
+    original_execute = llm_echo.EchoAsync.execute
+
+    async def recording_execute(self, prompt, *args, **kwargs):
+        seen.append(
+            [
+                "".join(getattr(part, "text", "") for part in message.parts)
+                for message in prompt.messages
+                if message.role == "user"
+            ]
+        )
+        async for chunk in original_execute(self, prompt, *args, **kwargs):
+            yield chunk
+
+    monkeypatch.setattr(llm_echo.EchoAsync, "execute", recording_execute)
+
+    agent_id = await start_background_agent(
+        datasette=datasette_instance,
+        actor={"id": "user"},
+        goal=GOAL_THAT_FINISHES,
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(datasette_instance, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+
+    assert status["status"] == "completed"
+    assert seen
+    assert all(user_texts == [GOAL_THAT_FINISHES] for user_texts in seen)
+
+
+@pytest.mark.asyncio
 async def test_tool_results_inserted_before_next_assistant(datasette_instance):
     """An assistant message with tool_calls must be followed by the matching
     tool_result message(s) in agent_messages BEFORE any subsequent assistant

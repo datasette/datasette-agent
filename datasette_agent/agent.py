@@ -87,7 +87,7 @@ async def _send_sse(writer, event, data):
     await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, control):
+async def _run_chain(datasette, actor, conversation_id, writer, control):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages. control is the turn's
     TurnControl, used to stop and watch it.
@@ -102,10 +102,10 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, con
     chain re-executes them through the normal tool machinery before
     calling the model.
 
-    prompt_text is passed through to chain() for adapters that read
-    prompt.prompt directly (e.g. echo); the persisted history passed as
-    messages= is authoritative and must already contain the
-    corresponding user row.
+    The persisted history passed as messages= is the whole input and
+    must already contain this turn's user row. No prompt text is passed
+    to chain(): llm appends that to messages= as a further user message,
+    which would send the user's message to the model twice.
     """
     db = datasette.get_internal_database()
 
@@ -272,7 +272,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, con
         # chain framework invokes the local tool.
 
     chain_response = model.chain(
-        prompt_text,
+        None,
         messages=prior_messages,
         system=system_prompt,
         tools=llm_tools,
@@ -450,7 +450,6 @@ async def _run_new_turn(
         actor,
         conversation_id,
         writer,
-        user_message,
         control,
     )
 
@@ -497,8 +496,7 @@ async def resume_agent(datasette, actor, conversation_id, writer):
                     actor,
                     conversation_id,
                     writer,
-                    prompt_text=None,
-                    control=control,
+                    control,
                 )
                 await _finish_turn(writer, pending)
             except Exception as e:

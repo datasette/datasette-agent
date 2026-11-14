@@ -78,7 +78,7 @@ async def _messages(ds, conversation_id):
 
 
 @pytest.fixture
-def model_calls(monkeypatch):
+def model_calls(monkeypatch, echo_prompt_text):
     """Record each call to the echo model. A call whose prompt is "hang"
     streams some text and then waits until the test releases it."""
     calls = []
@@ -87,8 +87,9 @@ def model_calls(monkeypatch):
     original = llm_echo.EchoAsync.execute
 
     async def execute(self, prompt, stream, response, conversation=None):
-        calls.append(prompt.prompt)
-        if prompt.prompt == "hang":
+        text = echo_prompt_text(prompt)
+        calls.append(text)
+        if text == "hang":
             yield "partial answer"
             streaming.set()
             await release.wait()

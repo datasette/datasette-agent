@@ -922,6 +922,56 @@ async def test_system_prompt_is_first_message(datasette_instance, cookies, monke
 
 
 @pytest.mark.asyncio
+async def test_user_message_sent_to_model_once(
+    datasette_instance, cookies, monkeypatch
+):
+    """llm appends prompt text to messages= as another user message, so
+    the history must be the only place the user's message is passed."""
+    import llm_echo
+
+    seen = []
+    original_execute = llm_echo.EchoAsync.execute
+
+    async def recording_execute(self, prompt, *args, **kwargs):
+        seen.append(
+            [
+                "".join(getattr(part, "text", "") for part in message.parts)
+                for message in prompt.messages
+                if message.role == "user"
+            ]
+        )
+        async for chunk in original_execute(self, prompt, *args, **kwargs):
+            yield chunk
+
+    monkeypatch.setattr(llm_echo.EchoAsync, "execute", recording_execute)
+    ds = datasette_instance
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hi"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+    # The first turn calls a tool, so it makes two model calls.
+    first = json.dumps(
+        {
+            "prompt": "First question",
+            "tool_calls": [{"name": "list_databases_and_tables", "arguments": {}}],
+        }
+    )
+    for message in (first, "Second question"):
+        response = await ds.client.post(
+            f"/-/agent/{conversation_id}/stream",
+            content=json.dumps({"message": message}),
+            headers={"Content-Type": "application/json"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200
+
+    assert seen == [[first], [first], [first, "Second question"]]
+
+
+@pytest.mark.asyncio
 async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
     from llm.parts import StreamEvent
 

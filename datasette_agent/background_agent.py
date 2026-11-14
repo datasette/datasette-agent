@@ -113,17 +113,16 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                 "Do not stop working until you call mark_finished."
             )
 
-            if iteration == 1:
-                current_user_text = goal
-            else:
-                current_user_text = (
-                    f"Keep going. Reminder: your goal is: {goal}. "
-                    "You must call mark_finished() when done."
-                )
+            # The goal was saved as the opening user message; later
+            # iterations add a reminder.
+            if iteration > 1:
                 await insert_message(
                     db,
                     conversation_id,
-                    make_user_message_dict(current_user_text),
+                    make_user_message_dict(
+                        f"Keep going. Reminder: your goal is: {goal}. "
+                        "You must call mark_finished() when done."
+                    ),
                 )
 
             chain_messages = await load_messages(db, conversation_id)
@@ -150,8 +149,10 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                 tools, datasette, actor, conversation_id=conversation_id
             )
 
+            # messages= already ends in this iteration's user message.
+            # Passing it as prompt text too would send it twice.
             chain_response = model.chain(
-                current_user_text,
+                None,
                 messages=chain_messages,
                 system=system_prompt,
                 tools=llm_tools,
