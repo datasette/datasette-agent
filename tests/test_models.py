@@ -4,9 +4,10 @@ conversation starts, and that conversation staying pinned to it."""
 import json
 
 from datasette.app import Datasette
+from datasette_llm import ModelNotFoundError
 import pytest
 
-from datasette_agent.models import get_agent_models
+from datasette_agent.models import get_agent_model, get_agent_models
 from datasette_agent.schema import ensure_tables
 
 # gpt-4 is registered by llm's OpenAI plugin with supports_tools=False,
@@ -351,7 +352,7 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
         async def write(self, chunk):
             self.chunks.append(chunk)
 
-    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
+    monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
 
     for message in ("first", "second"):
         await run_agent(ds, {"id": "user"}, conversation_id, message, Writer())
@@ -386,3 +387,201 @@ async def test_conversation_page_has_no_badge_before_model_resolved(
     )
     assert response.status_code == 200
     assert "agent-model-badge" not in response.text
+
+
+# --- Pinned models that stop being available -------------------------------
+
+PINNED_CONFIG = {
+    "default_model": "echo",
+    "models": ["echo", "echo-needs-key"],
+}
+
+
+async def _stream(ds, conversation_id, message):
+    return await ds.client.post(
+        f"/-/agent/{conversation_id}/stream",
+        content=json.dumps({"message": message}),
+        headers={"Content-Type": "application/json"},
+        cookies={"ds_actor": ds.client.actor_cookie({"id": "user"})},
+    )
+
+
+async def _response_count(ds, conversation_id):
+    db = ds.get_internal_database()
+    return (
+        await db.execute(
+            "SELECT count(*) FROM agent_responses WHERE conversation_id = ?",
+            [conversation_id],
+        )
+    ).single_value()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_config,keep_key",
+    (
+        # Dropped from the allowlist
+        ({"default_model": "echo", "models": ["echo"]}, True),
+        # Blocked for the agent purpose
+        (
+            {
+                **PINNED_CONFIG,
+                "purposes": {"agent": {"blocked_models": ["echo-needs-key"]}},
+            },
+            True,
+        ),
+        # Same configuration, but its API key has gone
+        (PINNED_CONFIG, False),
+    ),
+    ids=("removed-from-allowlist", "blocked", "key-removed"),
+)
+async def test_pinned_model_no_longer_available_stops_the_conversation(
+    tmp_path, monkeypatch, later_config, keep_key
+):
+    """A conversation keeps its model for life, but not past the point
+    where an administrator stops offering that model."""
+    monkeypatch.setenv("LLM_ECHO_NEEDS_KEY_KEY", "sekrit")
+    ds = _make_datasette(tmp_path, PINNED_CONFIG)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+    resp = await _create_conversation(
+        ds, cookies, {"message": "hi", "model": "echo-needs-key"}
+    )
+    conversation_id = resp.json()["conversation_id"]
+    first = await _stream(ds, conversation_id, "first")
+    assert "event: error" not in first.text
+    assert await _response_count(ds, conversation_id) == 1
+
+    # The same instance restarted with the model taken away.
+    if not keep_key:
+        monkeypatch.delenv("LLM_ECHO_NEEDS_KEY_KEY")
+    later = _make_datasette(tmp_path, later_config)
+    second = await _stream(later, conversation_id, "second")
+    assert "event: error" in second.text
+    assert (
+        "This conversation uses the model echo-needs-key, which is no longer "
+        "available. Start a new chat to use a different model."
+    ) in second.text
+    # The model was not called again, and the conversation stays pinned.
+    assert await _response_count(later, conversation_id) == 1
+    assert (await _conversation_row(later, conversation_id))[
+        "model_id"
+    ] == "echo-needs-key"
+
+
+# --- Running without a configured default model ----------------------------
+
+# No default_model. LLM's own default is not in the allowlist, so
+# datasette-llm has no default to offer either.
+NO_DEFAULT_CONFIG = {"models": ["echo"]}
+
+
+@pytest.mark.asyncio
+async def test_get_agent_model_uses_configured_default(multi_model_datasette):
+    await multi_model_datasette.invoke_startup()
+    model = await get_agent_model(multi_model_datasette, {"id": "user"})
+    assert model.model_id == "echo"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_model_without_default_uses_first_on_offer(tmp_path):
+    ds = _make_datasette(tmp_path, NO_DEFAULT_CONFIG)
+    await ds.invoke_startup()
+    model = await get_agent_model(ds, {"id": "user"})
+    assert model.model_id == "echo"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "llm_config",
+    (
+        {"default_model": "no-such-model", "models": ["echo"]},
+        {"purposes": {"agent": {"model": "no-such-model"}}, "models": ["echo"]},
+    ),
+    ids=("default_model", "purpose-model"),
+)
+async def test_get_agent_model_does_not_replace_a_broken_default(tmp_path, llm_config):
+    """A configured default that cannot be used is a mistake to report,
+    not a reason to quietly run on some other model."""
+    ds = _make_datasette(tmp_path, llm_config)
+    await ds.invoke_startup()
+    with pytest.raises(ModelNotFoundError):
+        await get_agent_model(ds, {"id": "user"})
+
+
+@pytest.mark.asyncio
+async def test_get_agent_model_without_any_models(tmp_path):
+    ds = _make_datasette(tmp_path, {"models": ["no-such-model"]})
+    await ds.invoke_startup()
+    with pytest.raises(ModelNotFoundError):
+        await get_agent_model(ds, {"id": "user"})
+
+
+@pytest.mark.asyncio
+async def test_chat_without_default_model_pins_first_on_offer(tmp_path):
+    ds = _make_datasette(tmp_path, NO_DEFAULT_CONFIG)
+    cookies = {"ds_actor": ds.client.actor_cookie({"id": "user"})}
+    resp = await _create_conversation(ds, cookies, {"message": "hi"})
+    conversation_id = resp.json()["conversation_id"]
+    response = await _stream(ds, conversation_id, "hello")
+    assert "event: error" not in response.text
+    assert (await _conversation_row(ds, conversation_id))["model_id"] == "echo"
+
+
+@pytest.mark.asyncio
+async def test_background_agent_runs_without_default_model(tmp_path):
+    import asyncio
+
+    from datasette_agent.api import (
+        get_background_agent_status,
+        start_background_agent,
+    )
+
+    ds = _make_datasette(tmp_path, NO_DEFAULT_CONFIG)
+    await ds.invoke_startup()
+    goal = json.dumps(
+        {
+            "prompt": "Test goal",
+            "tool_calls": [
+                {
+                    "name": "mark_finished",
+                    "arguments": {"final_message": "All done", "error": None},
+                }
+            ],
+        }
+    )
+    agent_id = await start_background_agent(
+        datasette=ds, actor={"id": "user"}, goal=goal
+    )
+    for _ in range(20):
+        await asyncio.sleep(0.2)
+        status = await get_background_agent_status(ds, agent_id)
+        if status["status"] in ("completed", "error"):
+            break
+    assert status["error"] is None
+    assert status["status"] == "completed"
+
+
+def test_chat_command_runs_without_default_model():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    result = CliRunner().invoke(
+        cli,
+        ["agent", "chat", "-s", "plugins.datasette-llm.models", '["echo"]']
+        + ["-p", "hello"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "hello" in result.output
+
+
+def test_chat_command_does_not_replace_an_unknown_model():
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    result = CliRunner().invoke(
+        cli,
+        ["agent", "chat", "-s", "plugins.datasette-llm.models", '["echo"]']
+        + ["-m", "no-such-model", "-p", "hello"],
+    )
+    assert result.exit_code != 0
+    assert "hello" not in result.output

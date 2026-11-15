@@ -1,7 +1,6 @@
 import json
 from datetime import datetime, timezone
 
-from datasette_llm import LLM
 
 from .agent import _build_system_prompt
 from .messages import (
@@ -12,6 +11,7 @@ from .messages import (
     make_user_message_dict,
     prepare_tool_output_for_model,
 )
+from .models import get_agent_model
 from .schema import ensure_tables
 from .tools import AgentTool, get_agent_tools, make_llm_tools
 
@@ -93,8 +93,7 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
         # Save initial goal as the opening user message.
         await insert_message(db, conversation_id, make_user_message_dict(goal))
 
-        llm_instance = LLM(datasette)
-        model = await llm_instance.model(purpose="agent", actor=actor)
+        model = await get_agent_model(datasette, actor)
 
         now = datetime.now(timezone.utc).isoformat()
         await db.execute_write(

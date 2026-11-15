@@ -7,9 +7,59 @@ that support tool calling - and resolves the default the UI should
 preselect.
 """
 
-from datasette_llm import LLM
+import llm
+from datasette_llm import LLM, ModelNotFoundError
 
 AGENT_PURPOSE = "agent"
+
+
+class AgentModelUnavailable(Exception):
+    """The model a conversation is pinned to can no longer be used."""
+
+
+def _default_is_configured(datasette):
+    config = datasette.plugin_config("datasette-llm") or {}
+    purpose_config = (config.get("purposes") or {}).get(AGENT_PURPOSE) or {}
+    return bool(purpose_config.get("model") or config.get("default_model"))
+
+
+async def get_agent_model(datasette, actor, pinned_model_id=None):
+    """Return the datasette-llm model an agent turn should run on.
+
+    ``pinned_model_id`` is the model a conversation is pinned to, if it
+    has one yet. datasette-llm checks a model requested by ID against
+    its allowlist, blocklist and keys, so a pinned model that has since
+    been taken away raises AgentModelUnavailable instead of carrying on.
+
+    Without a pinned model this is the datasette-llm default. If no
+    default is configured it is the first model on offer, the one the
+    new-chat picker preselects, so background agents and
+    ``datasette agent chat`` work without a default as the web chat
+    does. A default that is configured but unusable is never replaced
+    by another model: that raises, as a mistake to be fixed.
+    """
+    llm_instance = LLM(datasette)
+    if pinned_model_id is not None:
+        try:
+            return await llm_instance.model(
+                model_id=pinned_model_id, purpose=AGENT_PURPOSE, actor=actor
+            )
+        except (ModelNotFoundError, llm.NeedsKeyException) as ex:
+            raise AgentModelUnavailable(
+                f"This conversation uses the model {pinned_model_id}, which is "
+                "no longer available. Start a new chat to use a different model."
+            ) from ex
+    try:
+        return await llm_instance.model(purpose=AGENT_PURPOSE, actor=actor)
+    except ModelNotFoundError:
+        if _default_is_configured(datasette):
+            raise
+        model_ids, _ = await get_agent_models(datasette, actor)
+        if not model_ids:
+            raise
+        return await llm_instance.model(
+            model_id=model_ids[0], purpose=AGENT_PURPOSE, actor=actor
+        )
 
 
 async def get_agent_models(datasette, actor):

@@ -2,8 +2,6 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from datasette_llm import LLM
-
 from .messages import (
     insert_message,
     insert_response,
@@ -12,6 +10,7 @@ from .messages import (
     prepare_tool_output_for_model,
 )
 from .questions import QuestionsNotSupported
+from .models import get_agent_model
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
 
@@ -81,8 +80,7 @@ async def run_chat(datasette, initial_prompt=None, actor=None, auto_approve=Fals
         ask_user_callback=_ask_user_in_terminal,
     )
 
-    llm_instance = LLM(datasette)
-    model = await llm_instance.model(purpose="agent", actor=actor)
+    model = await get_agent_model(datasette, actor)
 
     from .agent import _build_system_prompt
 

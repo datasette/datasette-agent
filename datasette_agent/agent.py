@@ -3,7 +3,6 @@ import json
 from datetime import datetime, timezone
 
 import llm
-from datasette_llm import LLM
 
 from .context import current_conversation_id
 from .messages import (
@@ -19,7 +18,7 @@ from .messages import (
     strip_internal_keys,
 )
 from .browser_tasks import BrowserTaskPending
-from .models import AGENT_PURPOSE
+from .models import get_agent_model
 from .questions import QuestionPending
 from .references import prepare_references
 from .schema import ensure_tables
@@ -128,7 +127,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
     # conversations created without an explicit choice, resolved from
     # the datasette-llm default on the first turn) and written back to
     # the row so every later turn reuses it - even if the configured
-    # default changes in between.
+    # default changes in between. It stops being used if it is later
+    # blocked, dropped from the allowlist or loses its key.
     conversation_row = (
         await db.execute(
             "SELECT model_id FROM agent_conversations WHERE id = ?",
@@ -137,10 +137,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
     ).first()
     stored_model_id = conversation_row["model_id"] if conversation_row else None
 
-    llm_instance = LLM(datasette)
-    model = await llm_instance.model(
-        model_id=stored_model_id, purpose=AGENT_PURPOSE, actor=actor
-    )
+    model = await get_agent_model(datasette, actor, stored_model_id)
 
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(

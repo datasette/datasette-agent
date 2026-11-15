@@ -1085,7 +1085,7 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
         async def write(self, chunk):
             self.chunks.append(chunk)
 
-    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
+    monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
     writer = Writer()
 
     await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
@@ -1203,7 +1203,7 @@ async def test_tool_call_arguments_stream_before_tool_call(tmp_path, monkeypatch
         async def write(self, chunk):
             self.chunks.append(chunk)
 
-    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
+    monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
     writer = Writer()
 
     await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
