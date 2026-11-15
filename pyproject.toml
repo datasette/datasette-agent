@@ -10,7 +10,7 @@ classifiers=[
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "datasette>=1.0a41",
+    "datasette>=1.0a43",
     "datasette-llm>=0.1a11",
     "llm>=0.37.1",
     "python-ulid",
@@ -24,11 +24,6 @@ dev = [
     "inline-snapshot",
     "playwright",
 ]
-
-[tool.uv.sources]
-# Response.stream() is not in a Datasette release yet. Once it is, bump
-# the datasette dependency above and remove this.
-datasette = { git = "https://github.com/simonw/datasette", branch = "main" }
 
 [build-system]
 requires = ["setuptools"]
