@@ -4,6 +4,8 @@
 // chat open there too. Wide screens show chat and panel side by side;
 // narrow screens show one at a time with a Chat | Panel switch.
 
+import {insecureNavigation} from "./agent-links.js";
+
 const chat = document.querySelector(".agent-chat");
 const panel = chat && chat.querySelector(".agent-panel");
 
@@ -47,6 +49,17 @@ function setupPanel() {
     const url = new URL(href, window.location.href);
     if (url.origin !== window.location.origin) return null;
     return url.pathname + url.search + url.hash;
+  }
+
+  // Whether following a link or submitting a form inside the panel would
+  // navigate the panel itself, rather than a new tab or a download.
+  function opensInFrame(element, event) {
+    if (element.hasAttribute("download")) return false;
+    const target = element.getAttribute("target");
+    if (target && target !== "_self") return false;
+    if (!event) return true;
+    if (event.button !== 0) return false;
+    return !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
   }
 
   function setError(url) {
@@ -194,7 +207,38 @@ function setupPanel() {
     // can't be read back from the frame.
     loadedFrame.contentDocument.addEventListener("click", e => {
       const link = e.target.closest("a[href]");
-      if (link && !e.defaultPrevented) expectedUrl = localPath(link.href);
+      if (!link || e.defaultPrevented) return;
+      // An http link on an https site would be blocked without any sign
+      // that the click registered: follow its https equivalent, or say
+      // that the page can't be shown here.
+      const insecure = insecureNavigation(link.href, window.location.href);
+      if (insecure && opensInFrame(link, e)) {
+        e.preventDefault();
+        if (insecure.url) navigateFrame(localPath(insecure.url));
+        else setError(link.href);
+        return;
+      }
+      expectedUrl = localPath(link.href);
+    });
+    // The same goes for forms that submit to an http URL.
+    loadedFrame.contentDocument.addEventListener("submit", e => {
+      const form = e.target;
+      if (e.defaultPrevented || !opensInFrame(form)) return;
+      const action = (e.submitter && e.submitter.getAttribute("formaction")) ||
+        form.getAttribute("action");
+      if (!action) return;
+      const insecure = insecureNavigation(
+        new URL(action, loadedFrame.contentDocument.baseURI).href,
+        window.location.href
+      );
+      if (!insecure) return;
+      if (insecure.url) {
+        if (e.submitter) e.submitter.removeAttribute("formaction");
+        form.setAttribute("action", insecure.url);
+      } else {
+        e.preventDefault();
+        setError(action);
+      }
     });
     showUrl(url);
     // Give nested app frames a chance to paint before uncovering this page.

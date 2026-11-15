@@ -3,7 +3,7 @@ import {readFileSync} from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("../datasette_agent/static/agent-links.js", import.meta.url), "utf8");
-const {setLinkDestination} = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
+const {setLinkDestination, insecureNavigation} = await import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
 const base = "https://datasette.example/prefix/-/agent/conversation";
 
 function withLink(callback) {
@@ -106,3 +106,22 @@ test("changing a link destination clears the previous navigation behavior", () =
     setLinkDestination(link, "javascript:alert(1)");
     assert.equal(link.hasAttribute("href"), false);
 }));
+
+test("insecureNavigation upgrades http links to this site and flags the rest", () => {
+    const page = "https://datasette.example/-/agent/conversation";
+    assert.equal(insecureNavigation("https://datasette.example/data", page), null);
+    assert.equal(insecureNavigation("/data?_facet=owner", page), null);
+    assert.equal(insecureNavigation("https://other.example/", page), null);
+    assert.equal(insecureNavigation("mailto:someone@example.com", page), null);
+    assert.deepEqual(
+        insecureNavigation("http://datasette.example/data?_facet=owner&owner=x#facet-owner", page),
+        {url: "https://datasette.example/data?_facet=owner&owner=x#facet-owner"}
+    );
+    assert.deepEqual(insecureNavigation("http://other.example/page", page), {url: null});
+    assert.deepEqual(insecureNavigation("http://datasette.example:8001/data", page), {url: null});
+    // Nothing is blocked when the agent itself is served over http.
+    assert.equal(
+        insecureNavigation("http://localhost:8001/data", "http://localhost:8001/-/agent/x"),
+        null
+    );
+});

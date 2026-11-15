@@ -7,6 +7,24 @@ function parseWebUrl(value) {
   }
 }
 
+// Browsers silently refuse to navigate a frame on an https page to an
+// http URL (mixed content), so a click on such a link does nothing at all.
+// Returns null when href is safe to follow from pageHref. Otherwise returns
+// {url} with an https equivalent on this site, or {url: null} when there
+// is none.
+export function insecureNavigation(href, pageHref) {
+  let url, page;
+  try {
+    page = new URL(pageHref);
+    url = new URL(href, page);
+  } catch {
+    return null;
+  }
+  if (page.protocol !== "https:" || url.protocol !== "http:") return null;
+  if (url.hostname !== page.hostname || url.port) return {url: null};
+  return {url: page.origin + url.pathname + url.search + url.hash};
+}
+
 export function setLinkDestination(link, value) {
   if (link.hasAttribute("data-agent-external-url")) {
     link.removeAttribute("data-agent-external-url");
