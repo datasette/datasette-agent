@@ -345,17 +345,12 @@ async def test_every_turn_reuses_the_pinned_model(tmp_path, monkeypatch):
             requested.append((model_id, purpose))
             return FakeModel()
 
-    class Writer:
-        def __init__(self):
-            self.chunks = []
-
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
     monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
 
     for message in ("first", "second"):
-        await run_agent(ds, {"id": "user"}, conversation_id, message, Writer())
+        turn = run_agent(ds, {"id": "user"}, conversation_id, message)
+        async for _ in turn.events():
+            pass
 
     assert requested == [("pinned-model", "agent"), ("pinned-model", "agent")]
 

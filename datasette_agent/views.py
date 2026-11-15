@@ -1,4 +1,3 @@
-import asyncio
 import json
 from datetime import datetime, timezone
 
@@ -22,6 +21,7 @@ from .references import add_reference_urls, search_references
 from .schema import ensure_tables
 from .turns import (
     ALREADY_RUNNING_MESSAGE,
+    TurnAlreadyRunning,
     get_turn,
     running_conversation_ids,
     stop_turn,
@@ -431,46 +431,22 @@ def _sse_response(events):
     )
 
 
-class _QueueWriter:
-    """The writer a turn sends its events to: they are queued for the
-    response to pick up, so the turn never waits on the client."""
+def _turn_response(start):
+    """Start a turn and stream its events as Server-Sent Events.
 
-    def __init__(self):
-        self.queue = asyncio.Queue()
-
-    async def write(self, chunk):
-        self.queue.put_nowait(chunk)
-
-
-# Strong references to running turn tasks, so they are not garbage
-# collected once the response that started them has gone.
-_turn_tasks = set()
-
-
-def _turn_response(run):
-    """Stream a turn's events as Server-Sent Events.
-
-    run(writer) is run_agent() or resume_agent(). It runs in a task of
-    its own rather than inside the response, so the turn carries on to
-    the end if the client disconnects and the response is closed.
+    start() is a call to run_agent() or resume_agent(). The response
+    watches the turn just as the watch endpoint does, so closing it -
+    the client disconnecting - leaves the turn running.
     """
-    writer = _QueueWriter()
+    try:
+        turn = start()
+    except TurnAlreadyRunning as e:
+        return _sse_response(_error_event(str(e)))
+    return _sse_response(turn.events())
 
-    async def turn():
-        try:
-            await run(writer)
-        finally:
-            writer.queue.put_nowait(None)
 
-    async def events():
-        # Started on first iteration, once the response is being sent
-        task = asyncio.create_task(turn())
-        _turn_tasks.add(task)
-        task.add_done_callback(_turn_tasks.discard)
-        while (chunk := await writer.queue.get()) is not None:
-            yield chunk
-
-    return _sse_response(events())
+async def _error_event(message):
+    yield "event: error\ndata: {}\n\n".format(json.dumps({"message": message}))
 
 
 async def agent_stream(request, datasette):
@@ -501,18 +477,17 @@ async def agent_stream(request, datasette):
     references = data.get("references") or []
     panel_url = _clean_panel_url(data.get("panel_url"))
 
-    # One turn at a time per conversation (run_agent also refuses, in
-    # case two requests race past this check).
+    # One turn at a time per conversation. No await between this check
+    # and starting the turn, so two requests can't both get past it.
     if get_turn(datasette, conversation_id) is not None:
         return Response.json({"error": ALREADY_RUNNING_MESSAGE}, status=409)
 
     return _turn_response(
-        lambda writer: run_agent(
+        lambda: run_agent(
             datasette=datasette,
             actor=request.actor,
             conversation_id=conversation_id,
             user_message=user_message,
-            writer=writer,
             references=references,
             panel_url=panel_url,
         )
@@ -694,11 +669,10 @@ def _resume_stream(request, datasette, conversation_id):
     """
 
     return _turn_response(
-        lambda writer: resume_agent(
+        lambda: resume_agent(
             datasette=datasette,
             actor=request.actor,
             conversation_id=conversation_id,
-            writer=writer,
         )
     )
 
@@ -777,6 +751,10 @@ async def api_complete_task(request, datasette):
     return _resume_stream(request, datasette, task["conversation_id"])
 
 
+async def _resync_event():
+    yield "event: resync\ndata: {}\n\n"
+
+
 async def api_watch_turn(request, datasette):
     """Follow a running turn from a page opened after it started.
 
@@ -802,21 +780,11 @@ async def api_watch_turn(request, datasette):
         return Response.json({"error": "Forbidden"}, status=403)
     after = request.args.get("after")
 
-    async def events():
-        turn = get_turn(datasette, conversation_id)
-        # No await between this check and watch(), so no event is missed.
-        if turn is None or str(turn.watermark) != after:
-            yield "event: resync\ndata: {}\n\n"
-            return
-        queue = turn.watch()
-        try:
-            while (chunk := await queue.get()) is not None:
-                yield chunk
-        finally:
-            # Runs if the watching page goes away mid-turn
-            turn.watchers.discard(queue)
-
-    return _sse_response(events())
+    turn = get_turn(datasette, conversation_id)
+    if turn is None or str(turn.watermark) != after:
+        return _sse_response(_resync_event())
+    # No await between that check and events(), so no event is missed.
+    return _sse_response(turn.events())
 
 
 async def api_stop_turn(request, datasette):

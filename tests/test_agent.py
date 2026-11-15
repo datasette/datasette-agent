@@ -1078,19 +1078,10 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
         async def model(self, model_id=None, purpose=None, actor=None):
             return FakeModel()
 
-    class Writer:
-        def __init__(self):
-            self.chunks = []
-
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
     monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
-    writer = Writer()
+    turn = run_agent(ds, {"id": "user"}, conversation_id, "hello")
 
-    await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
-
-    events = _parse_sse("".join(writer.chunks))
+    events = _parse_sse("".join([chunk async for chunk in turn.events()]))
     reasoning = [event for event in events if event["event"] == "reasoning_chunk"]
     assert reasoning == [
         {"event": "reasoning_chunk", "data": {"content": "visible reasoning"}}
@@ -1196,19 +1187,10 @@ async def test_tool_call_arguments_stream_before_tool_call(tmp_path, monkeypatch
         async def model(self, model_id=None, purpose=None, actor=None):
             return FakeModel()
 
-    class Writer:
-        def __init__(self):
-            self.chunks = []
-
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
     monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
-    writer = Writer()
+    turn = run_agent(ds, {"id": "user"}, conversation_id, "hello")
 
-    await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
-
-    events = _parse_sse("".join(writer.chunks))
+    events = _parse_sse("".join([chunk async for chunk in turn.events()]))
     event_types = [event["event"] for event in events]
     assert event_types.index("tool_call_start") < event_types.index("tool_call")
     chunks = [

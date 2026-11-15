@@ -216,8 +216,14 @@ async def test_stream_passes_panel_url(
 
     captured = {}
 
-    async def fake_run_agent(**kwargs):
+    class FakeTurn:
+        async def events(self):
+            return
+            yield
+
+    def fake_run_agent(**kwargs):
         captured.update(kwargs)
+        return FakeTurn()
 
     monkeypatch.setattr(views, "run_agent", fake_run_agent)
     ds = datasette_instance
