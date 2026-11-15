@@ -34,7 +34,7 @@ jobs:
         pip install . --group dev
     - name: Run tests
       run: |
-        python -m pytest --ignore=tests/test_agent_links_browser.py
+        python -m pytest --ignore=tests/test_agent_links_browser.py --ignore=tests/test_attachments_browser.py
 
   browser:
     runs-on: ubuntu-latest
@@ -47,5 +47,5 @@ jobs:
       run: |
         pip install . --group dev
         playwright install --with-deps chromium
-    - name: Test link confirmation in the browser
-      run: python -m pytest tests/test_agent_links_browser.py
+    - name: Test link confirmation and attachments in the browser
+      run: python -m pytest tests/test_agent_links_browser.py tests/test_attachments_browser.py

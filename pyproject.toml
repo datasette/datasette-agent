@@ -23,7 +23,14 @@ dev = [
     "llm-echo>=0.5a0",
     "inline-snapshot",
     "playwright",
+    "datasette-files",
 ]
+
+# Temporary: file attachments need the datasette-files Python API
+# (create_file / get_file_for_actor), which is not yet in a release.
+# Remove this override once datasette-files ships with that API.
+[tool.uv.sources]
+datasette-files = { path = "../datasette-files", editable = true }
 
 [build-system]
 requires = ["setuptools"]

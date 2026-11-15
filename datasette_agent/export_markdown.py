@@ -9,6 +9,10 @@ def _pretty_json(value):
         return value or ""
 
 
+def _escape_link_text(text):
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
 def format_conversation_markdown(title, messages):
     """Format a conversation as a markdown transcript.
 
@@ -43,6 +47,15 @@ def format_conversation_markdown(title, messages):
                     for r in references
                 )
                 parts.append(f"Tagged: {tagged}\n")
+            attachments = msg.get("attachments")
+            if attachments:
+                # Linked, never embedded: the files stay in datasette-files
+                # behind its own permission checks.
+                linked = ", ".join(
+                    "[{}]({})".format(_escape_link_text(a["filename"]), a["url"])
+                    for a in attachments
+                )
+                parts.append(f"Attachments: {linked}\n")
 
         elif role == "assistant":
             if content:

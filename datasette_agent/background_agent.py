@@ -126,7 +126,9 @@ async def run_background_agent(datasette, actor, agent_id, tools=None):
                     make_user_message_dict(current_user_text),
                 )
 
-            chain_messages = await load_messages(db, conversation_id)
+            chain_messages = await load_messages(
+                db, conversation_id, datasette=datasette, actor=actor
+            )
 
             pending_tool_messages = []
 

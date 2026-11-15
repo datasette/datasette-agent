@@ -66,6 +66,13 @@
         {% if msg.role == "user" %}
         <div class="agent-message agent-message-user"{% if msg.references %} data-references='{{ msg.references | tojson }}'{% endif %}>
           <div class="agent-message-content">{{ msg.content }}</div>
+          {% if msg.attachments %}
+          <div class="agent-message-attachments">
+            {% for attachment in msg.attachments %}
+            <a class="agent-attachment" href="{{ attachment.url }}" title="{{ attachment.filename }}"><img src="{{ attachment.thumbnail_url }}" alt="{{ attachment.filename }}" loading="lazy"></a>
+            {% endfor %}
+          </div>
+          {% endif %}
         </div>
         {% elif msg.role == "assistant" and msg.content|trim %}
         <div class="agent-message agent-message-assistant">
@@ -85,7 +92,13 @@
   </div>
 
   {% if not background_agent %}
-  <form id="chat-form" class="agent-input">
+  {% if attachment_types %}
+  <div id="attachment-chips" class="agent-attachment-chips" aria-label="Attached files" hidden></div>
+  {% endif %}
+  <form id="chat-form" class="agent-input"{% if attachment_types %} data-attachment-upload-url="{{ urls.path('/-/agent/api/attachments') }}" data-attachment-model="{{ attachment_model }}" data-attachment-types='{{ attachment_types | tojson }}'{% endif %}>
+    {% if attachment_types %}
+    {% include "_agent_attach_button.html" %}
+    {% endif %}
     <textarea id="message-input" placeholder="Type a message... (# to tag a table or query)" rows="2" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
     <button type="submit" id="send-btn"><span class="agent-send-label">Send</span><span class="agent-stop-label"><svg class="agent-stop-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect width="16" height="16" rx="2.5" fill="currentColor"/></svg>Stop</span></button>
   </form>
@@ -127,7 +140,14 @@ if (pending) {
     );
   } catch (e) {}
   sessionStorage.removeItem("agent_pending_references");
-  window.sendMessage(conversationId, pending, pendingReferences);
+  let pendingAttachments = [];
+  try {
+    pendingAttachments = JSON.parse(
+      sessionStorage.getItem("agent_pending_attachments") || "[]"
+    );
+  } catch (e) {}
+  sessionStorage.removeItem("agent_pending_attachments");
+  window.sendMessage(conversationId, pending, pendingReferences, pendingAttachments);
 }
 </script>
 {% else %}

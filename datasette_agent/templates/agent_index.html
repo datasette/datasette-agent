@@ -10,7 +10,10 @@
 <main class="agent-index">
 <h1>Datasette Agent</h1>
 
-<form id="new-chat-form" class="agent-composer">
+<form id="new-chat-form" class="agent-composer"{% if attachment_types %} data-attachment-upload-url="{{ urls.path('/-/agent/api/attachments') }}" data-attachment-types='{{ attachment_types | tojson }}'{% endif %}>
+  {% if attachment_types %}
+  <div id="attachment-chips" class="agent-attachment-chips" aria-label="Attached files" hidden></div>
+  {% endif %}
   <div class="agent-composer-input">
     <textarea id="new-message" aria-label="New chat message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="4" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
   </div>
@@ -30,7 +33,12 @@
     <span class="agent-new-chat-hint">Model: <code>{{ models[0] }}</code></span>
   </div>
   {% endif %}
-    <button type="submit">Start chat</button>
+    <div class="agent-composer-actions">
+      {% if attachment_types %}
+      {% include "_agent_attach_button.html" %}
+      {% endif %}
+      <button type="submit">Start chat</button>
+    </div>
   </div>
 </form>
 
@@ -71,6 +79,7 @@
 
 <script type="module">
 import {attachReferencePicker} from {{ static('references.js', plugin='datasette-agent')|tojson }};
+import {attachAttachmentPicker} from {{ static('attachments.js', plugin='datasette-agent')|tojson }};
 const referencePicker = attachReferencePicker(
   document.getElementById("new-message"),
   {placement: "below"}
@@ -86,6 +95,26 @@ if (modelSelect && modelSelect.tagName === "SELECT") {
     }
   } catch (e) {}
 }
+// File attachments, for whichever model is selected. Null when no model
+// on offer accepts them.
+const newChatForm = document.getElementById("new-chat-form");
+let attachmentPicker = null;
+if (newChatForm.dataset.attachmentUploadUrl) {
+  const typesByModel = JSON.parse(newChatForm.dataset.attachmentTypes || "{}");
+  const selectedModel = () => (modelSelect && modelSelect.value) || "";
+  attachmentPicker = attachAttachmentPicker({
+    form: newChatForm,
+    textarea: document.getElementById("new-message"),
+    uploadUrl: newChatForm.dataset.attachmentUploadUrl,
+    getModelId: selectedModel,
+    types: typesByModel[selectedModel()] || [],
+  });
+  if (modelSelect) {
+    modelSelect.addEventListener("change", () => {
+      attachmentPicker.setTypes(typesByModel[selectedModel()] || []);
+    });
+  }
+}
 document.getElementById("new-message").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
@@ -96,7 +125,8 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
   e.preventDefault();
   const message = document.getElementById("new-message").value.trim();
   if (!message) return;
-  const btn = e.target.querySelector("button");
+  if (attachmentPicker && attachmentPicker.isUploading()) return;
+  const btn = e.target.querySelector('button[type="submit"]');
   btn.disabled = true;
   btn.textContent = "Starting...";
   const body = {message};
@@ -121,6 +151,10 @@ document.getElementById("new-chat-form").addEventListener("submit", async (e) =>
     sessionStorage.setItem(
       "agent_pending_references",
       JSON.stringify(referencePicker.getReferences())
+    );
+    sessionStorage.setItem(
+      "agent_pending_attachments",
+      JSON.stringify(attachmentPicker ? attachmentPicker.getAttachments() : [])
     );
     window.location.href = {{ urls.path("/-/agent/")|tojson }} + data.conversation_id;
   } catch (err) {

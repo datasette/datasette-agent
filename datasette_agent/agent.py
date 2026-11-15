@@ -113,7 +113,30 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, con
     )
 
     system_prompt = await _build_system_prompt(datasette, actor)
-    prior_messages = await load_messages(db, conversation_id)
+    prior_messages = await load_messages(
+        db, conversation_id, datasette=datasette, actor=actor
+    )
+
+    # On a new turn llm appends the turn's input - prompt_text plus
+    # attachments= - to the chain as a final user message, and adapters
+    # such as echo read prompt.attachments directly. So hand this turn's
+    # attachments over that way, taking them off the persisted user row
+    # loaded above so that each file is sent once. On later turns, and
+    # on resume, they stay in the history.
+    turn_attachments = []
+    if prompt_text is not None and prior_messages:
+        last = prior_messages[-1]
+        if last.role == "user":
+            turn_attachments = [
+                part.attachment
+                for part in last.parts
+                if isinstance(part, llm.parts.AttachmentPart)
+            ]
+            last.parts = [
+                part
+                for part in last.parts
+                if not isinstance(part, llm.parts.AttachmentPart)
+            ]
 
     # A conversation is pinned to one model for its whole life. The
     # model is chosen when the conversation is created (or, for
@@ -266,6 +289,7 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text, con
     chain_response = model.chain(
         prompt_text,
         messages=prior_messages,
+        attachments=turn_attachments or None,
         system=system_prompt,
         tools=llm_tools,
         stream=True,
@@ -365,7 +389,10 @@ async def run_agent(
     writer,
     references=None,
     panel_url=None,
+    attachments=None,
 ):
+    """Run one user turn. attachments is a list of attachment parts from
+    attachments.resolve_attachments, which has already checked them."""
     db = datasette.get_internal_database()
     await ensure_tables(db)
 
@@ -384,6 +411,7 @@ async def run_agent(
                     references,
                     panel_url,
                     control,
+                    attachments,
                 )
             except Exception as e:
                 await _send_sse(writer, "error", {"message": str(e)})
@@ -400,6 +428,7 @@ async def _run_new_turn(
     references,
     panel_url,
     control,
+    attachments=None,
 ):
     db = datasette.get_internal_database()
 
@@ -430,7 +459,7 @@ async def _run_new_turn(
 
     # Persist the user turn as a MessageDict.
     user_message_dict = make_user_message_dict(
-        user_message, references, references_context
+        user_message, references, references_context, attachments
     )
     if panel_url != await latest_panel_url(db, conversation_id):
         user_message_dict["parts"].append(make_panel_note_part(panel_url))

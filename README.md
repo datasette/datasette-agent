@@ -61,6 +61,35 @@ Plugins can add their own kinds of taggable item - see [Registering reference ty
 
 The autocomplete list comes from `/-/agent/api/references?q=...`.
 
+### Attaching files
+
+Signed-in users can attach files - screenshots and other images, mostly - to a message when the conversation's model accepts them. Use the paperclip button next to the message input, paste an image into the input, or drop files onto it. Each file uploads straight away and shows as a chip that can be removed before sending; the sent message shows a thumbnail linking to the file. The button only appears for models that accept attachments, and only offers the file types that model takes.
+
+Attachments are stored by [datasette-files](https://github.com/datasette/datasette-files), which is an optional dependency: install it, configure a source for the files, and tell datasette-agent to use that source:
+
+```yaml
+plugins:
+  datasette-files:
+    sources:
+      agent-attachments:
+        storage: filesystem
+        config:
+          root: /path/to/attachments
+        audience: collaborators
+  datasette-agent:
+    attachments_source: agent-attachments
+    attachments_max_bytes: 10485760
+```
+
+- `attachments_source` - the slug of the datasette-files source to store attachments in. Attachments are switched off unless this is set and datasette-files is installed.
+- `attachments_max_bytes` - the largest file that can be attached, in bytes. Optional, defaults to 10 MB.
+
+Each attachment is saved as a private file owned by the user who attached it, so only they (and datasette-files administrators) can see it, on the conversation page or anywhere else. It stays in their files after the message is sent, and if they attach a file and then remove it without sending. The conversation itself only records which file was attached: its contents are read back from datasette-files, with a permission check for the user running the turn, each time the model is sent the conversation history. If the file has since been deleted, or that user can no longer view it, the model is told the attachment is no longer available instead.
+
+`POST /-/agent/api/attachments` is the upload endpoint: a multipart form with a `file` field and the `model_id` the message will be sent to. It returns `{"ok": true, "file": {"id": "df-...", ...}}`. `POST /-/agent/<conversation_id>/stream` then accepts `"attachments": ["df-...", ...]` alongside `"message"`, up to 10 per message. Those can be the IDs of any datasette-files files the user is allowed to view, not only ones uploaded through the chat, provided the model accepts their type. `/-/agent/api/models` includes an `attachment_types` object listing the MIME types each model accepts, which is empty for every model while attachments are switched off.
+
+The Markdown export links to each attached file rather than embedding it. Background agents and `datasette agent chat` do not take attachments.
+
 ### The panel
 
 The conversation page can show Datasette pages - tables, query results, row pages, pages from other plugins such as datasette-apps - in a panel next to the chat. The agent opens pages there with its built-in `show_in_panel` tool, and links in the conversation that point at this Datasette instance open there too. You can keep clicking around inside the panel, and when you send a message the agent is told if the panel has moved to a different page, so you can ask about "this table".

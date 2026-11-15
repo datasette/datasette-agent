@@ -2,10 +2,23 @@ import json
 from datetime import datetime, timezone
 
 from datasette import Forbidden, NotFound, Response
-from datasette.utils.asgi import AsgiStream
+from datasette.utils.asgi import AsgiStream, BadRequest
 from ulid import ULID
 
 from .agent import resume_agent, run_agent
+from .attachments import (
+    NOT_ENABLED_MESSAGE,
+    AttachmentError,
+    add_attachment_urls,
+    attachments_max_bytes,
+    attachments_source,
+    file_to_json,
+    model_attachment_types,
+    resolve_attachments,
+    store_attachment,
+    too_large_message,
+    unsupported_type_message,
+)
 from .browser_tasks import (
     MAX_RESULT_BYTES,
     cancel_task,
@@ -16,7 +29,7 @@ from .browser_tasks import (
 )
 from .export_markdown import format_conversation_markdown
 from .messages import combine_tool_messages_for_render, flatten_for_render
-from .models import get_agent_models
+from .models import get_agent_models, resolve_model_id
 from .questions import question_row_to_dict
 from .references import add_reference_urls, search_references
 from .schema import ensure_tables
@@ -138,6 +151,7 @@ async def agent_index(request, datasette):
         )
     ).rows
     models, default_model = await get_agent_models(datasette, request.actor)
+    attachment_types = _attachment_types_by_model(datasette, request, models)
     return Response.html(
         await datasette.render_template(
             "agent_index.html",
@@ -146,6 +160,11 @@ async def agent_index(request, datasette):
                 "running": running_conversation_ids(datasette),
                 "models": models,
                 "default_model": default_model,
+                # Per model, so the composer can follow the model picker.
+                # None when no model on offer takes attachments.
+                "attachment_types": (
+                    attachment_types if any(attachment_types.values()) else None
+                ),
                 "page": page,
                 "page_count": page_count,
                 "total_conversations": total_conversations,
@@ -165,7 +184,94 @@ async def api_models(request, datasette):
     """
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     models, default_model = await get_agent_models(datasette, request.actor)
-    return Response.json({"models": models, "default_model": default_model})
+    return Response.json(
+        {
+            "models": models,
+            "default_model": default_model,
+            "attachment_types": _attachment_types_by_model(datasette, request, models),
+        }
+    )
+
+
+def _attachment_types_by_model(datasette, request, model_ids):
+    """{model_id: [MIME types it accepts as attachments]} - every list
+    empty when this actor cannot attach files at all."""
+    enabled = _actor_id(request) is not None
+    return {
+        model_id: model_attachment_types(datasette, model_id) if enabled else []
+        for model_id in model_ids
+    }
+
+
+def _attachment_error(message, status=400):
+    return Response.json({"ok": False, "error": message}, status=status)
+
+
+async def api_upload_attachment(request, datasette):
+    """Store a file to attach to a message that will be sent to model_id.
+
+    A multipart POST with a ``file`` field and ``model_id``. The file is
+    saved to the configured datasette-files source as a private file
+    owned by the actor; its ID then goes in the ``attachments`` list of
+    the message sent to the stream endpoint.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return _attachment_error("POST required", status=405)
+    actor_id = _actor_id(request)
+    if actor_id is None:
+        return _attachment_error("Sign in to attach files", status=403)
+    if attachments_source(datasette) is None:
+        return _attachment_error(NOT_ENABLED_MESSAGE)
+
+    max_bytes = attachments_max_bytes(datasette)
+    try:
+        form = await request.form(
+            files=True,
+            max_file_size=max_bytes,
+            max_request_size=max_bytes + 1024 * 1024,  # file + form overhead
+            max_files=1,
+        )
+    except BadRequest as e:
+        message = str(e.args[0]) if e.args else "Invalid upload"
+        if "too large" in message.lower():
+            return _attachment_error(too_large_message(datasette), status=413)
+        return _attachment_error(message)
+    try:
+        model_id = form.get("model_id")
+        if not isinstance(model_id, str) or not model_id:
+            return _attachment_error("model_id is required")
+        available, _ = await get_agent_models(datasette, request.actor)
+        if model_id not in available:
+            return _attachment_error("Model not available: {}".format(model_id))
+        types = model_attachment_types(datasette, model_id)
+        if not types:
+            return _attachment_error("{} does not accept attachments".format(model_id))
+
+        uploaded = form.get("file")
+        if uploaded is None or not hasattr(uploaded, "read"):
+            return _attachment_error("No file provided")
+        filename = uploaded.filename or "attachment"
+        content_type = (uploaded.content_type or "").split(";")[0].strip().lower()
+        if content_type not in types:
+            return _attachment_error(
+                unsupported_type_message(filename, content_type, model_id)
+            )
+        if uploaded.size > max_bytes:
+            return _attachment_error(too_large_message(datasette), status=413)
+        content = await uploaded.read()
+        if not content:
+            return _attachment_error("{} is empty".format(filename))
+
+        try:
+            file = await store_attachment(
+                datasette, actor_id, filename, content, content_type
+            )
+        except AttachmentError as e:
+            return _attachment_error(str(e), status=e.status)
+        return Response.json({"ok": True, "file": file_to_json(datasette, file)})
+    finally:
+        await form.aclose()
 
 
 async def api_references(request, datasette):
@@ -308,8 +414,21 @@ async def agent_conversation(request, datasette):
         needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
 
     render_messages = combine_tool_messages_for_render(
-        await add_reference_urls(datasette, flatten_for_render(messages))
+        add_attachment_urls(
+            datasette,
+            await add_reference_urls(datasette, flatten_for_render(messages)),
+        )
     )
+
+    # The composer offers attachments if the model this conversation
+    # runs on takes them. Background-agent pages have no composer.
+    attachment_model = None
+    attachment_types = []
+    if actor_id is not None and not background_agent:
+        attachment_model = await resolve_model_id(
+            datasette, request.actor, row["model_id"]
+        )
+        attachment_types = model_attachment_types(datasette, attachment_model)
 
     return Response.html(
         await datasette.render_template(
@@ -327,6 +446,8 @@ async def agent_conversation(request, datasette):
                 "needs_resume": needs_resume,
                 "turn_running": turn is not None,
                 "turn_watermark": turn_watermark,
+                "attachment_model": attachment_model,
+                "attachment_types": attachment_types,
             },
             request=request,
         )
@@ -406,7 +527,13 @@ async def agent_conversation_markdown(request, datasette):
 
     title = row["title"] or "Chat"
     markdown = format_conversation_markdown(
-        title, await add_reference_urls(datasette, flatten_for_render(messages))
+        title,
+        add_attachment_urls(
+            datasette,
+            await add_reference_urls(datasette, flatten_for_render(messages)),
+            # The export is read away from this site, so link in full
+            absolute=lambda path: datasette.absolute_url(request, path),
+        ),
     )
 
     # Sanitize title for filename
@@ -455,6 +582,21 @@ async def agent_stream(request, datasette):
     if get_turn(datasette, conversation_id) is not None:
         return Response.json({"error": ALREADY_RUNNING_MESSAGE}, status=409)
 
+    # Attached files: IDs of datasette-files files this actor can view.
+    # Checked here, before anything is saved, so a file that cannot be
+    # attached fails the request instead of the turn.
+    attachments = []
+    if data.get("attachments"):
+        try:
+            attachments = await resolve_attachments(
+                datasette,
+                request.actor,
+                await resolve_model_id(datasette, request.actor, row["model_id"]),
+                data["attachments"],
+            )
+        except AttachmentError as e:
+            return Response.json({"error": str(e)}, status=e.status)
+
     async def stream_fn(writer):
         await run_agent(
             datasette=datasette,
@@ -464,6 +606,7 @@ async def agent_stream(request, datasette):
             writer=writer,
             references=references,
             panel_url=panel_url,
+            attachments=attachments,
         )
 
     return AsgiStream(

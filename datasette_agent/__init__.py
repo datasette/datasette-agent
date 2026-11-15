@@ -38,6 +38,7 @@ def register_routes():
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
         (r"^/-/agent/api/models$", views.api_models),
+        (r"^/-/agent/api/attachments$", views.api_upload_attachment),
         (r"^/-/agent/api/references$", views.api_references),
         (r"^/-/agent/api/running$", views.api_running),
         (r"^/-/agent/background$", views.agent_background_index),

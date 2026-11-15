@@ -36,3 +36,16 @@ async def get_agent_models(datasette, actor):
     except Exception:
         default_model_id = None
     return model_ids, default_model_id
+
+
+async def resolve_model_id(datasette, actor, model_id=None):
+    """The model a conversation with this stored model_id runs on: the
+    stored one, or the datasette-llm default if it has none yet. None if
+    that default cannot be resolved."""
+    if model_id:
+        return model_id
+    try:
+        model = await LLM(datasette).model(purpose=AGENT_PURPOSE, actor=actor)
+    except Exception:
+        return None
+    return model.model_id

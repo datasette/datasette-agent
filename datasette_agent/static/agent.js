@@ -1,5 +1,6 @@
 import * as smd from "./smd.js";
 import {attachReferencePicker, renderTextWithReferences} from "./references.js";
+import {attachAttachmentPicker, renderMessageAttachments} from "./attachments.js";
 import {prepareLinks, setLinkDestination, setupExternalLinks} from "./agent-links.js";
 
 setupExternalLinks(document.getElementById("messages"));
@@ -100,7 +101,7 @@ function scrollToBottomIfFollowing() {
   if (autoFollow) scrollToBottom();
 }
 
-function appendMessage(role, content, references = null) {
+function appendMessage(role, content, references = null, attachments = null) {
   const messages = document.getElementById("messages");
   const div = document.createElement("div");
   div.className = "agent-message agent-message-" + role;
@@ -119,6 +120,7 @@ function appendMessage(role, content, references = null) {
   } else {
     contentDiv.textContent = content;
   }
+  if (role === "user") renderMessageAttachments(div, attachments);
   messages.appendChild(div);
   scrollToBottom();
   return contentDiv;
@@ -425,6 +427,20 @@ const referencePicker = messageInputEl
   ? attachReferencePicker(messageInputEl)
   : null;
 
+// File attachments: only where the conversation's model accepts them, in
+// which case the template renders the attach button and these settings.
+const chatFormEl = document.getElementById("chat-form");
+const attachmentPicker =
+  chatFormEl && chatFormEl.dataset.attachmentUploadUrl
+    ? attachAttachmentPicker({
+        form: chatFormEl,
+        textarea: messageInputEl,
+        uploadUrl: chatFormEl.dataset.attachmentUploadUrl,
+        getModelId: () => chatFormEl.dataset.attachmentModel,
+        types: JSON.parse(chatFormEl.dataset.attachmentTypes || "[]"),
+      })
+    : null;
+
 function currentConversationId() {
   return document.querySelector(".agent-chat").dataset.conversationId;
 }
@@ -503,13 +519,19 @@ async function requestStop() {
   }
 }
 
-async function sendMessage(conversationId, message, references = []) {
-  appendMessage("user", message, references);
+// attachments are files already uploaded, as the upload endpoint
+// described them; the message is sent with their IDs.
+async function sendMessage(conversationId, message, references = [], attachments = []) {
+  appendMessage("user", message, references, attachments);
   const input = document.getElementById("message-input");
   if (input) input.value = "";
   if (referencePicker) referencePicker.clear();
+  if (attachmentPicker) attachmentPicker.clear();
   const payload = {message};
   if (references && references.length) payload.references = references;
+  if (attachments && attachments.length) {
+    payload.attachments = attachments.map((file) => file.id);
+  }
   const panelUrl =
     window.datasetteAgentPanel && window.datasetteAgentPanel.currentUrl();
   if (panelUrl) payload.panel_url = panelUrl;
@@ -1144,15 +1166,24 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   streamAgentEvents(resumeUrl(), {});
 })();
 
-// Anything typed in the message box survives a resync reload.
+// Anything typed in the message box, and any files attached to it,
+// survive a resync reload.
 function draftKey() {
   return "agent_draft:" + currentConversationId();
+}
+
+function draftAttachmentsKey() {
+  return "agent_draft_attachments:" + currentConversationId();
 }
 
 function reloadKeepingDraft() {
   const input = document.getElementById("message-input");
   try {
     if (input && input.value) sessionStorage.setItem(draftKey(), input.value);
+    const attached = attachmentPicker ? attachmentPicker.getAttachments() : [];
+    if (attached.length) {
+      sessionStorage.setItem(draftAttachmentsKey(), JSON.stringify(attached));
+    }
   } catch (err) {}
   window.location.reload();
 }
@@ -1164,6 +1195,9 @@ function reloadKeepingDraft() {
     const draft = sessionStorage.getItem(draftKey());
     sessionStorage.removeItem(draftKey());
     if (draft && !input.value) input.value = draft;
+    const attached = sessionStorage.getItem(draftAttachmentsKey());
+    sessionStorage.removeItem(draftAttachmentsKey());
+    if (attached && attachmentPicker) attachmentPicker.restore(JSON.parse(attached));
   } catch (err) {}
 })();
 
@@ -1186,8 +1220,18 @@ function submitInput() {
   const input = document.getElementById("message-input");
   const message = input.value.trim();
   if (!message) return;
+  // Wait for files that are still uploading rather than send without them.
+  if (attachmentPicker && attachmentPicker.isUploading()) {
+    announce("Attachments are still uploading");
+    return;
+  }
   const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
-  sendMessage(conversationId, message, referencePicker.getReferences());
+  sendMessage(
+    conversationId,
+    message,
+    referencePicker.getReferences(),
+    attachmentPicker ? attachmentPicker.getAttachments() : []
+  );
 }
 
 document.getElementById("chat-form").addEventListener("submit", (e) => {

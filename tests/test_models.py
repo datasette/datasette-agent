@@ -110,6 +110,8 @@ async def test_models_api(multi_model_datasette, cookies):
     assert response.json() == {
         "models": ["echo", "echo-needs-key"],
         "default_model": "echo",
+        # Empty unless file attachments are configured
+        "attachment_types": {"echo": [], "echo-needs-key": []},
     }
 
 

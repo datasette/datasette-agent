@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import llm
 
+from .attachments import FILE_ID_KEY, FILENAME_KEY, load_attachment_part
 from .references import REFERENCES_KEY
 
 MODEL_TOOL_OUTPUT_LIMIT = 10000
@@ -26,11 +27,17 @@ def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def make_user_message_dict(text, references=None, references_context=None):
+def make_user_message_dict(
+    text, references=None, references_context=None, attachments=None
+):
     """A user MessageDict, optionally followed by the note listing
     #-tagged references. The note is a second text part flagged with
-    the reference list so the UI renders pills instead of the note."""
+    the reference list so the UI renders pills instead of the note.
+
+    attachments is a list of parts from attachments.make_attachment_part,
+    each naming an attached file without carrying its bytes."""
     parts = [{"type": "text", "text": text}]
+    parts.extend(attachments or [])
     if references and references_context:
         parts.append(
             {
@@ -283,6 +290,26 @@ def flatten_for_render(rows):
             elif ptype == "text" and PANEL_URL_KEY in part:
                 # Panel note is for the model only
                 continue
+            elif ptype == "attachment" and FILE_ID_KEY in part:
+                # Attached files show as thumbnails on the user text
+                # they were sent with.
+                if not (out and out[-1]["role"] == msg_role):
+                    out.append(
+                        {
+                            "role": msg_role,
+                            "content": "",
+                            "tool_name": None,
+                            "tool_arguments": None,
+                            "tool_output": None,
+                        }
+                    )
+                out[-1].setdefault("attachments", []).append(
+                    {
+                        "file_id": part[FILE_ID_KEY],
+                        "filename": part.get(FILENAME_KEY) or part[FILE_ID_KEY],
+                        "content_type": (part.get("attachment") or {}).get("type"),
+                    }
+                )
             elif ptype == "text":
                 out.append(
                     {
@@ -408,13 +435,18 @@ async def latest_panel_url(db, conversation_id):
     return None
 
 
-async def load_messages(db, conversation_id):
+async def load_messages(db, conversation_id, datasette=None, actor=None):
     """Return the full prior message chain as llm.Message objects.
 
     Tool-result outputs are stripped of _html / _rows and capped here so the
     model never sees user/export-only bulk data — but the persisted row keeps
     the original payload so UI rendering / export still has access to the rich
     form.
+
+    Attached files are stored by reference, so their bytes are read back
+    here, through datasette-files' permission check for actor - the actor
+    running the turn. A file that actor cannot view, or that is gone,
+    becomes a note saying so; without datasette every attachment does.
     """
     rows = (
         await db.execute(
@@ -432,5 +464,11 @@ async def load_messages(db, conversation_id):
                     part["output"] = prepare_tool_output_for_model(
                         part.get("output", "")
                     )
-        messages.append(llm.Message.from_dict(msg_dict))
+        message = llm.Message.from_dict(msg_dict)
+        for index, part in enumerate(msg_dict.get("parts", [])):
+            if part.get("type") == "attachment" and FILE_ID_KEY in part:
+                message.parts[index] = await load_attachment_part(
+                    datasette, actor, part
+                )
+        messages.append(message)
     return messages
