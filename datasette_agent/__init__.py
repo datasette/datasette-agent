@@ -220,6 +220,10 @@ def _agent_jump_config_script(datasette):
         "createConversationUrl": datasette.urls.path("/-/agent/api/conversations"),
         "modelsUrl": datasette.urls.path("/-/agent/api/models"),
         "conversationBaseUrl": datasette.urls.path("/-/agent/"),
+        "referencesUrl": datasette.urls.path("/-/agent/api/references"),
+        "referencesModuleUrl": datasette.urls.static_plugins(
+            "datasette-agent", "references.js"
+        ),
         "pluginVersion": __version__,
     }
     return "window.datasetteAgentJumpConfig = {};".format(json.dumps(config))
@@ -245,7 +249,39 @@ def extra_js_urls(datasette, request):
             action="datasette-agent", actor=request.actor
         ):
             return []
-        return [datasette.urls.static_plugins("datasette-agent", "agent-jump.js")]
+        urls = [datasette.urls.static_plugins("datasette-agent", "agent-jump.js")]
+        if _is_homepage(datasette, request):
+            urls.append(
+                {
+                    "url": datasette.urls.static_plugins(
+                        "datasette-agent", "agent-homepage.js"
+                    ),
+                    "module": True,
+                }
+            )
+        return urls
+
+    return inner
+
+
+def _is_homepage(datasette, request):
+    return request.path in (datasette.urls.instance(), datasette.urls.path("/-/"))
+
+
+@hookimpl
+def extra_css_urls(datasette, request):
+    async def inner():
+        # agent.css has the styles for the # reference picker used by the
+        # Jump to menu and homepage sections. Every rule in it is scoped to
+        # .agent-* classes, so it is safe to load on any page.
+        if (
+            not request
+            or not await datasette.allowed(
+                action="datasette-agent", actor=request.actor
+            )
+        ):
+            return []
+        return [datasette.urls.static_plugins("datasette-agent", "agent.css")]
 
     return inner
 

@@ -1905,3 +1905,67 @@ body.agent-workspace .agent-chat-pane {
     transition: none !important;
   }
 }
+
+/* Homepage section, from agent-homepage.js */
+.datasette-agent-homepage-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #d8e6f5;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+.datasette-agent-homepage-input {
+  flex: 1;
+  min-width: 0;
+}
+.datasette-agent-homepage textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.25rem;
+  max-height: 12rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #bfccd9;
+  border-radius: 0.4rem;
+  font: inherit;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+}
+.datasette-agent-homepage textarea:focus {
+  border-color: #1a56db;
+  outline: 3px solid rgba(26, 86, 219, 0.2);
+  outline-offset: 0;
+}
+.datasette-agent-homepage-row > button {
+  flex: none;
+  height: 2.25rem;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: #1a56db;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.datasette-agent-homepage-row > button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.datasette-agent-homepage .agent-ref-chips:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0 0.4rem;
+}
+.datasette-agent-homepage-error:empty {
+  display: none;
+}
+.datasette-agent-homepage-error {
+  margin: 0.4rem 0 0;
+  color: #b91c1c;
+  font-size: 0.875rem;
+}

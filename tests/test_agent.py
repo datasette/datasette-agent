@@ -361,6 +361,13 @@ async def test_jump_section_script_added_for_users_with_permission(
     assert '"createConversationUrl": "/-/agent/api/conversations"' in response.text
     assert '"modelsUrl": "/-/agent/api/models"' in response.text
     assert '"conversationBaseUrl": "/-/agent/"' in response.text
+    assert '"referencesUrl": "/-/agent/api/references"' in response.text
+    assert (
+        '"referencesModuleUrl": "/-/static-plugins/datasette-agent/references.js"'
+        in response.text
+    )
+    # agent.css styles the # reference picker in the Jump to menu
+    assert '"/-/static-plugins/datasette-agent/agent.css"' in response.text
 
     script_response = await datasette_instance.client.get(
         "/-/static-plugins/datasette-agent/agent-jump.js"
@@ -374,6 +381,46 @@ async def test_jump_section_script_added_for_users_with_permission(
     assert "fetch(modelsUrl)" in script_response.text
     assert "Press Enter to start. Shift+Enter adds a new line." in script_response.text
     assert 'event.key === "Enter" && !event.shiftKey' in script_response.text
+    assert "import(config.referencesModuleUrl)" in script_response.text
+    assert "attachReferencePicker" in script_response.text
+    assert "agent_pending_references" in script_response.text
+
+
+@pytest.mark.asyncio
+async def test_homepage_section_added_for_users_with_permission(
+    datasette_instance, cookies
+):
+    response = await datasette_instance.client.get("/", cookies=cookies)
+    assert response.status_code == 200
+    assert (
+        '<script type="module" src="/-/static-plugins/datasette-agent/agent-homepage.js"'
+        in response.text
+    )
+    assert '"/-/static-plugins/datasette-agent/agent.css"' in response.text
+    assert '"referencesUrl": "/-/agent/api/references"' in response.text
+
+    script_response = await datasette_instance.client.get(
+        "/-/static-plugins/datasette-agent/agent-homepage.js"
+    )
+    assert script_response.status_code == 200
+    assert "makeHomepageSections" in script_response.text
+    assert 'title: "Datasette Agent"' in script_response.text
+    assert "attachReferencePicker" in script_response.text
+    assert "agent_pending_references" in script_response.text
+
+    # Only on the homepage
+    database_response = await datasette_instance.client.get(
+        "/-/agent", cookies=cookies
+    )
+    assert "agent-homepage.js" not in database_response.text
+
+
+@pytest.mark.asyncio
+async def test_homepage_section_hidden_without_permission(datasette_instance):
+    response = await datasette_instance.client.get("/")
+    assert response.status_code == 200
+    assert "agent-homepage.js" not in response.text
+    assert "datasette-agent/agent.css" not in response.text
 
 
 @pytest.mark.asyncio
@@ -382,6 +429,7 @@ async def test_jump_section_script_hidden_without_permission(datasette_instance)
     assert response.status_code == 200
     assert "agent-jump.js" not in response.text
     assert "datasetteAgentJumpConfig" not in response.text
+    assert "datasette-agent/agent.css" not in response.text
     assert "<script>None</script>" not in response.text
 
 

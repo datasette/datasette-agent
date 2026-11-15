@@ -74,7 +74,7 @@
                   .datasette-agent-jump-model code {
                     color: #374151;
                   }
-                  .datasette-agent-jump-start button {
+                  .datasette-agent-jump-actions button {
                     background: #2563eb;
                     border: 0;
                     border-radius: 0.375rem;
@@ -84,7 +84,7 @@
                     font-weight: 600;
                     padding: 0.45rem 0.75rem;
                   }
-                  .datasette-agent-jump-start button:disabled {
+                  .datasette-agent-jump-actions button:disabled {
                     cursor: default;
                     opacity: 0.65;
                   }
@@ -104,7 +104,9 @@
                 </style>
                 <form class="datasette-agent-jump-start">
                   <label for="datasette-agent-jump-message">Start a new agent chat</label>
-                  <textarea id="datasette-agent-jump-message" name="message" placeholder="Ask a question about your data..." rows="3"></textarea>
+                  <div class="datasette-agent-jump-anchor">
+                    <textarea id="datasette-agent-jump-message" name="message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="3"></textarea>
+                  </div>
                   <p class="datasette-agent-jump-hint">Press Enter to start. Shift+Enter adds a new line.</p>
                   <div class="datasette-agent-jump-actions">
                     <button type="submit">Start chat</button>
@@ -118,6 +120,23 @@
               const button = node.querySelector("button");
               const error = node.querySelector("[data-agent-jump-error]");
               const modelSlot = node.querySelector("[data-agent-jump-model]");
+
+              // # to tag tables, views, queries and databases, using the same
+              // picker as /-/agent. references.js is an ES module and this
+              // file is a classic script, so load it with import().
+              let referencePicker = null;
+              if (config.referencesModuleUrl) {
+                if (config.referencesUrl) {
+                  textarea.dataset.referenceSearchUrl = config.referencesUrl;
+                }
+                import(config.referencesModuleUrl)
+                  .then((module) => {
+                    referencePicker = module.attachReferencePicker(textarea, {
+                      placement: "below",
+                    });
+                  })
+                  .catch((e) => console.error("Could not load # tagging", e));
+              }
               // Holds the <select> (several models) or <input type=hidden>
               // (exactly one) once the model list has loaded; null until
               // then, or when there is nothing to choose from - in which
@@ -208,6 +227,12 @@
                   }
                   try {
                     sessionStorage.setItem("agent_pending_message", message);
+                    sessionStorage.setItem(
+                      "agent_pending_references",
+                      JSON.stringify(
+                        referencePicker ? referencePicker.getReferences() : [],
+                      ),
+                    );
                   } catch (e) {}
                   window.location.assign(conversationBaseUrl + data.conversation_id);
                 } catch (e) {
