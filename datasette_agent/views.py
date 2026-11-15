@@ -1,8 +1,8 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 
 from datasette import Forbidden, NotFound, Response
-from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
 from .agent import resume_agent, run_agent
@@ -422,6 +422,57 @@ async def agent_conversation_markdown(request, datasette):
     )
 
 
+def _sse_response(events):
+    """A Server-Sent Events response from an async iterator of chunks."""
+    return Response.stream(
+        events,
+        headers={"Cache-Control": "no-cache", "Content-Encoding": "none"},
+        content_type="text/event-stream",
+    )
+
+
+class _QueueWriter:
+    """The writer a turn sends its events to: they are queued for the
+    response to pick up, so the turn never waits on the client."""
+
+    def __init__(self):
+        self.queue = asyncio.Queue()
+
+    async def write(self, chunk):
+        self.queue.put_nowait(chunk)
+
+
+# Strong references to running turn tasks, so they are not garbage
+# collected once the response that started them has gone.
+_turn_tasks = set()
+
+
+def _turn_response(run):
+    """Stream a turn's events as Server-Sent Events.
+
+    run(writer) is run_agent() or resume_agent(). It runs in a task of
+    its own rather than inside the response, so the turn carries on to
+    the end if the client disconnects and the response is closed.
+    """
+    writer = _QueueWriter()
+
+    async def turn():
+        try:
+            await run(writer)
+        finally:
+            writer.queue.put_nowait(None)
+
+    async def events():
+        # Started on first iteration, once the response is being sent
+        task = asyncio.create_task(turn())
+        _turn_tasks.add(task)
+        task.add_done_callback(_turn_tasks.discard)
+        while (chunk := await writer.queue.get()) is not None:
+            yield chunk
+
+    return _sse_response(events())
+
+
 async def agent_stream(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     if request.method != "POST":
@@ -455,8 +506,8 @@ async def agent_stream(request, datasette):
     if get_turn(datasette, conversation_id) is not None:
         return Response.json({"error": ALREADY_RUNNING_MESSAGE}, status=409)
 
-    async def stream_fn(writer):
-        await run_agent(
+    return _turn_response(
+        lambda writer: run_agent(
             datasette=datasette,
             actor=request.actor,
             conversation_id=conversation_id,
@@ -465,14 +516,6 @@ async def agent_stream(request, datasette):
             references=references,
             panel_url=panel_url,
         )
-
-    return AsgiStream(
-        stream_fn,
-        headers={
-            "Cache-Control": "no-cache",
-            "Content-Encoding": "none",
-        },
-        content_type="text/event-stream",
     )
 
 
@@ -539,22 +582,7 @@ async def api_answer_question(request, datasette):
         [json.dumps(answer), actor_id, now, question_id],
     )
 
-    async def stream_fn(writer):
-        await resume_agent(
-            datasette=datasette,
-            actor=request.actor,
-            conversation_id=conversation_id,
-            writer=writer,
-        )
-
-    return AsgiStream(
-        stream_fn,
-        headers={
-            "Cache-Control": "no-cache",
-            "Content-Encoding": "none",
-        },
-        content_type="text/event-stream",
-    )
+    return _resume_stream(request, datasette, conversation_id)
 
 
 async def _history_suspended(db, conversation_id):
@@ -665,21 +693,13 @@ def _resume_stream(request, datasette, conversation_id):
     events on the same connection.
     """
 
-    async def stream_fn(writer):
-        await resume_agent(
+    return _turn_response(
+        lambda writer: resume_agent(
             datasette=datasette,
             actor=request.actor,
             conversation_id=conversation_id,
             writer=writer,
         )
-
-    return AsgiStream(
-        stream_fn,
-        headers={
-            "Cache-Control": "no-cache",
-            "Content-Encoding": "none",
-        },
-        content_type="text/event-stream",
     )
 
 
@@ -782,24 +802,21 @@ async def api_watch_turn(request, datasette):
         return Response.json({"error": "Forbidden"}, status=403)
     after = request.args.get("after")
 
-    async def stream_fn(writer):
+    async def events():
         turn = get_turn(datasette, conversation_id)
         # No await between this check and watch(), so no event is missed.
         if turn is None or str(turn.watermark) != after:
-            await writer.write("event: resync\ndata: {}\n\n")
+            yield "event: resync\ndata: {}\n\n"
             return
         queue = turn.watch()
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            await writer.write(chunk)
+        try:
+            while (chunk := await queue.get()) is not None:
+                yield chunk
+        finally:
+            # Runs if the watching page goes away mid-turn
+            turn.watchers.discard(queue)
 
-    return AsgiStream(
-        stream_fn,
-        headers={"Cache-Control": "no-cache", "Content-Encoding": "none"},
-        content_type="text/event-stream",
-    )
+    return _sse_response(events())
 
 
 async def api_stop_turn(request, datasette):

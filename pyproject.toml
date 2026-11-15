@@ -25,6 +25,11 @@ dev = [
     "playwright",
 ]
 
+[tool.uv.sources]
+# Response.stream() is not in a Datasette release yet. Once it is, bump
+# the datasette dependency above and remove this.
+datasette = { git = "https://github.com/simonw/datasette", branch = "main" }
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
