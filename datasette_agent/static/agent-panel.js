@@ -203,10 +203,12 @@ function setupPanel() {
       return;
     }
     // The chat header already sits above the panel, so hide the page's
-    // own Datasette header. The frame stays covered by the loading
-    // indicator until this has happened, so the header never flashes.
-    const header = loadedFrame.contentDocument.querySelector("header.hd");
-    if (header) header.style.display = "none";
+    // own Datasette header, and its "Powered by Datasette" footer along
+    // with it. The frame stays covered by the loading indicator until
+    // this has happened, so neither ever flashes.
+    for (const chrome of loadedFrame.contentDocument.querySelectorAll("header.hd, footer.ft")) {
+      chrome.style.display = "none";
+    }
     // When this page starts navigating away (a link or form inside the
     // panel), cover the frame until the next page is ready. Downloads
     // don't unload the page, so they never trigger this.

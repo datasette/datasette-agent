@@ -326,3 +326,22 @@ def test_panel_refuses_agent_pages(page, server, path):
         page.evaluate("window.datasetteAgentPanel.currentUrl()")
         == server["prefix"] + "/-/versions"
     )
+
+
+def test_panel_hides_datasette_header_and_footer(page, server):
+    """The chat page supplies the header and footer, so a page shown in
+    the panel drops its own. Opened directly it keeps both."""
+    home = server["prefix"] + "/"
+    page.evaluate("url => window.datasetteAgentPanel.open(url, {source: 'agent'})", home)
+    page.wait_for_function("window.datasetteAgentPanel.currentUrl() !== null")
+    frame = page.frame_locator(".agent-panel-frame").last
+    frame.locator("h1").first.wait_for()
+    assert frame.locator("header.hd").count() == 1
+    assert frame.locator("footer.ft").count() == 1
+    assert not frame.locator("header.hd").is_visible()
+    assert not frame.locator("footer.ft").is_visible()
+
+    page.goto(server["origin"] + home)
+    assert page.locator("header.hd").is_visible()
+    assert page.locator("footer.ft").is_visible()
+
