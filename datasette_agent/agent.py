@@ -23,7 +23,7 @@ from .questions import QuestionPending
 from .references import prepare_references
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
-from .turns import TurnAlreadyRunning, TurnWriter, track_turn
+from .turns import start_turn
 
 # Returned by _run_chain when the user stopped the turn.
 STOPPED = ("stopped", {})
@@ -82,11 +82,11 @@ async def _build_system_prompt(datasette, actor):
     )
 
 
-async def _send_sse(writer, event, data):
-    await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
+def _send_sse(control, event, data):
+    control.publish(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def _run_chain(datasette, actor, conversation_id, writer, control):
+async def _run_chain(datasette, actor, conversation_id, control):
     """Run one model.chain() over the conversation's persisted history,
     streaming SSE events and persisting messages. control is the turn's
     TurnControl, used to stop and watch it.
@@ -183,8 +183,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
         stream_id = matching_streamed_tool_call_id(tool_call)
         if stream_id in streamed_tool_calls:
             streamed_tool_calls[stream_id]["finalized"] = True
-        await _send_sse(
-            writer,
+        _send_sse(
+            control,
             "tool_call",
             {
                 "id": stream_id,
@@ -198,8 +198,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
             # after_call for a cancelled call, so record its result
             # here: without one the history would end in an unresolved
             # tool call that a later resume would run.
-            await _send_sse(
-                writer,
+            _send_sse(
+                control,
                 "tool_result",
                 {
                     "id": stream_id,
@@ -221,8 +221,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
         stream_id = tool_call_stream_id(tool_result) or matching_streamed_tool_call_id(
             tool_call, require_unfinalized=False
         )
-        await _send_sse(
-            writer,
+        _send_sse(
+            control,
             "tool_result",
             {
                 "id": stream_id,
@@ -239,9 +239,9 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
 
     async def _stream_event(event):
         if event.type == "text":
-            await _send_sse(writer, "text_chunk", {"content": event.chunk})
+            _send_sse(control, "text_chunk", {"content": event.chunk})
         elif event.type == "reasoning" and event.chunk:
-            await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
+            _send_sse(control, "reasoning_chunk", {"content": event.chunk})
         elif event.type == "tool_call_name":
             stream_id = tool_call_stream_id(event)
             if stream_id is None:
@@ -249,8 +249,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
             state = streamed_tool_calls.setdefault(stream_id, {"name": "", "args": ""})
             state["name"] += event.chunk
             if len(state["name"]) == len(event.chunk):
-                await _send_sse(
-                    writer,
+                _send_sse(
+                    control,
                     "tool_call_start",
                     {"id": stream_id, "name": state["name"]},
                 )
@@ -260,8 +260,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
                 stream_id = f"streamed:{len(streamed_tool_calls)}"
             state = streamed_tool_calls.setdefault(stream_id, {"name": "", "args": ""})
             state["args"] += event.chunk
-            await _send_sse(
-                writer,
+            _send_sse(
+                control,
                 "tool_call_args_chunk",
                 {"id": stream_id, "chunk": event.chunk},
             )
@@ -350,50 +350,62 @@ async def _run_chain(datasette, actor, conversation_id, writer, control):
     return None
 
 
-async def _finish_turn(writer, pending):
+def _finish_turn(control, pending):
     if pending is STOPPED:
-        await _send_sse(writer, "stopped", {})
-        await _send_sse(writer, "done", {"stopped": True})
+        _send_sse(control, "stopped", {})
+        _send_sse(control, "done", {"stopped": True})
     elif pending is not None:
         event, data = pending
-        await _send_sse(writer, event, data)
-        await _send_sse(writer, "done", {"{}_pending".format(event): True})
+        _send_sse(control, event, data)
+        _send_sse(control, "done", {"{}_pending".format(event): True})
     else:
-        await _send_sse(writer, "done", {})
+        _send_sse(control, "done", {})
 
 
-async def run_agent(
+def _start_turn(datasette, conversation_id, body):
+    """Start a turn that runs body(control), reporting any exception it
+    raises as an error event. Returns the turn's TurnControl."""
+    db = datasette.get_internal_database()
+
+    async def run(control):
+        current_conversation_id.set(conversation_id)
+        try:
+            await ensure_tables(db)
+            await control.new_step(db, conversation_id)
+            await body(control)
+        except Exception as e:
+            _send_sse(control, "error", {"message": str(e)})
+
+    return start_turn(datasette, conversation_id, run)
+
+
+def run_agent(
     datasette,
     actor,
     conversation_id,
     user_message,
-    writer,
     references=None,
     panel_url=None,
 ):
-    db = datasette.get_internal_database()
-    await ensure_tables(db)
+    """Start a turn for a new user message.
 
-    current_conversation_id.set(conversation_id)
-
-    try:
-        async with track_turn(datasette, conversation_id) as control:
-            writer = TurnWriter(writer, control)
-            try:
-                await _run_new_turn(
-                    datasette,
-                    actor,
-                    conversation_id,
-                    user_message,
-                    writer,
-                    references,
-                    panel_url,
-                    control,
-                )
-            except Exception as e:
-                await _send_sse(writer, "error", {"message": str(e)})
-    except TurnAlreadyRunning as e:
-        await _send_sse(writer, "error", {"message": str(e)})
+    Returns the turn's TurnControl straight away: the turn runs in a task
+    of its own, and control.events() iterates the SSE events it sends.
+    Raises TurnAlreadyRunning if the conversation already has a turn.
+    """
+    return _start_turn(
+        datasette,
+        conversation_id,
+        lambda control: _run_new_turn(
+            datasette,
+            actor,
+            conversation_id,
+            user_message,
+            references,
+            panel_url,
+            control,
+        ),
+    )
 
 
 async def _run_new_turn(
@@ -401,7 +413,6 @@ async def _run_new_turn(
     actor,
     conversation_id,
     user_message,
-    writer,
     references,
     panel_url,
     control,
@@ -442,13 +453,7 @@ async def _run_new_turn(
     await insert_message(db, conversation_id, user_message_dict)
     await control.new_step(db, conversation_id)
 
-    pending = await _run_chain(
-        datasette,
-        actor,
-        conversation_id,
-        writer,
-        control,
-    )
+    pending = await _run_chain(datasette, actor, conversation_id, control)
 
     # Auto-set title from the first user message if not yet set.
     row = (
@@ -466,10 +471,10 @@ async def _run_new_turn(
             [title, conversation_id],
         )
 
-    await _finish_turn(writer, pending)
+    _finish_turn(control, pending)
 
 
-async def resume_agent(datasette, actor, conversation_id, writer):
+def resume_agent(datasette, actor, conversation_id):
     """Resume a conversation suspended on ask_user() or browser_task().
 
     The persisted history ends in an assistant message with unresolved
@@ -478,28 +483,15 @@ async def resume_agent(datasette, actor, conversation_id, writer):
     finished browser tasks replay from their tables instead of
     suspending again. May suspend again if a tool asks a further
     question or issues a further task.
+
+    Starts the turn and returns its TurnControl, like run_agent().
     """
-    db = datasette.get_internal_database()
-    await ensure_tables(db)
 
-    current_conversation_id.set(conversation_id)
+    async def body(control):
+        pending = await _run_chain(datasette, actor, conversation_id, control)
+        _finish_turn(control, pending)
 
-    try:
-        async with track_turn(datasette, conversation_id) as control:
-            writer = TurnWriter(writer, control)
-            try:
-                pending = await _run_chain(
-                    datasette,
-                    actor,
-                    conversation_id,
-                    writer,
-                    control,
-                )
-                await _finish_turn(writer, pending)
-            except Exception as e:
-                await _send_sse(writer, "error", {"message": str(e)})
-    except TurnAlreadyRunning as e:
-        await _send_sse(writer, "error", {"message": str(e)})
+    return _start_turn(datasette, conversation_id, body)
 
 
 # Re-exports for background_agent.py / cli_chat.py compatibility.

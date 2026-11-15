@@ -290,6 +290,31 @@ async def test_second_turn_rejected_while_running(ds, model_calls):
     assert roles == ["user", "assistant"]
 
 
+@pytest.mark.asyncio
+async def test_turn_carries_on_when_its_request_goes_away(ds, model_calls):
+    from datasette_agent.turns import get_turn
+
+    conversation_id = await _new_conversation(ds)
+    request = _start_turn(ds, conversation_id, "hang")
+    await asyncio.wait_for(model_calls["streaming"].wait(), 5)
+    control = get_turn(ds, conversation_id)
+    assert len(control.watchers) == 1
+
+    # The browser that started the turn disconnects
+    request.cancel()
+    await asyncio.gather(request, return_exceptions=True)
+    assert get_turn(ds, conversation_id) is control
+    assert control.watchers == set()
+
+    # The turn runs to the end and saves the full response
+    model_calls["release"].set()
+    await asyncio.wait_for(control.task, 5)
+    assert get_turn(ds, conversation_id) is None
+    (_, user), (role, assistant) = await _messages(ds, conversation_id)
+    assert role == "assistant"
+    assert "partial answer that never finishes" in json.dumps(assistant)
+
+
 def _page_watermark(html):
     marker = 'data-turn-watermark="'
     assert 'data-turn-running="1"' in html
