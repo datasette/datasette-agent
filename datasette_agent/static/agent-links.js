@@ -54,15 +54,16 @@ export function prepareLinks(root) {
   });
 }
 
-export function setupExternalLinks(root) {
-  if (!root) return;
-  prepareLinks(root);
-  let dialog;
-  let urlPreview;
-  let cancelButton;
-  let pendingUrl = "";
-  let previousFocus;
+let dialog;
+let urlPreview;
+let cancelButton;
+let pendingUrl = "";
+let previousFocus;
 
+// Ask before opening a link to another site, then open it in a new tab.
+// Shared by links in the chat and links in pages shown in the panel.
+// focusAfter gets the focus back when the dialog closes.
+export function confirmExternalLink(value, focusAfter) {
   function appendText(parent, tag, className, text) {
     const element = document.createElement(tag);
     element.className = className;
@@ -114,18 +115,25 @@ export function setupExternalLinks(root) {
     document.body.appendChild(dialog);
   }
 
+  const url = parseWebUrl(value);
+  if (!url || url.origin === window.location.origin) return;
+  ensureDialog();
+  previousFocus = focusAfter;
+  pendingUrl = url.href;
+  urlPreview.textContent = pendingUrl;
+  if (!dialog.open) dialog.showModal();
+  cancelButton.focus();
+}
+
+export function setupExternalLinks(root) {
+  if (!root) return;
+  prepareLinks(root);
+
   function activate(event) {
     const link = event.target.closest("a[data-agent-external-url]");
     if (!link || !root.contains(link)) return;
     event.preventDefault();
-    const url = parseWebUrl(link.getAttribute("data-agent-external-url"));
-    if (!url || url.origin === window.location.origin) return;
-    ensureDialog();
-    previousFocus = link;
-    pendingUrl = url.href;
-    urlPreview.textContent = pendingUrl;
-    if (!dialog.open) dialog.showModal();
-    cancelButton.focus();
+    confirmExternalLink(link.getAttribute("data-agent-external-url"), link);
   }
 
   root.addEventListener("click", event => {
