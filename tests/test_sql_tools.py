@@ -16,6 +16,7 @@ import json
 from urllib.parse import urlencode
 
 from datasette.app import Datasette
+from datasette.database import Database
 import pytest
 
 
@@ -66,8 +67,67 @@ def _get_sql_tool():
     raise AssertionError("sql_query tool not found")
 
 
-def _expected_sql_edit_url(ds, database, sql):
-    return ds.urls.database(database) + "/-/query?" + urlencode({"sql": sql})
+def _get_execute_write_tool():
+    from datasette_agent.sql_tools import get_default_tools
+
+    for tool in get_default_tools():
+        if tool.name == "execute_write_sql":
+            return tool
+    raise AssertionError("execute_write_sql tool not found")
+
+
+def _expected_sql_edit_url(ds, database, sql, params=None):
+    return (
+        ds.urls.database(database)
+        + "/-/query?"
+        + urlencode({"sql": sql, **(params or {})})
+    )
+
+
+async def _make_tool_context(datasette, arguments, tool_call_id="call_write_1"):
+    from datasette_agent.tool_context import ToolContext
+    from datasette_agent.schema import ensure_tables
+
+    await datasette.invoke_startup()
+    await ensure_tables(datasette.get_internal_database())
+    return ToolContext(
+        datasette=datasette,
+        actor={"id": "user"},
+        conversation_id="01TESTWRITE00000000000000",
+        tool_name="execute_write_sql",
+        arguments=arguments,
+        tool_call_id=tool_call_id,
+        supports_questions=True,
+    )
+
+
+async def _answer_question(datasette, question_id, answer):
+    await datasette.get_internal_database().execute_write(
+        "UPDATE agent_questions SET status = 'answered', answer_json = ? WHERE id = ?",
+        [json.dumps(answer), question_id],
+    )
+
+
+def _write_datasette(tmp_path, permissions=None, memory_name="execute_write_tool"):
+    permissions = permissions or {
+        "datasette-agent": {"id": "user"},
+        "view-database": {"id": "user"},
+        "execute-write-sql": {"id": "user"},
+        "insert-row": {"id": "user"},
+        "update-row": {"id": "user"},
+        "delete-row": {"id": "user"},
+        "view-table": {"id": "user"},
+        "drop-table": {"id": "user"},
+    }
+    ds = Datasette(
+        memory=True,
+        default_deny=True,
+        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
+        config={"permissions": permissions},
+        internal=str(tmp_path / "internal.db"),
+    )
+    ds.add_memory_database(memory_name, name="data")
+    return ds
 
 
 @pytest.mark.asyncio
@@ -122,7 +182,7 @@ async def test_sql_query_both_mode_returns_rows_and_html(datasette_with_data):
 
 @pytest.mark.asyncio
 async def test_sql_query_user_mode_hides_rows_from_model(datasette_with_data):
-    """`user` mode replaces the bulky `rows` array with a `row_count`
+    """`user` mode replaces the bulky `rows` array with a `num_rows_shown_to_user`
     summary the model can reason over, parks the full rows under `_rows`
     for export, and renders the HTML table for the user."""
     await _seed_items(datasette_with_data)
@@ -136,7 +196,7 @@ async def test_sql_query_user_mode_hides_rows_from_model(datasette_with_data):
     )
     data = json.loads(out)
     assert data["columns"] == ["id", "name", "qty"]
-    assert data["row_count"] == 3
+    assert data["num_rows_shown_to_user"] == 3
     assert "rows" not in data  # model-visible bulk rows are gone
     assert "_html" in data
     assert "_rows" in data
@@ -185,7 +245,7 @@ async def test_sql_query_user_mode_preserves_large_user_visible_payload(
     )
     assert len(out) > 10000
     data = json.loads(out)
-    assert data["row_count"] == 10
+    assert data["num_rows_shown_to_user"] == 10
     assert len(data["_rows"]) == 10
     assert "<table" in data["_html"]
 
@@ -195,8 +255,8 @@ async def test_sql_query_user_mode_strips_to_summary_for_model(
     datasette_with_data,
 ):
     """After prepare_tool_output_for_model (i.e. what the model actually
-    sees in history rebuild), `user` mode leaves columns + row_count +
-    truncated, but nothing rowset-shaped."""
+    sees in history rebuild), `user` mode leaves columns +
+    num_rows_shown_to_user + has_more_rows, but nothing rowset-shaped."""
     from datasette_agent.messages import prepare_tool_output_for_model
 
     await _seed_items(datasette_with_data)
@@ -212,8 +272,95 @@ async def test_sql_query_user_mode_strips_to_summary_for_model(
     assert "_html" not in stripped
     assert "_rows" not in stripped
     assert "rows" not in stripped
-    assert stripped["row_count"] == 3
+    assert stripped["num_rows_shown_to_user"] == 3
+    assert stripped["has_more_rows"] is False
     assert stripped["columns"] == ["id", "name", "qty"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["user", "both"])
+async def test_sql_query_shows_single_row_to_model_without_count(
+    datasette_with_data, display
+):
+    """Small models mistake the number of rows for the answer - a COUNT(*) of 3
+    returns 1 row - so a single row is shown to the model as well as the user,
+    without a count."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    raw = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select count(*) as n from items",
+        display=display,
+    )
+    assert "<table" in json.loads(raw)["_html"]
+    stripped = json.loads(prepare_tool_output_for_model(raw))
+    assert stripped["rows"] == [{"n": 3}]
+    assert "num_rows_shown_to_user" not in stripped
+    assert "note" not in stripped
+
+
+@pytest.mark.asyncio
+async def test_sql_query_both_mode_counts_rows_when_model_copy_is_cut():
+    """The user's table has every returned row but the model's copy is cut to
+    fit the output limit, so the model needs telling what the user can see."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    ds = Datasette(memory=True)
+    await ds.invoke_startup()
+    raw = await _get_sql_tool().fn(
+        datasette=ds,
+        actor={"id": "user"},
+        database="_memory",
+        sql=(
+            "with recursive n(i) as (select 1 union all select i + 1 from n "
+            "where i < 1500) select i, 'some text to fill the limit' as t from n"
+        ),
+        display="both",
+    )
+    assert "<td>1000</td>" in json.loads(raw)["_html"]
+    stripped = json.loads(prepare_tool_output_for_model(raw))
+    assert stripped["num_rows_shown_to_user"] == 1000
+    assert stripped["has_more_rows"] is True
+    assert len(stripped["rows"]) < 1000
+
+
+@pytest.mark.asyncio
+async def test_sql_query_user_mode_says_how_to_read_hidden_rows(datasette_with_data):
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    raw = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items",
+        display="user",
+    )
+    stripped = json.loads(prepare_tool_output_for_model(raw))
+    assert stripped["num_rows_shown_to_user"] == 3
+    assert "display set to both" in stripped["note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["model", "both", "user"])
+async def test_sql_query_has_more_rows(display):
+    ds = Datasette(memory=True, settings={"max_returned_rows": 2})
+    await ds.invoke_startup()
+    out = await _get_sql_tool().fn(
+        datasette=ds,
+        actor={"id": "user"},
+        database="_memory",
+        sql="select value from json_each('[1, 2, 3]')",
+        display=display,
+    )
+    data = json.loads(out)
+    assert data["has_more_rows"] is True
+    assert "truncated" not in data
 
 
 @pytest.mark.asyncio
@@ -252,6 +399,30 @@ async def test_sql_query_invalid_display_falls_back_to_model(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("display", [None, "model", "both", "user"])
+async def test_sql_query_includes_query_ms(datasette_with_data, display):
+    """Every display mode reports how long the query took in milliseconds,
+    and the field survives prepare_tool_output_for_model stripping."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+
+    await _seed_items(datasette_with_data)
+    tool = _get_sql_tool()
+    kwargs = {} if display is None else {"display": display}
+    out = await tool.fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items order by id",
+        **kwargs,
+    )
+    data = json.loads(out)
+    assert isinstance(data["query_ms"], (int, float))
+    assert data["query_ms"] >= 0
+    stripped = json.loads(prepare_tool_output_for_model(out))
+    assert stripped["query_ms"] == data["query_ms"]
+
+
+@pytest.mark.asyncio
 async def test_sql_query_error_includes_edit_sql_url(datasette_with_data):
     await _seed_items(datasette_with_data)
     tool = _get_sql_tool()
@@ -264,6 +435,7 @@ async def test_sql_query_error_includes_edit_sql_url(datasette_with_data):
     )
     data = json.loads(out)
     assert "error" in data
+    assert isinstance(data["query_ms"], (int, float))
     assert data["_edit_sql_url"] == _expected_sql_edit_url(
         datasette_with_data, "data", sql
     )
@@ -292,6 +464,18 @@ async def test_render_rows_html_truncated_marker():
 
     html = _render_rows_html(columns=["a"], rows=[[1]], truncated=True)
     assert "truncated" in html.lower()
+
+
+def test_sql_result_cells_preserve_whitespace():
+    """Leading spaces in formatted SQL values must survive browser layout."""
+    import re
+    from importlib.resources import files
+
+    css = files("datasette_agent").joinpath("static/agent.css").read_text()
+    cell_rule = re.search(r"\.agent-sql-result tbody td\s*\{(.*?)\}", css, re.S)
+
+    assert cell_rule is not None
+    assert "white-space: pre;" in cell_rule.group(1)
 
 
 @pytest.mark.asyncio
@@ -351,3 +535,582 @@ async def test_list_databases_hides_dbs_without_execute_sql(tmp_path):
     names = {d["database_name"] for d in result["databases"]}
     assert "public" in names
     assert "private" not in names
+
+
+async def _datasette_with_tables(tmp_path, table_counts, config=None):
+    ds = Datasette(config=config, internal=str(tmp_path / "internal.db"))
+    ds.remove_database("_memory")
+    for name, count in table_counts.items():
+        db = ds.add_database(
+            Database(ds, path=str(tmp_path / f"{name}.db"), is_mutable=True), name=name
+        )
+
+        def create_tables(conn, name=name, count=count):
+            for i in range(count):
+                conn.execute(f"CREATE TABLE {name}_table_{i:04d} (id INTEGER)")
+
+        await db.execute_write_fn(create_tables)
+    await ds.invoke_startup()
+    return ds
+
+
+@pytest.mark.asyncio
+async def test_list_databases_and_tables_keeps_every_database_when_too_long(tmp_path):
+    """A listing too long for the model must not silently lose databases, or
+    the model has no way of knowing they exist."""
+    from datasette_agent.messages import prepare_tool_output_for_model
+    from datasette_agent.sql_tools import _list_databases_and_tables
+
+    ds = await _datasette_with_tables(tmp_path, {"small": 5, "big": 700})
+    output = prepare_tool_output_for_model(
+        await _list_databases_and_tables(ds, {"id": "user"})
+    )
+    result = json.loads(output)
+    assert "agent_output_truncated" not in result
+    assert result["databases"] == [
+        {"database_name": "small", "table_count": 5},
+        {"database_name": "big", "table_count": 700},
+    ]
+    assert "list_tables" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_list_tables_tool_requires_database():
+    from datasette_agent.sql_tools import get_default_tools
+
+    tool = next(t for t in get_default_tools() if t.name == "list_tables")
+    assert tool.input_schema["required"] == ["database"]
+    assert list(tool.input_schema["properties"]) == ["database"]
+
+
+@pytest.mark.asyncio
+async def test_list_tables_returns_tables_for_one_database(tmp_path):
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(tmp_path, {"one": 2, "two": 1})
+    result = json.loads(await _list_tables(ds, {"id": "user"}, "one"))
+    assert result == {
+        "database": "one",
+        "table_names": ["one_table_0000", "one_table_0001"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_tables_unknown_database_lists_only_permitted(tmp_path):
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(
+        tmp_path,
+        {"public": 1, "private": 1},
+        config={
+            "databases": {
+                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
+            }
+        },
+    )
+    result = json.loads(await _list_tables(ds, {"id": "user"}, "nope"))
+    assert result["error"] == "Database 'nope' not found"
+    assert result["available_databases"] == ["public"]
+
+
+@pytest.mark.asyncio
+async def test_list_tables_permission_denied(tmp_path):
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(
+        tmp_path,
+        {"private": 1},
+        config={
+            "databases": {
+                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
+            }
+        },
+    )
+    result = json.loads(await _list_tables(ds, {"id": "user"}, "private"))
+    assert result == {"error": "Permission denied"}
+
+
+@pytest.mark.asyncio
+async def test_list_tables_too_long_says_how_to_find_the_rest(tmp_path):
+    from datasette_agent.messages import (
+        MODEL_TOOL_OUTPUT_LIMIT,
+        prepare_tool_output_for_model,
+    )
+    from datasette_agent.sql_tools import _list_tables
+
+    ds = await _datasette_with_tables(tmp_path, {"big": 1500})
+    raw = await _list_tables(ds, {"id": "user"}, "big")
+    assert len(raw) <= MODEL_TOOL_OUTPUT_LIMIT
+
+    result = json.loads(prepare_tool_output_for_model(raw))
+    assert "agent_output_truncated" not in result
+    assert result["table_count"] == 1500
+    assert 0 < len(result["table_names"]) < 1500
+    assert result["table_names"][0] == "big_table_0000"
+    assert "sqlite_master" in result["note"]
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_tool_is_registered():
+    tool = _get_execute_write_tool()
+    assert tool.name == "execute_write_sql"
+    props = tool.input_schema["properties"]
+    assert props["statements"]["type"] == "array"
+    assert set(tool.input_schema["required"]) == {"database", "statements"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_params", [False, True])
+async def test_execute_write_sql_approves_and_executes_batch(tmp_path, legacy_params):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(
+        tmp_path, memory_name="execute_write_sql_batch_{}".format(legacy_params)
+    )
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)")
+    await db.execute_write(
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)"
+    )
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [
+            {
+                "sql": "insert into authors (id, name) values (:id, :name)",
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "name", "value": "Ada"},
+                ],
+            },
+            {
+                "sql": (
+                    "insert into books (id, title, author_id) "
+                    "values (:id, :title, :author_id)"
+                ),
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "title", "value": "Notes"},
+                    {"name": "author_id", "value": 1},
+                ],
+            },
+        ],
+    }
+
+    if legacy_params:
+        for statement in arguments["statements"]:
+            statement["params"] = {
+                param["name"]: param["value"] for param in statement["params"]
+            }
+    saved_arguments = json.dumps(arguments)
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    question = exc_info.value.question
+    assert question["question_type"] == "boolean"
+    assert "2 write SQL statements" in question["prompt"]
+    assert "insert into authors" in question["html"]
+    assert "insert into books" in question["html"]
+    assert "insert-row" in question["html"]
+
+    await _answer_question(ds, question["id"], True)
+    assert json.dumps(arguments) == saved_arguments
+    arguments = json.loads(saved_arguments)
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is True
+    assert data["statements_executed"] == 2
+    assert [
+        row["name"] for row in (await db.execute("select * from authors")).rows
+    ] == ["Ada"]
+    assert [row["title"] for row in (await db.execute("select * from books")).rows] == [
+        "Notes"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_declined_does_not_execute(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_declined")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "body", "value": "Nope"},
+                ],
+            }
+        ],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    await _answer_question(ds, exc_info.value.question["id"], False)
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert data["cancelled"] is True
+    assert (await db.execute("select count(*) as count from notes")).first()[
+        "count"
+    ] == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_permission_denied_skips_question(tmp_path):
+    ds = _write_datasette(
+        tmp_path,
+        permissions={
+            "datasette-agent": {"id": "user"},
+            "view-database": {"id": "user"},
+            "execute-write-sql": {"id": "user"},
+        },
+        memory_name="execute_write_sql_denied",
+    )
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "insert into notes (body) values ('Denied')"}],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert "insert-row" in data["error"]
+    question_count = (
+        await ds.get_internal_database().execute(
+            "SELECT count(*) AS count FROM agent_questions"
+        )
+    ).first()["count"]
+    assert question_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_read_only_sql_skips_question(tmp_path):
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_read_only")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "select 1"}],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert "read-only" in data["error"]
+    question_count = (
+        await ds.get_internal_database().execute(
+            "SELECT count(*) AS count FROM agent_questions"
+        )
+    ).first()["count"]
+    assert question_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_drop_table_warning_includes_row_count(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_drop")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE victims (id INTEGER PRIMARY KEY)")
+    await db.execute_write("INSERT INTO victims (id) VALUES (1), (2)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "drop table victims"}],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    html = exc_info.value.question["html"]
+    assert "agent-write-sql-danger" in html
+    assert "DANGER" in html
+    assert "victims" in html
+    assert "2 rows" in html
+    assert "drop-table" in html
+
+    await _answer_question(ds, exc_info.value.question["id"], False)
+    context = await _make_tool_context(ds, arguments)
+    await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+    assert await db.table_exists("victims")
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_stops_after_first_endpoint_failure(tmp_path):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_partial")
+    db = ds.get_database("data")
+    await db.execute_write(
+        "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT UNIQUE)"
+    )
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": [
+                    {"name": "id", "value": 1},
+                    {"name": "body", "value": "same"},
+                ],
+            },
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": [
+                    {"name": "id", "value": 2},
+                    {"name": "body", "value": "same"},
+                ],
+            },
+            {
+                "sql": "insert into notes (id, body) values (:id, :body)",
+                "params": [
+                    {"name": "id", "value": 3},
+                    {"name": "body", "value": "later"},
+                ],
+            },
+        ],
+    }
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+    await _answer_question(ds, exc_info.value.question["id"], True)
+
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is False
+    assert data["failed_statement"] == 2
+    assert data["executed_count"] == 1
+    assert data["partial"] is True
+    assert "UNIQUE constraint failed" in data["error"]
+    rows = (await db.execute("select id, body from notes order by id")).dicts()
+    assert rows == [{"id": 1, "body": "same"}]
+
+
+@pytest.mark.asyncio
+async def test_execute_write_sql_posts_to_execute_write_with_actor(
+    tmp_path, monkeypatch
+):
+    from datasette_agent.questions import QuestionPending
+
+    ds = _write_datasette(tmp_path, memory_name="execute_write_sql_actor")
+    db = ds.get_database("data")
+    await db.execute_write("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+    tool = _get_execute_write_tool()
+    arguments = {
+        "database": "data",
+        "statements": [{"sql": "insert into notes (body) values ('Captured')"}],
+    }
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"ok": True, "message": "Query executed", "rowcount": 1}
+
+    async def fake_post(path, **kwargs):
+        captured["path"] = path
+        captured["kwargs"] = kwargs
+        return FakeResponse()
+
+    context = await _make_tool_context(ds, arguments)
+    with pytest.raises(QuestionPending) as exc_info:
+        await tool.fn(datasette=ds, actor={"id": "user"}, context=context, **arguments)
+
+    await _answer_question(ds, exc_info.value.question["id"], True)
+    monkeypatch.setattr(ds.client, "post", fake_post)
+    context = await _make_tool_context(ds, arguments)
+    out = await tool.fn(
+        datasette=ds, actor={"id": "user"}, context=context, **arguments
+    )
+    data = json.loads(out)
+
+    assert data["ok"] is True
+    assert captured["path"] == "/data/-/execute-write"
+    assert captured["kwargs"]["actor"] == {"id": "user"}
+    assert captured["kwargs"]["json"] == {
+        "sql": "insert into notes (body) values ('Captured')",
+        "params": {},
+    }
+
+
+@pytest.mark.parametrize("legacy_params", [False, True])
+def test_normalize_write_parameter_types(legacy_params):
+    from datasette_agent.sql_tools import _normalize_statements
+
+    values = {"text": "Ada", "integer": 3, "real": 1.5, "boolean": True, "null": None}
+    result = _normalize_statements(
+        [
+            {
+                "sql": "insert into example values (:text, :integer, :real, :boolean, :null)",
+                "params": (
+                    values
+                    if legacy_params
+                    else [
+                        {"name": name, "value": value} for name, value in values.items()
+                    ]
+                ),
+            }
+        ]
+    )
+    assert result[0]["provided_params"] == values
+
+
+@pytest.mark.parametrize(
+    "statement", [{"sql": "delete from t"}, {"sql": "delete from t", "params": None}]
+)
+def test_normalize_write_missing_or_null_params(statement):
+    # Small models often send "params": null for statements with no parameters
+    from datasette_agent.sql_tools import _normalize_statements
+
+    result = _normalize_statements([statement])
+    assert result[0]["provided_params"] == {}
+
+
+@pytest.mark.parametrize(
+    "params, error",
+    [
+        ("id=1", "params must be an array or object"),
+        ({"id": []}, "must be a string, number, boolean or null"),
+        (
+            [{"name": "id", "value": 1}, {"name": "id", "value": 2}],
+            "duplicate parameter: id",
+        ),
+        ([{"name": "id"}], "must include a non-empty name and value"),
+        ([{"name": "", "value": 1}], "must include a non-empty name and value"),
+        ([{"name": 123, "value": 1}], "must include a non-empty name and value"),
+        ([1], "must include a non-empty name and value"),
+        ([{"name": "id", "value": []}], "must be a string, number, boolean or null"),
+        ([{"name": "id", "value": {}}], "must be a string, number, boolean or null"),
+    ],
+)
+def test_normalize_write_parameters_rejects_invalid_entries(params, error):
+    from datasette_agent.sql_tools import _normalize_statements
+
+    with pytest.raises(ValueError, match=error):
+        _normalize_statements(
+            [{"sql": "insert into example values (:id)", "params": params}]
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display", ["model", "both", "user"])
+@pytest.mark.parametrize("legacy_params", [False, True])
+async def test_sql_query_bound_parameters(datasette_with_data, display, legacy_params):
+    await _seed_items(datasette_with_data)
+    values = {
+        "text": "O'Reilly & friends",
+        "integer": 3,
+        "real": 1.5,
+        "boolean": True,
+        "null": None,
+    }
+    params = (
+        values
+        if legacy_params
+        else [{"name": name, "value": value} for name, value in values.items()]
+    )
+    original_params = json.dumps(params)
+    sql = (
+        "select :text as text, :integer as integer_value, :real as real_value, "
+        ":boolean as boolean_value, :null as null_value from items where qty = :integer"
+    )
+    out = await _get_sql_tool().fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql=sql,
+        display=display,
+        params=params,
+    )
+    data = json.loads(out)
+    assert data["rows"] == [
+        {
+            "text": "O'Reilly & friends",
+            "integer_value": 3,
+            "real_value": 1.5,
+            "boolean_value": 1,
+            "null_value": None,
+        }
+    ]
+    assert json.dumps(params) == original_params
+    # The "View SQL query" link carries the values too, so the query
+    # page opens with them filled in. NULL cannot be spelled there.
+    assert data["_edit_sql_url"] == _expected_sql_edit_url(
+        datasette_with_data,
+        "data",
+        sql,
+        {"text": "O'Reilly & friends", "integer": 3, "real": 1.5, "boolean": 1},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params, error",
+    [
+        (
+            [{"name": "id", "value": 1}, {"name": "id", "value": 2}],
+            "duplicate parameter",
+        ),
+        ([{"name": "id", "value": []}], "must be a string, number, boolean or null"),
+        ([{"name": "id"}], "must include a non-empty name and value"),
+        ([], "binding parameter"),
+    ],
+)
+async def test_sql_query_invalid_parameters(datasette_with_data, params, error):
+    await _seed_items(datasette_with_data)
+    out = await _get_sql_tool().fn(
+        datasette=datasette_with_data,
+        actor={"id": "user"},
+        database="data",
+        sql="select * from items where id = :id",
+        params=params,
+    )
+    assert error in json.loads(out)["error"]
+
+
+def test_sql_tools_share_parameter_schema():
+    query_schema = _get_sql_tool().input_schema
+    write_schema = _get_execute_write_tool().input_schema
+    params_schema = query_schema["properties"]["params"]
+    assert (
+        params_schema
+        == write_schema["properties"]["statements"]["items"]["properties"]["params"]
+    )
+    assert params_schema["type"] == "array"
+    assert "params" not in query_schema["required"]
+    assert "additionalProperties" not in json.dumps(params_schema)

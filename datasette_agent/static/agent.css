@@ -1,3 +1,87 @@
+.agent-external-link {
+  color: #276890;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.agent-external-link:focus-visible {
+  outline: 2px solid #8a8fd8;
+  outline-offset: 2px;
+}
+
+/* Match the external-link confirmation dialog in datasette-apps. */
+.agent-link-dialog {
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+  box-sizing: border-box;
+  color: #1f1f1f;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif;
+  line-height: 1.4;
+  margin: auto;
+  max-height: calc(100vh - 2rem);
+  max-width: 38rem;
+  overflow-y: auto;
+  padding: 1.4rem;
+  width: calc(100% - 2rem);
+}
+
+.agent-link-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.agent-link-dialog h2 {
+  font-size: 1.4rem;
+  line-height: 1.2;
+  margin: 0 0 0.65rem;
+}
+
+.agent-link-message {
+  margin: 0 0 0.9rem;
+}
+
+.agent-link-url {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-sizing: border-box;
+  font-size: 1rem;
+  line-height: 1.35;
+  margin: 0 0 1.25rem;
+  max-height: min(15rem, 40vh);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 0.8rem 0.9rem;
+}
+
+.agent-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.agent-link-actions button {
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0.55rem 0.9rem;
+}
+
+.agent-link-cancel {
+  background: #fff;
+  border: 1px solid #d0d0d0;
+  color: #222;
+}
+
+.agent-link-open {
+  background: #111;
+  border: 1px solid #111;
+  color: #fff;
+}
+
 .agent-chat {
   display: flex;
   flex-direction: column;
@@ -12,6 +96,29 @@
   gap: 1rem;
   padding: 0.5rem 0;
   border-bottom: 1px solid #ddd;
+}
+
+.agent-back-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 2.25rem;
+  height: 2.25rem;
+  margin-right: -0.5rem;
+  text-decoration: none;
+}
+
+.agent-back-link:hover svg {
+  opacity: 0.7;
+}
+
+.agent-back-link:active svg {
+  opacity: 0.5;
+}
+
+.agent-back-link svg {
+  width: 1.4rem;
+  height: 1.4rem;
 }
 
 .agent-header h1 {
@@ -239,6 +346,13 @@
   overflow: auto;
 }
 
+/* The table scrolls itself. If the wrapper capped its height too, a tall table
+   would use up all of it and push the "View SQL query" link out of view. */
+.agent-rich-result:has(> .agent-sql-result-scroll) {
+  max-height: none;
+  overflow: visible;
+}
+
 .agent-rich-result iframe {
   max-height: 800px;
 }
@@ -284,7 +398,9 @@
   max-width: 28em;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  /* SQL text values can use leading or repeated spaces as meaningful
+     formatting (for example, an indented recursive tree). */
+  white-space: pre;
 }
 
 .agent-sql-result tbody tr:nth-child(even) td {
@@ -339,8 +455,7 @@
   max-width: 85%;
 }
 
-.agent-tool-call,
-.agent-tool-result {
+.agent-tool-call {
   font-size: 0.85rem;
   border: 1px solid #ddd;
   border-radius: 4px;
@@ -350,26 +465,38 @@
   padding: 0.25rem 0.5rem;
 }
 
-.agent-tool-call summary,
-.agent-tool-result summary {
+.agent-tool-call summary {
   cursor: pointer;
   color: #666;
 }
 
-.agent-tool-call.pending summary::after {
+.agent-tool-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-left: 0.55em;
+  font-size: 0.78em;
+  font-weight: 600;
+  color: #777;
+  vertical-align: middle;
+}
+
+.agent-tool-status::before {
+  display: inline-block;
+}
+
+.agent-tool-call.pending .agent-tool-status::before {
   content: "";
   display: inline-block;
   width: 0.6em;
   height: 0.6em;
-  margin-left: 0.5em;
   border-radius: 50%;
   background: #999;
   animation: pulse 1s ease-in-out infinite;
-  vertical-align: middle;
 }
 
-.agent-tool-call.streaming summary {
-  animation: pulse 1.6s ease-in-out infinite;
+.agent-tool-call.waiting .agent-tool-status::before {
+  content: "\2026";
 }
 
 @keyframes pulse {
@@ -501,9 +628,26 @@
   font-size: 0.9em;
 }
 
-.agent-tool-call pre,
-.agent-tool-result pre {
-  margin: 0.5rem 0 0;
+.agent-tool-payload {
+  margin-top: 0.5rem;
+}
+
+.agent-tool-payload + .agent-tool-payload {
+  padding-top: 0.5rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.agent-tool-payload h4 {
+  margin: 0 0 0.25rem;
+  color: #666;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-tool-payload pre {
+  margin: 0;
   font-size: 0.8rem;
   overflow-x: auto;
   max-height: 200px;
@@ -543,6 +687,68 @@
   cursor: not-allowed;
 }
 
+/* While a turn streams, Send becomes Stop: a square then "Stop". Both
+   labels share one grid cell so the button keeps the same size, and
+   only the visible one counts as the button's name. */
+#send-btn {
+  display: inline-grid;
+  place-items: center;
+}
+
+#send-btn .agent-send-label,
+#send-btn .agent-stop-label {
+  grid-area: 1 / 1;
+}
+
+#send-btn .agent-stop-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  visibility: hidden;
+}
+
+#send-btn.agent-stop-mode .agent-send-label {
+  visibility: hidden;
+}
+
+#send-btn.agent-stop-mode .agent-stop-label {
+  visibility: visible;
+}
+
+/* Stop has been pressed and the turn is winding down. */
+#send-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.agent-stopped-note {
+  align-self: flex-start;
+  font-size: 0.85rem;
+  color: #666;
+  padding: 0.2rem 0;
+}
+
+/* Read by screen readers only */
+.agent-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Sized to the cap height of the label so the square and "Stop" read
+   as the same weight. */
+.agent-stop-icon {
+  display: block;
+  width: 0.72em;
+  height: 0.72em;
+}
+
 /* Index page */
 .agent-new-chat {
   display: flex;
@@ -574,22 +780,300 @@
   white-space: nowrap;
 }
 
+.agent-index {
+  max-width: 900px;
+  margin: 0 auto;
+  padding-bottom: 3rem;
+}
+
+.agent-index h1 {
+  margin: 1.5rem 0 1.25rem;
+}
+
+.agent-composer {
+  background: #fff;
+  border: 1px solid #d9dee5;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.agent-composer:focus-within {
+  border-color: #8bb5f4;
+  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.12);
+}
+
+.agent-composer-input {
+  position: relative;
+}
+
+.agent-composer textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 7.5rem;
+  padding: 1rem;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  resize: vertical;
+  overflow-x: hidden;
+}
+
+.agent-composer textarea:focus {
+  outline: 0;
+}
+
+.agent-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 1rem;
+  border-top: 1px solid #e8ebef;
+}
+
+.agent-composer-footer button {
+  min-height: 2.5rem;
+  padding: 0.55rem 1.25rem;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agent-composer-footer button:hover {
+  background: #006ce0;
+}
+
+.agent-composer-footer button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.agent-new-chat-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.agent-new-chat-options select {
+  appearance: none;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0.25rem 1.6rem 0.25rem 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  /* padding-right can't move the browser's own arrow, so draw our own */
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23333' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 0.5rem center / 0.65rem;
+}
+
+.agent-new-chat-hint {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.agent-composer .agent-ref-chips {
+  max-width: none;
+  padding: 0.75rem 1rem 0;
+}
+
+.agent-history {
+  margin-top: 2.25rem;
+}
+
+.agent-history-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.agent-history-heading h2 {
+  margin: 0 0 0.8rem;
+  font-size: 1.3rem;
+}
+
+.agent-history-count {
+  color: #777;
+  font-size: 0.85rem;
+}
+
+.agent-history-search {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.25rem 0 1rem;
+}
+
+.agent-history-search input {
+  flex: 1;
+  min-width: 12rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.agent-history-search button {
+  padding: 0.55rem 0.9rem;
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  background: #fff;
+  color: #222;
+  cursor: pointer;
+  font: inherit;
+}
+
+.agent-history-search button:hover,
+.agent-history-search button:focus-visible {
+  background: #edf4ff;
+}
+
+.agent-history-empty {
+  color: #666;
+}
+
+/* Model pinned to a conversation, shown in the chat header */
+.agent-model-badge {
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #555;
+  background: #f0f0f0;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
 .agent-conversations {
   list-style: none;
   padding: 0;
+  margin: 0;
+  border-top: 1px solid #e4e8ed;
 }
 
 .agent-conversations li {
-  padding: 0.5rem 0;
-  border-bottom: 1px solid #eee;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  border-bottom: 1px solid #e4e8ed;
 }
 
-.agent-conversations a {
+.agent-conversations a.agent-conversation-row {
+  display: block;
+  padding: 0.8rem 0.65rem;
   color: #007bff;
   text-decoration: none;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.agent-conversations a.agent-conversation-row:hover,
+.agent-conversations a.agent-conversation-row:focus-visible {
+  background: #edf4ff;
+}
+
+.agent-conversations a.agent-conversation-row:focus-visible {
+  outline: 2px solid #5b9af5;
+  outline-offset: -2px;
+}
+
+.agent-conversations a.agent-conversation-row:hover .agent-conversation-title {
+  text-decoration: underline;
+}
+
+.agent-conversation-date {
+  margin-left: 1rem;
+  color: #777;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* A conversation whose turn is still running */
+.agent-running {
+  display: inline-block;
+  margin-left: 0.4em;
+  vertical-align: middle;
+}
+
+.agent-running-dot {
+  display: block;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: #007bff;
+  animation: agent-running-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes agent-running-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-running-dot {
+    animation: none;
+  }
+}
+
+.agent-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.agent-pagination a,
+.agent-pagination > span[aria-disabled] {
+  min-width: 5rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid #d9dee5;
+  border-radius: 6px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.agent-pagination a:hover,
+.agent-pagination a:focus-visible {
+  background: #edf4ff;
+}
+
+.agent-pagination > span[aria-disabled] {
+  color: #999;
+}
+
+@media (max-width: 500px) {
+  .agent-composer-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .agent-new-chat-options select {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .agent-conversation-date {
+    display: block;
+    margin: 0.15rem 0 0;
+  }
 }
 
 .agent-timestamp {
@@ -673,73 +1157,6 @@
   opacity: 0.6;
 }
 
-.explorer-report-error {
-  background: #fff5f5;
-  border: 1px solid #d66;
-  border-radius: 4px;
-  color: #7a1f1f;
-  margin: 0.75rem 0;
-  padding: 0.75rem;
-}
-
-.explorer-report-error pre {
-  font-family: inherit;
-  margin: 0.5rem 0 0;
-  white-space: pre-wrap;
-}
-
-.explorer-report-message {
-  color: #555;
-  margin: 0.75rem 0;
-}
-
-.explorer-report-rendered ul,
-.explorer-report-rendered ol {
-  margin: 0.35em 0;
-  padding-left: 1.4em;
-  list-style-position: outside;
-}
-
-.explorer-report-rendered ul {
-  list-style-type: disc;
-}
-
-.explorer-report-rendered ul ul {
-  list-style-type: circle;
-}
-
-.explorer-report-rendered ul ul ul {
-  list-style-type: square;
-}
-
-.explorer-report-rendered ol {
-  list-style-type: decimal;
-}
-
-.explorer-report-rendered ol ol {
-  list-style-type: lower-alpha;
-}
-
-.explorer-report-rendered li {
-  display: list-item;
-  margin: 0.16em 0;
-}
-
-.explorer-report-rendered li::marker {
-  color: #555;
-}
-
-.explorer-report-rendered li > p {
-  margin: 0.16em 0;
-}
-
-.explorer-report-rendered li > ul,
-.explorer-report-rendered li > ol {
-  margin-top: 0.18em;
-  margin-bottom: 0.18em;
-  padding-left: 1.25em;
-}
-
 /* ask_user() question forms */
 .agent-question {
   align-self: flex-start;
@@ -819,4 +1236,736 @@
   border-radius: 4px;
   overflow-x: auto;
   white-space: pre-wrap;
+}
+
+/* browser_task() status line */
+.agent-browser-task {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 80%;
+  margin: 8px 0;
+  padding: 10px 14px;
+  background: #eef4ff;
+  border: 1px solid #b8ccf0;
+  border-radius: 8px;
+  font-size: 0.9em;
+  color: #333;
+}
+
+.agent-browser-task-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid #b8ccf0;
+  border-top-color: #007bff;
+  border-radius: 50%;
+  animation: agent-browser-task-spin 0.9s linear infinite;
+}
+
+@keyframes agent-browser-task-spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-browser-task-tool {
+  font-size: 0.85em;
+  color: #666;
+}
+
+.agent-browser-task-skip {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 4px;
+  background: #e0e0e0;
+  color: #333;
+  cursor: pointer;
+}
+
+.agent-write-sql-confirmation {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.agent-write-sql-confirmation h2 {
+  margin: 0 0 8px 0;
+  font-size: 1.05em;
+  line-height: 1.25;
+}
+
+.agent-write-sql-confirmation p {
+  margin: 6px 0;
+}
+
+.agent-write-sql-confirmation ol,
+.agent-write-sql-confirmation ul {
+  margin: 8px 0;
+  padding-left: 1.4em;
+}
+
+.agent-write-sql-confirmation li {
+  margin: 8px 0 12px 0;
+}
+
+.agent-write-sql-confirmation li > p {
+  margin: 0 0 6px 0;
+}
+
+.agent-write-sql-confirmation pre {
+  word-break: break-word;
+}
+
+.agent-write-sql-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 8px 0 12px 0;
+}
+
+.agent-write-sql-params,
+.agent-write-sql-analysis {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  line-height: 1.35;
+}
+
+.agent-write-sql-params {
+  margin: 8px 0 12px 0;
+}
+
+.agent-write-sql-params th,
+.agent-write-sql-params td,
+.agent-write-sql-analysis th,
+.agent-write-sql-analysis td {
+  padding: 6px 10px;
+  border-top: 1px solid rgba(31, 35, 40, 0.15);
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-write-sql-params th,
+.agent-write-sql-analysis th {
+  font-weight: 600;
+  color: #444;
+  white-space: nowrap;
+}
+
+.agent-write-sql-analysis thead th {
+  background: rgba(31, 35, 40, 0.05);
+}
+
+.agent-write-sql-permission {
+  display: inline-block;
+  margin: 0 4px 4px 0;
+  padding: 2px 5px;
+  border: 1px solid rgba(31, 35, 40, 0.15);
+  border-radius: 4px;
+  background: #f6f8fa;
+  color: #24292f;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+  white-space: nowrap;
+}
+
+/* #-references: tag a table, query or database in a chat message */
+.agent-ref-anchor {
+  position: relative;
+}
+
+.agent-ref-popup {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.agent-ref-popup[hidden] {
+  display: none;
+}
+
+.agent-ref-popup-above {
+  bottom: calc(100% + 4px);
+}
+
+.agent-ref-popup-below {
+  top: calc(100% + 4px);
+}
+
+.agent-ref-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0;
+  max-height: min(40vh, 18rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.agent-ref-option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 44px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.agent-ref-option.active {
+  background: #e8f1ff;
+}
+
+.agent-ref-option-type,
+.agent-ref-pill-type {
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.agent-ref-option-type {
+  min-width: 3.4rem;
+  text-align: center;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  color: #fff;
+  /* Plugin-registered types; built-ins override below. */
+  background: #5f6b7a;
+}
+
+.agent-ref-option-type.agent-ref-table {
+  background: #2f7d4f;
+}
+
+.agent-ref-option-type.agent-ref-query {
+  background: #8a4fbf;
+}
+
+.agent-ref-option-type.agent-ref-database {
+  background: #4f6dbf;
+}
+
+.agent-ref-option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.agent-ref-option-name,
+.agent-ref-option-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-ref-option-name {
+  font-weight: 600;
+  color: #222;
+}
+
+.agent-ref-option-desc {
+  font-size: 0.8rem;
+  color: #777;
+}
+
+.agent-ref-empty {
+  padding: 0.6rem 0.75rem;
+  color: #777;
+  font-size: 0.9rem;
+}
+
+.agent-ref-hint {
+  padding: 0.3rem 0.75rem;
+  border-top: 1px solid #eee;
+  font-size: 0.75rem;
+  color: #888;
+}
+
+/* No arrow keys to speak of on touch screens */
+@media (hover: none) {
+  .agent-ref-hint {
+    display: none;
+  }
+}
+
+.agent-ref-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  max-width: 100%;
+  padding: 0 0.45rem;
+  border-radius: 999px;
+  background: #fff;
+  color: #1d4f91;
+  border: 1px solid #b9cff0;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.agent-ref-pill:any-link {
+  text-decoration: none;
+}
+
+.agent-ref-pill-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.agent-ref-pill:any-link:hover .agent-ref-pill-name,
+.agent-ref-pill:any-link:focus-visible .agent-ref-pill-name {
+  text-decoration: underline;
+}
+
+.agent-ref-pill-type {
+  opacity: 0.7;
+}
+
+.agent-ref-pill.agent-ref-database {
+  color: #1d4f91;
+}
+
+.agent-ref-pill.agent-ref-query {
+  color: #6b2fa3;
+  border-color: #dac4ef;
+}
+
+.agent-ref-pill.agent-ref-table {
+  color: #22633d;
+  border-color: #bfe0cb;
+}
+
+.agent-ref-message-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+}
+
+.agent-ref-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.5rem 0 0;
+  max-width: 600px;
+}
+
+.agent-chat .agent-ref-chips {
+  max-width: none;
+  border-top: 1px solid #ddd;
+}
+
+.agent-chat .agent-ref-chips + .agent-input {
+  border-top: none;
+}
+
+.agent-ref-chips[hidden] {
+  display: none;
+}
+
+.agent-ref-chip {
+  align-items: center;
+  padding-right: 0.1rem;
+  background: #f4f8ff;
+}
+
+.agent-ref-chip-remove {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0.15rem 0.35rem;
+  min-width: 1.6rem;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.agent-ref-chip-remove:hover {
+  opacity: 1;
+}
+
+/* Panel: a Datasette page in an iframe next to the chat.
+   Wide screens (tablet landscape, desktop) put chat in a third and the
+   panel in two thirds; narrow screens show one at a time with a
+   Chat | Panel switch that slides between them. */
+.agent-panes,
+.agent-chat-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agent-panel,
+.agent-view-switch,
+.agent-panel-toggle {
+  display: none;
+}
+
+body.agent-workspace section.content {
+  margin: 0;
+}
+
+body.agent-workspace footer.ft {
+  display: none;
+}
+
+body.agent-workspace .agent-chat {
+  max-width: none;
+  height: calc(100vh - var(--agent-chat-top, 3rem));
+  height: calc(100dvh - var(--agent-chat-top, 3rem));
+}
+
+body.agent-workspace .agent-header {
+  padding: 0.5rem 1rem;
+}
+
+body.agent-workspace .agent-header > a {
+  white-space: nowrap;
+}
+
+body.agent-workspace .agent-header h1 {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.agent-workspace .agent-chat-pane {
+  padding: 0 1rem;
+  background: #fff;
+}
+
+.agent-panel {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: #fff;
+}
+
+.agent-panel::before {
+  content: "Loading…";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #666;
+  z-index: 1;
+}
+
+.agent-panel-ready::before {
+  display: none;
+}
+
+/* The visible page is navigating: hide it until the next page has
+   loaded and had its Datasette header removed. The indicator itself
+   waits a moment so quick loads don't flicker. */
+.agent-panel.agent-panel-loading::before {
+  display: grid;
+  z-index: 3;
+  animation: agent-panel-loading-in 0s linear 0.2s both;
+}
+
+.agent-panel-loading .agent-panel-frame-ready {
+  visibility: hidden;
+}
+
+@keyframes agent-panel-loading-in {
+  from { visibility: hidden; }
+  to { visibility: visible; }
+}
+
+.agent-panel-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.agent-panel-frame-ready {
+  z-index: 2;
+}
+
+/* Covers the browser's own error page when a page refuses to be framed. */
+.agent-panel-error {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  padding: 1rem;
+  text-align: center;
+  color: #555;
+  background: #fff;
+}
+
+.agent-panel-error[hidden] {
+  display: none;
+}
+
+.agent-panel-error p {
+  margin: 0 0 0.5rem;
+}
+
+.agent-panel-opened {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.agent-panel-opened a {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.agent-panel-toggle {
+  margin-left: auto;
+  background: #fff;
+  border: 2px solid #e9ecef;
+  border-radius: 8px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.agent-panel-hidden .agent-panel-toggle {
+  background: #e9ecef;
+  color: #555;
+  box-shadow: none;
+}
+
+.agent-view-switch {
+  margin-left: auto;
+  background: #e9ecef;
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.agent-view-switch button {
+  position: relative;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #555;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.agent-view-switch button[aria-pressed="true"] {
+  background: #fff;
+  color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+
+.agent-view-switch-badge {
+  display: none;
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9480f;
+}
+
+.agent-panel-unseen .agent-view-switch-badge {
+  display: block;
+}
+
+/* Wide: chat one third, panel two thirds */
+@media (min-width: 900px) {
+  .agent-has-panel .agent-panel-toggle {
+    display: inline-block;
+    margin-left: 0;
+  }
+
+  .agent-has-panel:not(.agent-panel-hidden) .agent-panes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  .agent-has-panel:not(.agent-panel-hidden) .agent-chat-pane {
+    border-right: 1px solid #ddd;
+  }
+
+  .agent-has-panel:not(.agent-panel-hidden) .agent-panel {
+    display: flex;
+  }
+
+  .agent-panel-hidden .agent-chat-pane {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+}
+
+/* Narrow: one view at a time, sliding between them */
+@media (max-width: 899px) {
+  .agent-has-panel .agent-view-switch {
+    display: inline-flex;
+  }
+
+  .agent-has-panel .agent-model-badge {
+    display: none;
+  }
+
+  .agent-has-panel .agent-header h1 {
+    flex: 1;
+  }
+
+  .agent-has-panel .chat-export-menu,
+  .agent-has-panel .agent-view-switch {
+    margin-left: 0;
+  }
+
+  .agent-has-panel[data-agent-view="panel"] .chat-export-menu {
+    display: none;
+  }
+
+  .agent-has-panel .agent-header {
+    gap: 0.6rem;
+  }
+
+  .agent-has-panel .agent-header h1 {
+    font-size: 1rem;
+  }
+
+  .agent-has-panel .agent-panes {
+    display: block;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .agent-has-panel .agent-chat-pane,
+  .agent-has-panel .agent-panel {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.38s ease,
+      box-shadow 0.38s ease,
+      visibility 0s linear 0s;
+  }
+
+  .agent-has-panel .agent-panel {
+    z-index: 2;
+  }
+
+  .agent-has-panel[data-agent-view="chat"] .agent-panel {
+    transform: translateX(100%);
+    visibility: hidden;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      box-shadow 0.38s ease,
+      visibility 0s linear 0.38s;
+  }
+
+  .agent-has-panel[data-agent-view="panel"] .agent-panel {
+    transform: none;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.18);
+  }
+
+  .agent-has-panel[data-agent-view="panel"] .agent-chat-pane {
+    transform: translateX(-30%);
+    opacity: 0.5;
+    visibility: hidden;
+    transition:
+      transform 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+      opacity 0.38s ease,
+      visibility 0s linear 0.38s;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-pane,
+  .agent-panel,
+  .agent-view-switch button {
+    transition: none !important;
+  }
+}
+
+/* Homepage section, from agent-homepage.js */
+.datasette-agent-homepage-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #d8e6f5;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+.datasette-agent-homepage-input {
+  flex: 1;
+  min-width: 0;
+}
+.datasette-agent-homepage textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 2.25rem;
+  max-height: 12rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #bfccd9;
+  border-radius: 0.4rem;
+  font: inherit;
+  line-height: 1.35;
+  resize: none;
+  overflow-y: auto;
+}
+.datasette-agent-homepage textarea:focus {
+  border-color: #1a56db;
+  outline: 3px solid rgba(26, 86, 219, 0.2);
+  outline-offset: 0;
+}
+.datasette-agent-homepage-row > button {
+  flex: none;
+  height: 2.25rem;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 0.4rem;
+  background: #1a56db;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.datasette-agent-homepage-row > button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.datasette-agent-homepage .agent-ref-chips:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0 0 0.4rem;
+}
+.datasette-agent-homepage-error:empty {
+  display: none;
+}
+.datasette-agent-homepage-error {
+  margin: 0.4rem 0 0;
+  color: #b91c1c;
+  font-size: 0.875rem;
 }

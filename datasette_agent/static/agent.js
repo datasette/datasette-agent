@@ -1,4 +1,21 @@
 import * as smd from "./smd.js";
+import {attachReferencePicker, renderTextWithReferences} from "./references.js";
+import {prepareLinks, setLinkDestination, setupExternalLinks} from "./agent-links.js";
+
+setupExternalLinks(document.getElementById("messages"));
+
+function markdownRenderer(root) {
+  const renderer = smd.default_renderer(root);
+  const setAttr = renderer.set_attr;
+  renderer.set_attr = (data, type, value) => {
+    if (type === smd.HREF) {
+      setLinkDestination(data.nodes[data.index], value);
+    } else {
+      setAttr(data, type, value);
+    }
+  };
+  return renderer;
+}
 
 // Auto-follow: only programmatically scroll to bottom while the user is
 // already pinned there. If they scroll up to read earlier content, stop
@@ -83,7 +100,7 @@ function scrollToBottomIfFollowing() {
   if (autoFollow) scrollToBottom();
 }
 
-function appendMessage(role, content) {
+function appendMessage(role, content, references = null) {
   const messages = document.getElementById("messages");
   const div = document.createElement("div");
   div.className = "agent-message agent-message-" + role;
@@ -92,17 +109,31 @@ function appendMessage(role, content) {
   div.appendChild(contentDiv);
   if (role === "assistant" && content) {
     // Render existing content as markdown
-    const renderer = smd.default_renderer(contentDiv);
+    const renderer = markdownRenderer(contentDiv);
     const parser = smd.parser(renderer);
     smd.parser_write(parser, content);
     smd.parser_end(parser);
     setAssistantCopyText(div, content);
+  } else if (role === "user" && references && references.length) {
+    renderTextWithReferences(contentDiv, content, references);
   } else {
     contentDiv.textContent = content;
   }
   messages.appendChild(div);
   scrollToBottom();
   return contentDiv;
+}
+
+// Marks where the user stopped a turn. Screen readers hear "Stopped"
+// from the status live region instead.
+function appendStoppedNote() {
+  const messages = document.getElementById("messages");
+  const note = document.createElement("div");
+  note.className = "agent-stopped-note";
+  note.setAttribute("aria-hidden", "true");
+  note.textContent = "Stopped";
+  messages.appendChild(note);
+  scrollToBottomIfFollowing();
 }
 
 // Reasoning preview: keep the summary to a single-line rolling tail of the
@@ -128,7 +159,7 @@ function startReasoningBlock() {
   contentDiv.className = "agent-reasoning-content";
   details.appendChild(contentDiv);
   messages.appendChild(details);
-  const renderer = smd.default_renderer(contentDiv);
+  const renderer = markdownRenderer(contentDiv);
   const parser = smd.parser(renderer);
   // expectedOpen tracks the open state we set programmatically. A toggle
   // event where details.open !== expectedOpen came from the user clicking
@@ -187,7 +218,7 @@ function startAssistantMessage() {
   setAssistantCopyText(div, "");
   messages.appendChild(div);
 
-  const renderer = smd.default_renderer(contentDiv);
+  const renderer = markdownRenderer(contentDiv);
   const parser = smd.parser(renderer);
   return { messageEl: div, contentDiv, parser, rawText: "" };
 }
@@ -218,24 +249,50 @@ function formatToolArguments(args) {
   return truncateMiddle(text, TOOL_ARGUMENT_PREVIEW_CHARS);
 }
 
+function createToolPayload(label, className) {
+  const section = document.createElement("div");
+  section.className = "agent-tool-payload " + className;
+  const heading = document.createElement("h4");
+  heading.textContent = label;
+  section.appendChild(heading);
+  const pre = document.createElement("pre");
+  section.appendChild(pre);
+  return {section, pre};
+}
+
+function setToolName(state, name) {
+  state.name = name || state.name;
+  state.details.dataset.toolName = state.name;
+  state.nameEl.textContent = state.name;
+}
+
 function startToolCall(name, id, streaming = false) {
   const group = getOrCreateToolGroup();
   const details = document.createElement("details");
   details.className = "agent-tool-call pending" + (streaming ? " streaming" : "");
   details.dataset.toolName = name;
   if (id) details.dataset.toolCallId = id;
-  if (streaming) details.open = true;
   const summary = document.createElement("summary");
-  summary.textContent = "Tool: " + name + (streaming ? " - receiving arguments..." : "");
+  const nameEl = document.createElement("span");
+  nameEl.className = "agent-tool-name";
+  nameEl.textContent = name;
+  summary.appendChild(nameEl);
+  const status = document.createElement("span");
+  status.className = "agent-tool-status";
+  status.setAttribute("aria-label", "Running");
+  summary.appendChild(status);
   details.appendChild(summary);
-  const pre = document.createElement("pre");
-  details.appendChild(pre);
+  const request = createToolPayload("Request", "agent-tool-request");
+  details.appendChild(request.section);
   group.appendChild(details);
   scrollToBottomIfFollowing();
   const state = {
     details,
     summary,
-    pre,
+    nameEl,
+    status,
+    request: request.section,
+    pre: request.pre,
     name,
     rawArgs: "",
     userToggled: false,
@@ -258,18 +315,14 @@ function appendToolCall(name, args, id = null) {
 function appendToolCallArgsChunk(state, chunk) {
   state.rawArgs += chunk;
   state.pre.textContent = formatToolArguments(state.rawArgs);
-  state.summary.textContent =
-    "Tool: " + state.name + " - receiving arguments (" + state.rawArgs.length.toLocaleString() + " chars)";
 }
 
 function finishToolCall(state, name, args) {
   if (!state) return;
-  state.name = name || state.name;
-  state.details.dataset.toolName = state.name;
+  setToolName(state, name);
   state.details.classList.remove("streaming");
   state.details.classList.add("pending");
   state.pre.textContent = formatToolArguments(args);
-  state.summary.textContent = "Tool: " + state.name;
   if (!state.userToggled) {
     state.expectedOpen = false;
     state.details.open = false;
@@ -288,7 +341,7 @@ function createSqlEditLink(url) {
   const editLink = document.createElement("p");
   editLink.className = "agent-sql-edit-link";
   const link = document.createElement("a");
-  link.href = url;
+  setLinkDestination(link, url);
   link.target = "_blank";
   link.rel = "noopener";
   link.textContent = "View SQL query";
@@ -299,18 +352,28 @@ function createSqlEditLink(url) {
 function appendToolResult(name, output, id = null) {
   const messages = document.getElementById("messages");
 
-  // Remove pending indicator from the matching tool call
+  // Find the matching pill so this result completes the same DOM element.
   let pendingCalls = [];
   if (id) {
     pendingCalls = Array.from(messages.querySelectorAll(".agent-tool-call.pending"))
       .filter(el => el.dataset.toolCallId === id);
   }
   if (pendingCalls.length === 0) {
-    pendingCalls = messages.querySelectorAll('.agent-tool-call.pending[data-tool-name="' + name + '"]');
+    pendingCalls = Array.from(messages.querySelectorAll(".agent-tool-call.pending"))
+      .filter(el => el.dataset.toolName === name);
   }
-  if (pendingCalls.length > 0) {
-    pendingCalls[pendingCalls.length - 1].classList.remove("pending");
+  let details = pendingCalls.length > 0 ? pendingCalls[pendingCalls.length - 1] : null;
+  if (!details) {
+    details = startToolCall(name, id, false).details;
   }
+  details.classList.remove("pending", "streaming");
+  details.classList.add("done");
+  const status = details.querySelector(".agent-tool-status");
+  if (status) status.remove();
+
+  const response = createToolPayload("Response", "agent-tool-response");
+  response.pre.textContent = prettyPrintJson(output);
+  details.appendChild(response.section);
 
   // Check for rich HTML content
   let parsed;
@@ -319,6 +382,7 @@ function appendToolResult(name, output, id = null) {
     const container = document.createElement("div");
     container.className = "agent-rich-result";
     container.insertAdjacentHTML("beforeend", parsed._html);
+    prepareLinks(container);
     if (parsed._edit_sql_url) {
       container.appendChild(createSqlEditLink(parsed._edit_sql_url));
     }
@@ -337,45 +401,135 @@ function appendToolResult(name, output, id = null) {
     requestAnimationFrame(() => scrollToBottomIfFollowing());
   }
 
-  const group = getOrCreateToolGroup();
-  const details = document.createElement("details");
-  details.className = "agent-tool-result";
-  const summary = document.createElement("summary");
-  summary.textContent = "Result: " + name;
-  details.appendChild(summary);
-  const pre = document.createElement("pre");
-  pre.textContent = prettyPrintJson(output);
-  details.appendChild(pre);
   if (parsed && parsed._edit_sql_url && !parsed._html) {
-    details.appendChild(createSqlEditLink(parsed._edit_sql_url));
+    response.section.appendChild(createSqlEditLink(parsed._edit_sql_url));
   }
-  group.appendChild(details);
+  if (parsed && parsed._panel_url && window.datasetteAgentPanel) {
+    window.datasetteAgentPanel.open(parsed._panel_url, {source: "agent"});
+  }
   scrollToBottomIfFollowing();
 }
 
 // True while an ask_user() question is awaiting an answer — keeps the
-// chat input disabled across the suspended turn.
+// Send button disabled across the suspended turn.
 let questionPending = false;
 
-function setInputEnabled(enabled) {
+// True while a browser_task() is executing in this page — same
+// Send-disabled semantics as questionPending.
+let browserTaskPending = false;
+
+// The # autocomplete for tagging tables, queries and databases. There is
+// no chat input on background-agent pages.
+const messageInputEl = document.getElementById("message-input");
+const referencePicker = messageInputEl
+  ? attachReferencePicker(messageInputEl)
+  : null;
+
+function currentConversationId() {
+  return document.querySelector(".agent-chat").dataset.conversationId;
+}
+
+// Conversation endpoint URLs, including Datasette's base_url prefix.
+function conversationUrl(path) {
+  return document.querySelector(".agent-chat").dataset.conversationUrl + path;
+}
+
+// Only the Send button is disabled while the agent is busy: the message
+// input stays usable so the next message can be typed in the meantime.
+function setSendEnabled(enabled) {
   const sendBtn = document.getElementById("send-btn");
   const input = document.getElementById("message-input");
-  if (sendBtn) sendBtn.disabled = !enabled;
-  if (input) input.disabled = !enabled;
+  // While a turn is streaming the button is a Stop button, which stays
+  // clickable.
+  if (sendBtn && !inStopMode()) sendBtn.disabled = !enabled;
   if (enabled && input) input.focus();
 }
 
-async function sendMessage(conversationId, message) {
-  appendMessage("user", message);
+function sendEnabled() {
+  const sendBtn = document.getElementById("send-btn");
+  return Boolean(sendBtn && !sendBtn.disabled && !inStopMode());
+}
+
+// While a turn is streaming, the Send button becomes a Stop button
+// showing a square and "Stop".
+let stopModeSince = 0;
+
+function setStopMode(on) {
+  const sendBtn = document.getElementById("send-btn");
+  if (!sendBtn) return;
+  sendBtn.classList.toggle("agent-stop-mode", on);
+  sendBtn.removeAttribute("aria-disabled");
+  if (on) {
+    sendBtn.disabled = false;
+    stopModeSince = Date.now();
+  }
+}
+
+function inStopMode() {
+  const sendBtn = document.getElementById("send-btn");
+  return Boolean(sendBtn && sendBtn.classList.contains("agent-stop-mode"));
+}
+
+// Text for screen readers, read out politely by the status live region.
+function announce(text) {
+  const status = document.getElementById("agent-status");
+  if (!status) return;
+  // Clear first so repeating the same text is announced again.
+  status.textContent = "";
+  setTimeout(() => {
+    status.textContent = text;
+  }, 50);
+}
+
+// Ignore Stop just after Send turned into it, so the second click of a
+// double-clicked Send doesn't stop the turn it started.
+const STOP_GRACE_MS = 500;
+
+async function requestStop() {
+  const sendBtn = document.getElementById("send-btn");
+  if (!sendBtn || sendBtn.getAttribute("aria-disabled") === "true") return;
+  if (Date.now() - stopModeSince < STOP_GRACE_MS) return;
+  // aria-disabled rather than disabled, so a keyboard user's focus stays
+  // on the button. The turn may take a moment to stop: a running tool
+  // is allowed to finish first.
+  sendBtn.setAttribute("aria-disabled", "true");
+  announce("Stopping");
+  try {
+    const response = await fetch(conversationUrl("/stop"), {method: "POST"});
+    if (!response.ok) throw new Error("HTTP " + response.status);
+  } catch (err) {
+    if (inStopMode()) sendBtn.removeAttribute("aria-disabled");
+    announce("Could not stop the agent");
+  }
+}
+
+async function sendMessage(conversationId, message, references = []) {
+  appendMessage("user", message, references);
   const input = document.getElementById("message-input");
   if (input) input.value = "";
-  await streamAgentEvents("/-/agent/" + conversationId + "/stream", {message});
+  if (referencePicker) referencePicker.clear();
+  const payload = {message};
+  if (references && references.length) payload.references = references;
+  const panelUrl =
+    window.datasetteAgentPanel && window.datasetteAgentPanel.currentUrl();
+  if (panelUrl) payload.panel_url = panelUrl;
+  const result = await streamAgentEvents(
+    conversationUrl("/stream"),
+    payload
+  );
+  if (result && result.ok === false && result.status) {
+    const detail =
+      result.data && typeof result.data.error === "string"
+        ? result.data.error
+        : "HTTP " + result.status;
+    appendMessage("assistant", "Error: " + detail);
+  }
 }
 
 async function answerQuestion(conversationId, questionId, answer) {
   questionPending = false;
   await streamAgentEvents(
-    "/-/agent/" + conversationId + "/question/" + questionId,
+    conversationUrl("/question/" + questionId),
     {answer}
   );
 }
@@ -473,8 +627,195 @@ function renderQuestionForm(question) {
   scrollToBottom();
 }
 
+// ---- Browser tasks ----
+//
+// Tool-initiated units of work executed by this page. Task HTML is
+// trusted server-authored markup whose scripts run — the sanctioned
+// script-execution path, same mechanism appendToolResult uses for
+// _html. The payload is only ever delivered through the one-shot
+// claim endpoint, so history replay, duplicate tabs and re-renders
+// execute nothing.
+
+const browserTaskElements = new Map(); // task id -> {statusEl, htmlEl, task}
+
+function taskUrl(taskId, action) {
+  return (
+    conversationUrl("/task/" + taskId + "/" + action)
+  );
+}
+
+function resumeUrl() {
+  return conversationUrl("/resume");
+}
+
+// One-shot: resolves {ok: true, payload, timeoutMs} once per task,
+// ever. Every later or concurrent claim resolves {ok: false, state}.
+async function claimTask(taskId) {
+  const response = await fetch(taskUrl(taskId, "claim"), {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: "{}",
+  });
+  const data = await response.json();
+  if (data.ok) {
+    return {
+      ok: true,
+      payload: data.task.payload,
+      timeoutMs: data.task.timeout_ms,
+    };
+  }
+  if (data.state === "running") {
+    // Another tab holds the claim - say so instead of leaving a bare
+    // spinner. The deadline watcher still guards against that tab
+    // never finishing.
+    const entry = browserTaskElements.get(taskId);
+    if (entry) {
+      const label = entry.statusEl.querySelector(".agent-browser-task-label");
+      if (label && !label.textContent.includes("another tab")) {
+        label.textContent += " (running in another tab)";
+      }
+    }
+  }
+  return {ok: false, state: data.state};
+}
+
+function finishBrowserTaskUI(taskId, outcome) {
+  const entry = browserTaskElements.get(taskId);
+  if (!entry) return;
+  // The task has left pending: tear down its live HTML and leave an
+  // inert one-line record.
+  if (entry.expiryTimer) clearTimeout(entry.expiryTimer);
+  if (entry.htmlEl) entry.htmlEl.remove();
+  entry.statusEl.classList.remove("running");
+  entry.statusEl.textContent =
+    (entry.task.label || "Browser task") + " — " + outcome;
+  browserTaskElements.delete(taskId);
+}
+
+// Post the result envelope ({ok, result?, error?}) for a task. The
+// complete endpoint resumes the suspended turn and streams it back on
+// the same response, so the transcript continues rendering seamlessly.
+async function completeTask(taskId, envelope) {
+  finishBrowserTaskUI(taskId, envelope && envelope.ok ? "completed" : "failed");
+  browserTaskPending = false;
+  const result = await streamAgentEvents(taskUrl(taskId, "complete"), envelope);
+  if (result && result.ok === false && result.status) {
+    // Benign lost race: the user hit Skip (or the deadline passed)
+    // while the harness was finishing, and that transition already
+    // resumed the turn. Nothing to render. If the server expired the
+    // task just now, resume so the tool sees the expired envelope.
+    if (result.data && result.data.state === "expired") {
+      await streamAgentEvents(resumeUrl(), {});
+    }
+  }
+}
+
+async function cancelTask(taskId) {
+  finishBrowserTaskUI(taskId, "skipped");
+  browserTaskPending = false;
+  const result = await streamAgentEvents(taskUrl(taskId, "cancel"), {});
+  if (result && result.ok === false && result.status) {
+    if (result.data && result.data.state === "expired") {
+      await streamAgentEvents(resumeUrl(), {});
+    }
+  }
+}
+
+// Deadline watcher: when a rendered task's server deadline passes
+// without a terminal transition (claiming tab crashed, closed, or
+// never existed), poke the resume endpoint. The server runs its
+// lazy-expiry sweep and only resumes once nothing is left pending, so
+// this can never steal a claim; 409 means not overdue by the server's
+// clock yet - re-arm and try again.
+function taskDeadlineDelayMs(task) {
+  let start = Date.now();
+  if (task.created_at) {
+    const parsed = Date.parse(task.created_at);
+    if (!isNaN(parsed)) start = parsed;
+  }
+  return Math.max(0, start + task.timeout_ms - Date.now()) + 3000;
+}
+
+async function watchTaskDeadline(taskId) {
+  const entry = browserTaskElements.get(taskId);
+  if (!entry) return;
+  browserTaskPending = false;
+  const result = await streamAgentEvents(resumeUrl(), {});
+  if (result && result.ok) {
+    finishBrowserTaskUI(taskId, "timed out");
+  } else if (
+    result &&
+    result.data &&
+    result.data.state === "pending" &&
+    browserTaskElements.has(taskId)
+  ) {
+    browserTaskPending = true;
+    setSendEnabled(false);
+    entry.expiryTimer = setTimeout(() => watchTaskDeadline(taskId), 5000);
+  }
+}
+
+function renderBrowserTask(task) {
+  const messages = document.getElementById("messages");
+
+  const statusEl = document.createElement("div");
+  statusEl.className = "agent-browser-task running";
+  statusEl.dataset.taskId = task.id;
+  const spinner = document.createElement("span");
+  spinner.className = "agent-browser-task-spinner";
+  statusEl.appendChild(spinner);
+  const labelEl = document.createElement("span");
+  labelEl.className = "agent-browser-task-label";
+  labelEl.textContent = task.label || "Working in your browser…";
+  statusEl.appendChild(labelEl);
+  const toolEl = document.createElement("span");
+  toolEl.className = "agent-browser-task-tool";
+  toolEl.textContent = "(" + task.tool_name + ")";
+  statusEl.appendChild(toolEl);
+  const skip = document.createElement("button");
+  skip.type = "button";
+  skip.className = "agent-browser-task-skip";
+  skip.textContent = "Skip this step";
+  skip.addEventListener("click", () => cancelTask(task.id));
+  statusEl.appendChild(skip);
+  messages.appendChild(statusEl);
+
+  const htmlEl = document.createElement("div");
+  htmlEl.className = "agent-browser-task-html";
+  // The container carries the task id (and the server substitutes
+  // __DATASETTE_TASK_ID__ into the html itself), so task HTML can
+  // learn its own id via currentScript.closest("[data-task-id]") or
+  // the textual placeholder - never by walking runtime markup.
+  htmlEl.dataset.taskId = task.id;
+  htmlEl.insertAdjacentHTML("beforeend", task.html);
+  prepareLinks(htmlEl);
+  // Append first so scripts can find sibling elements in the DOM
+  messages.appendChild(htmlEl);
+  const entry = {statusEl, htmlEl, task, expiryTimer: null};
+  browserTaskElements.set(task.id, entry);
+  entry.expiryTimer = setTimeout(
+    () => watchTaskDeadline(task.id),
+    taskDeadlineDelayMs(task)
+  );
+  // Re-create script elements so they execute (innerHTML doesn't run scripts)
+  htmlEl.querySelectorAll("script").forEach(oldScript => {
+    const newScript = document.createElement("script");
+    for (const attr of oldScript.attributes) {
+      newScript.setAttribute(attr.name, attr.value);
+    }
+    newScript.textContent = oldScript.textContent;
+    oldScript.replaceWith(newScript);
+  });
+  scrollToBottom();
+}
+
+// Public API for task HTML — call these instead of fetching endpoints
+// by hand or scraping form markup.
+window.datasetteAgent = {claimTask, completeTask, cancelTask};
+
+// payload null means GET: following a turn that is already running.
 async function streamAgentEvents(url, payload) {
-  setInputEnabled(false);
+  setStopMode(true);
 
   let currentAssistant = null;
   let currentReasoning = null;
@@ -489,19 +830,38 @@ async function streamAgentEvents(url, payload) {
     }
   }
 
-  function stopPendingToolCalls() {
+  function stopPendingToolCalls(statusText = "Stopped") {
     document.querySelectorAll(".agent-tool-call.pending").forEach(el => {
       el.classList.remove("pending");
       el.classList.remove("streaming");
+      const status = el.querySelector(".agent-tool-status");
+      if (status) status.textContent = statusText;
     });
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload),
-    });
+    const response = await fetch(
+      url,
+      payload === null
+        ? {}
+        : {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+          }
+    );
+
+    // A non-OK response is a JSON error body, not an event stream —
+    // return it to the caller instead of feeding it to the SSE reader
+    // (which would render "Connection error" for what may be a benign
+    // lost race).
+    if (!response.ok) {
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (err) {}
+      return {ok: false, status: response.status, data};
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -557,6 +917,12 @@ async function streamAgentEvents(url, payload) {
             appendReasoningChunk(currentReasoning, data.content);
             scrollToBottomIfFollowing();
           } else if (eventType === "text_chunk") {
+            // Don't open a bubble for whitespace-only chunks (e.g. the
+            // "\n\n" models often emit right before a batch of tool calls)
+            if (!currentAssistant && !(data.content || "").trim()) {
+              eventType = null;
+              continue;
+            }
             closeReasoning();
             if (!currentAssistant) {
               currentAssistant = startAssistantMessage();
@@ -574,9 +940,7 @@ async function streamAgentEvents(url, payload) {
             hasToolActivity = true;
             let state = data.id ? streamingToolCalls.get(data.id) : null;
             if (state) {
-              state.name = data.name || state.name;
-              state.details.dataset.toolName = state.name;
-              state.summary.textContent = "Tool: " + state.name + " - receiving arguments...";
+              setToolName(state, data.name);
             } else {
               state = startToolCall(data.name || "tool", data.id, true);
               if (data.id) streamingToolCalls.set(data.id, state);
@@ -609,13 +973,37 @@ async function streamAgentEvents(url, payload) {
             appendToolResult(data.name, data.output, data.id);
           } else if (eventType === "question") {
             closeReasoning();
-            stopPendingToolCalls();
+            stopPendingToolCalls("Waiting");
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
             }
             questionPending = true;
             renderQuestionForm(data);
+          } else if (eventType === "browser_task") {
+            closeReasoning();
+            stopPendingToolCalls();
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
+            browserTaskPending = true;
+            renderBrowserTask(data);
+          } else if (eventType === "resync") {
+            // The running turn moved on (or ended) after this page was
+            // rendered: reload to pick up what has been saved since.
+            reloadKeepingDraft();
+            return {ok: true};
+          } else if (eventType === "stopped") {
+            streamDone = true;
+            closeReasoning();
+            stopPendingToolCalls();
+            if (currentAssistant) {
+              smd.parser_end(currentAssistant.parser);
+              currentAssistant = null;
+            }
+            appendStoppedNote();
+            announce("Stopped");
           } else if (eventType === "done") {
             streamDone = true;
             closeReasoning();
@@ -627,7 +1015,7 @@ async function streamAgentEvents(url, payload) {
           } else if (eventType === "error") {
             streamDone = true;
             closeReasoning();
-            stopPendingToolCalls();
+            stopPendingToolCalls("Failed");
             if (currentAssistant) {
               smd.parser_end(currentAssistant.parser);
               currentAssistant = null;
@@ -651,6 +1039,7 @@ async function streamAgentEvents(url, payload) {
     if (currentAssistant) {
       smd.parser_end(currentAssistant.parser);
     }
+    return {ok: true};
   } catch (err) {
     streamDone = true;
     closeReasoning();
@@ -660,10 +1049,10 @@ async function streamAgentEvents(url, payload) {
       smd.parser_end(currentAssistant.parser);
     }
     appendMessage("assistant", "Connection error: " + err.message);
+    return {ok: false, error: err};
   } finally {
-    if (!questionPending) {
-      setInputEnabled(true);
-    }
+    setStopMode(false);
+    setSendEnabled(!questionPending && !browserTaskPending);
   }
 }
 
@@ -677,10 +1066,22 @@ document.querySelectorAll(".agent-message-assistant .agent-message-content").for
   const messageEl = el.closest(".agent-message-assistant");
   if (messageEl) setAssistantCopyText(messageEl, raw);
   el.textContent = "";
-  const renderer = smd.default_renderer(el);
+  const renderer = markdownRenderer(el);
   const parser = smd.parser(renderer);
   smd.parser_write(parser, raw);
   smd.parser_end(parser);
+});
+
+// Render #-references in existing user messages as inline pills
+document.querySelectorAll(".agent-message-user[data-references]").forEach(el => {
+  const contentEl = el.querySelector(".agent-message-content");
+  if (!contentEl) return;
+  try {
+    const references = JSON.parse(el.dataset.references);
+    renderTextWithReferences(contentEl, contentEl.textContent, references);
+  } catch (err) {
+    console.error("Failed to render references:", err);
+  }
 });
 
 // Render existing reasoning blocks as markdown + set the rolling summary preview
@@ -690,7 +1091,7 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   const raw = contentEl.textContent;
   if (!raw) return;
   contentEl.textContent = "";
-  const renderer = smd.default_renderer(contentEl);
+  const renderer = markdownRenderer(contentEl);
   const parser = smd.parser(renderer);
   smd.parser_write(parser, raw);
   smd.parser_end(parser);
@@ -708,31 +1109,100 @@ document.querySelectorAll(".agent-reasoning").forEach(details => {
   try {
     const question = JSON.parse(dataEl.textContent);
     questionPending = true;
-    setInputEnabled(false);
+    setSendEnabled(false);
     renderQuestionForm(question);
   } catch (err) {
     console.error("Failed to render pending question:", err);
   }
 })();
 
+// Render pending browser tasks left over from a suspended turn (page
+// reload, or the server restarted while a task was in flight). They
+// render, attempt to claim, and quietly stand down if another tab
+// already claimed — the one-shot claim endpoint decides.
+(function initPendingTasks() {
+  const dataEl = document.getElementById("pending-tasks-data");
+  if (!dataEl) return;
+  try {
+    const tasks = JSON.parse(dataEl.textContent);
+    if (!tasks.length) return;
+    browserTaskPending = true;
+    setSendEnabled(false);
+    tasks.forEach(renderBrowserTask);
+  } catch (err) {
+    console.error("Failed to render pending browser tasks:", err);
+  }
+})();
+
+// If the server flagged the conversation as suspended with no live
+// pending work (a task expired while no page was open), resume it so
+// the tool sees its expired envelope instead of the turn staying
+// stuck until the user happens to send a message.
+(function initAutoResume() {
+  const chat = document.querySelector(".agent-chat");
+  if (!chat || chat.dataset.needsResume !== "1") return;
+  streamAgentEvents(resumeUrl(), {});
+})();
+
+// Anything typed in the message box survives a resync reload.
+function draftKey() {
+  return "agent_draft:" + currentConversationId();
+}
+
+function reloadKeepingDraft() {
+  const input = document.getElementById("message-input");
+  try {
+    if (input && input.value) sessionStorage.setItem(draftKey(), input.value);
+  } catch (err) {}
+  window.location.reload();
+}
+
+(function restoreDraft() {
+  const input = document.getElementById("message-input");
+  if (!input) return;
+  try {
+    const draft = sessionStorage.getItem(draftKey());
+    sessionStorage.removeItem(draftKey());
+    if (draft && !input.value) input.value = draft;
+  } catch (err) {}
+})();
+
+// A turn was already running when this page loaded - the user came back
+// to it, or opened it in another tab. Follow it: the watch stream replays
+// what the turn has done since its last saved message, then continues
+// live, with the Stop button available.
+(function initWatchRunningTurn() {
+  const chat = document.querySelector(".agent-chat");
+  if (!chat || chat.dataset.turnRunning !== "1") return;
+  const after = encodeURIComponent(chat.dataset.turnWatermark || "");
+  streamAgentEvents(conversationUrl("/watch?after=" + after), null);
+})();
+
 // Wire up form
-document.getElementById("chat-form").addEventListener("submit", (e) => {
-  e.preventDefault();
+function submitInput() {
+  // The input stays editable while the agent is busy; Ctrl/Cmd+Enter
+  // must not send until the Send button is enabled again.
+  if (!sendEnabled()) return;
   const input = document.getElementById("message-input");
   const message = input.value.trim();
   if (!message) return;
   const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
-  sendMessage(conversationId, message);
+  sendMessage(conversationId, message, referencePicker.getReferences());
+}
+
+document.getElementById("chat-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (inStopMode()) {
+    requestStop();
+    return;
+  }
+  submitInput();
 });
 
 // Allow Ctrl+Enter / Cmd+Enter to send
 document.getElementById("message-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
-    const input = document.getElementById("message-input");
-    const message = input.value.trim();
-    if (!message) return;
-    const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
-    sendMessage(conversationId, message);
+    submitInput();
   }
 });

@@ -2,15 +2,62 @@ import json
 from datetime import datetime, timezone
 
 from datasette import Forbidden, NotFound, Response
-from datasette.utils import tilde_decode
-from datasette.utils.asgi import AsgiStream
 from ulid import ULID
 
 from .agent import resume_agent, run_agent
+from .browser_tasks import (
+    MAX_RESULT_BYTES,
+    cancel_task,
+    claim_task,
+    complete_task,
+    expire_overdue_tasks,
+    task_row_to_dict,
+)
 from .export_markdown import format_conversation_markdown
-from .messages import flatten_for_render
+from .messages import combine_tool_messages_for_render, flatten_for_render
+from .models import get_agent_models
 from .questions import question_row_to_dict
+from .references import add_reference_urls, search_references
 from .schema import ensure_tables
+from .turns import (
+    ALREADY_RUNNING_MESSAGE,
+    TurnAlreadyRunning,
+    get_turn,
+    running_conversation_ids,
+    stop_turn,
+)
+
+# Longest panel URL the page may report back; anything longer is ignored.
+MAX_PANEL_URL_LENGTH = 2000
+AGENT_INDEX_PAGE_SIZE = 100
+
+
+def _clean_panel_url(value):
+    """The path the conversation page's panel is showing, as reported by
+    the page, or None if it isn't a plausible same-site path."""
+    if not isinstance(value, str):
+        return None
+    if len(value) > MAX_PANEL_URL_LENGTH:
+        return None
+    if not value.startswith("/") or value.startswith("//"):
+        return None
+    if any(ord(c) < 32 for c in value):
+        return None
+    return value
+
+
+def _latest_panel_url(messages):
+    """The most recent page show_in_panel opened in this conversation."""
+    for msg in reversed(messages):
+        if msg.get("role") != "tool" or not msg.get("tool_output"):
+            continue
+        try:
+            parsed = json.loads(msg["tool_output"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict) and parsed.get("_panel_url"):
+            return parsed["_panel_url"]
+    return None
 
 
 def _actor_id(request):
@@ -21,49 +68,163 @@ def _actor_id(request):
     return None
 
 
+async def agent_patterns(request, datasette):
+    # Only sample content, so gated like Datasette's own /-/patterns
+    await datasette.ensure_permission(action="view-instance", actor=request.actor)
+    return Response.html(
+        await datasette.render_template("agent_patterns.html", {}, request=request)
+    )
+
+
+async def agent_patterns_markdown(request, datasette):
+    await datasette.ensure_permission(action="view-instance", actor=request.actor)
+    return Response.text("# Agent pattern\n\nSample content for the Export menu.\n")
+
+
+async def api_running(request, datasette):
+    """IDs of the actor's conversations with a turn running right now,
+    polled by /-/agent to keep its running indicators current."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    running = sorted(running_conversation_ids(datasette))
+    if running:
+        db = datasette.get_internal_database()
+        await ensure_tables(db)
+        actor_id = _actor_id(request)
+        where = "actor_id = ?" if actor_id else "actor_id IS NULL"
+        params = [actor_id] if actor_id else []
+        placeholders = ", ".join("?" for _ in running)
+        running = [
+            row["id"]
+            for row in (
+                await db.execute(
+                    f"SELECT id FROM agent_conversations WHERE {where} "
+                    f"AND id IN ({placeholders}) ORDER BY id",
+                    [*params, *running],
+                )
+            ).rows
+        ]
+    return Response.json({"running": running}, headers={"Cache-Control": "no-cache"})
+
+
 async def agent_index(request, datasette):
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     db = datasette.get_internal_database()
     await ensure_tables(db)
     actor_id = _actor_id(request)
-    if actor_id:
-        conversations = (
-            await db.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_conversations "
-                "WHERE actor_id = ? ORDER BY updated_at DESC",
-                [actor_id],
-            )
-        ).rows
-    else:
-        conversations = (
-            await db.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_conversations "
-                "WHERE actor_id IS NULL ORDER BY updated_at DESC",
-            )
-        ).rows
+    where = "actor_id = ?" if actor_id else "actor_id IS NULL"
+    params = [actor_id] if actor_id else []
+    q = (request.args.get("q") or "").strip()
+    if q:
+        where += " AND instr(lower(coalesce(title, '')), lower(?)) > 0"
+        params.append(q)
+    total_conversations = (
+        await db.execute(
+            f"SELECT count(*) AS count FROM agent_conversations WHERE {where}", params
+        )
+    ).first()["count"]
+    page_count = max(
+        1, (total_conversations + AGENT_INDEX_PAGE_SIZE - 1) // AGENT_INDEX_PAGE_SIZE
+    )
+    try:
+        requested_page = max(1, int(request.args.get("page", "1")))
+    except (TypeError, ValueError):
+        requested_page = 1
+    page = min(requested_page, page_count)
+    conversations = (
+        await db.execute(
+            "SELECT id, title, updated_at FROM agent_conversations "
+            f"WHERE {where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?",
+            [*params, AGENT_INDEX_PAGE_SIZE, (page - 1) * AGENT_INDEX_PAGE_SIZE],
+        )
+    ).rows
+    models, default_model = await get_agent_models(datasette, request.actor)
     return Response.html(
         await datasette.render_template(
             "agent_index.html",
-            {"conversations": conversations},
+            {
+                "conversations": conversations,
+                "running": running_conversation_ids(datasette),
+                "models": models,
+                "default_model": default_model,
+                "page": page,
+                "page_count": page_count,
+                "total_conversations": total_conversations,
+                "q": q,
+            },
             request=request,
         )
     )
 
 
+async def api_models(request, datasette):
+    """List the models this actor can start an agent conversation with.
+
+    Backs the model picker in the jump section rendered on every
+    Datasette page - that markup is built client-side, so it fetches
+    the list lazily instead of every page carrying it inline.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    models, default_model = await get_agent_models(datasette, request.actor)
+    return Response.json({"models": models, "default_model": default_model})
+
+
+async def api_references(request, datasette):
+    """Search every registered reference type (tables, queries,
+    databases and anything plugins add) for the chat composer's
+    #-reference autocomplete."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    results = await search_references(
+        datasette, request.actor, request.args.get("q", "")
+    )
+    return Response.json({"results": results})
+
+
 async def api_create_conversation(request, datasette):
+    """Create an empty conversation, optionally pinned to a model.
+
+    ``{"model": "..."}`` in the JSON body picks the model for the whole
+    conversation; it must be one of the ids from ``api_models`` for this
+    actor. Omit it to use the datasette-llm default, resolved on the
+    first turn. The model cannot be changed once the conversation
+    exists.
+    """
     await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
     if request.method != "POST":
         return Response.json({"error": "POST required"}, status=405)
+
+    body = await request.post_body()
+    data = {}
+    if body:
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return Response.json({"error": "Invalid JSON body"}, status=400)
+        if not isinstance(data, dict):
+            return Response.json({"error": "Body must be a JSON object"}, status=400)
+
+    model_id = data.get("model")
+    if model_id is not None:
+        if not isinstance(model_id, str) or not model_id:
+            return Response.json(
+                {"error": "model must be a non-empty string"}, status=400
+            )
+        available, _ = await get_agent_models(datasette, request.actor)
+        if model_id not in available:
+            return Response.json(
+                {"error": "Model not available: {}".format(model_id)}, status=400
+            )
+
     db = datasette.get_internal_database()
     await ensure_tables(db)
     conversation_id = str(ULID())
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
-        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [conversation_id, _actor_id(request), None, now, now],
+        "INSERT INTO agent_conversations "
+        "(id, actor_id, title, model_id, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [conversation_id, _actor_id(request), None, model_id, now, now],
     )
-    return Response.json({"conversation_id": conversation_id})
+    return Response.json({"conversation_id": conversation_id, "model_id": model_id})
 
 
 async def agent_conversation(request, datasette):
@@ -85,12 +246,20 @@ async def agent_conversation(request, datasette):
     if row["actor_id"] != actor_id:
         raise Forbidden("Forbidden")
 
+    # A turn may be running, with no page attached if the user navigated
+    # away. Show the messages saved before its current step; the page
+    # then watches the turn, which replays the step so far and continues.
+    turn = get_turn(datasette, conversation_id)
+    turn_watermark = turn.watermark if turn else None
+
     messages = (
         await db.execute(
             "SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id",
             [conversation_id],
         )
     ).rows
+    if turn_watermark is not None:
+        messages = [m for m in messages if m["id"] <= turn_watermark]
 
     background_agent = (
         await db.execute(
@@ -114,17 +283,50 @@ async def agent_conversation(request, datasette):
             question_row_to_dict(pending_question)
         ).replace("<", "\\u003c")
 
+    # Lazy expiry: convert overdue browser tasks before deciding what
+    # is still pending.
+    await expire_overdue_tasks(db, conversation_id)
+    pending_tasks = (
+        await db.execute(
+            "SELECT * FROM agent_browser_tasks "
+            "WHERE conversation_id = ? AND status IN ('pending', 'running') "
+            "ORDER BY created_at",
+            [conversation_id],
+        )
+    ).rows
+    pending_tasks_json = None
+    if pending_tasks:
+        pending_tasks_json = json.dumps(
+            [task_row_to_dict(t) for t in pending_tasks]
+        ).replace("<", "\\u003c")
+
+    # A task that expired while no page was open leaves the turn
+    # suspended with nothing to complete or cancel; flag the page so
+    # the frontend auto-resumes instead of stranding the conversation.
+    needs_resume = False
+    if turn is None and not pending_tasks and pending_question is None:
+        needs_resume = (await _conversation_resume_state(db, conversation_id)) is None
+
+    render_messages = combine_tool_messages_for_render(
+        await add_reference_urls(datasette, flatten_for_render(messages))
+    )
+
     return Response.html(
         await datasette.render_template(
             "agent_conversation.html",
             {
                 "conversation": dict(row),
-                "messages": flatten_for_render(messages),
+                "messages": render_messages,
+                "panel_url": _latest_panel_url(render_messages),
                 "conversation_id": conversation_id,
                 "background_agent": (
                     dict(background_agent) if background_agent else None
                 ),
                 "pending_question_json": pending_question_json,
+                "pending_tasks_json": pending_tasks_json,
+                "needs_resume": needs_resume,
+                "turn_running": turn is not None,
+                "turn_watermark": turn_watermark,
             },
             request=request,
         )
@@ -203,7 +405,9 @@ async def agent_conversation_markdown(request, datasette):
     ).rows
 
     title = row["title"] or "Chat"
-    markdown = format_conversation_markdown(title, flatten_for_render(messages))
+    markdown = format_conversation_markdown(
+        title, await add_reference_urls(datasette, flatten_for_render(messages))
+    )
 
     # Sanitize title for filename
     safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in title)[
@@ -216,6 +420,33 @@ async def agent_conversation_markdown(request, datasette):
         content_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _sse_response(events):
+    """A Server-Sent Events response from an async iterator of chunks."""
+    return Response.stream(
+        events,
+        headers={"Cache-Control": "no-cache", "Content-Encoding": "none"},
+        content_type="text/event-stream",
+    )
+
+
+def _turn_response(start):
+    """Start a turn and stream its events as Server-Sent Events.
+
+    start() is a call to run_agent() or resume_agent(). The response
+    watches the turn just as the watch endpoint does, so closing it -
+    the client disconnecting - leaves the turn running.
+    """
+    try:
+        turn = start()
+    except TurnAlreadyRunning as e:
+        return _sse_response(_error_event(str(e)))
+    return _sse_response(turn.events())
+
+
+async def _error_event(message):
+    yield "event: error\ndata: {}\n\n".format(json.dumps({"message": message}))
 
 
 async def agent_stream(request, datasette):
@@ -243,23 +474,23 @@ async def agent_stream(request, datasette):
     body = await request.post_body()
     data = json.loads(body)
     user_message = data.get("message", "")
+    references = data.get("references") or []
+    panel_url = _clean_panel_url(data.get("panel_url"))
 
-    async def stream_fn(writer):
-        await run_agent(
+    # One turn at a time per conversation. No await between this check
+    # and starting the turn, so two requests can't both get past it.
+    if get_turn(datasette, conversation_id) is not None:
+        return Response.json({"error": ALREADY_RUNNING_MESSAGE}, status=409)
+
+    return _turn_response(
+        lambda: run_agent(
             datasette=datasette,
             actor=request.actor,
             conversation_id=conversation_id,
             user_message=user_message,
-            writer=writer,
+            references=references,
+            panel_url=panel_url,
         )
-
-    return AsgiStream(
-        stream_fn,
-        headers={
-            "Cache-Control": "no-cache",
-            "Content-Encoding": "none",
-        },
-        content_type="text/event-stream",
     )
 
 
@@ -326,22 +557,315 @@ async def api_answer_question(request, datasette):
         [json.dumps(answer), actor_id, now, question_id],
     )
 
-    async def stream_fn(writer):
-        await resume_agent(
+    return _resume_stream(request, datasette, conversation_id)
+
+
+async def _history_suspended(db, conversation_id):
+    """True when the persisted history ends in an assistant message
+    with tool calls and no tool results after it - the shape a turn
+    suspended on ask_user() or browser_task() leaves behind."""
+    row = (
+        await db.execute(
+            "SELECT role, message_json FROM agent_messages "
+            "WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+            [conversation_id],
+        )
+    ).first()
+    if row is None or row["role"] != "assistant":
+        return False
+    try:
+        parts = json.loads(row["message_json"]).get("parts", [])
+    except (json.JSONDecodeError, AttributeError):
+        return False
+    return any(p.get("type") == "tool_call" for p in parts)
+
+
+async def _conversation_resume_state(db, conversation_id):
+    """Classify whether a suspended conversation is safe to resume with
+    no completion in hand.
+
+    Returns None when it is: the history is suspended, no browser task
+    is still live, no question awaits an answer, and at least one
+    finished (non-consumed) task exists for the re-executed tool call
+    to replay - evidence the suspension came from a browser task
+    rather than a turn actively streaming in another tab. Otherwise
+    returns the blocking state.
+    """
+    live = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_browser_tasks "
+            "WHERE conversation_id = ? AND status IN ('pending', 'running')",
+            [conversation_id],
+        )
+    ).first()
+    if live["c"]:
+        return "pending"
+    question = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_questions "
+            "WHERE conversation_id = ? AND status = 'pending'",
+            [conversation_id],
+        )
+    ).first()
+    if question["c"]:
+        return "question_pending"
+    finished = (
+        await db.execute(
+            "SELECT count(*) AS c FROM agent_browser_tasks "
+            "WHERE conversation_id = ? "
+            "AND status IN ('completed', 'expired', 'cancelled')",
+            [conversation_id],
+        )
+    ).first()
+    if not finished["c"]:
+        return "not_suspended"
+    if not await _history_suspended(db, conversation_id):
+        return "not_suspended"
+    return None
+
+
+async def _task_request_checks(request, datasette):
+    """Shared preamble for the browser-task endpoints: POST only,
+    conversation ownership, task lookup. Returns (db, task_row,
+    error_response) - exactly one of task_row/error_response is set.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return None, None, Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    task_id = request.url_vars["task_id"]
+    actor_id = _actor_id(request)
+
+    conversation = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if conversation is None:
+        return None, None, Response.json({"error": "Not found"}, status=404)
+    if conversation["actor_id"] != actor_id:
+        return None, None, Response.json({"error": "Forbidden"}, status=403)
+
+    task = (
+        await db.execute(
+            "SELECT * FROM agent_browser_tasks WHERE id = ? AND conversation_id = ?",
+            [task_id, conversation_id],
+        )
+    ).first()
+    if task is None:
+        return None, None, Response.json({"error": "Task not found"}, status=404)
+    return db, task, None
+
+
+def _resume_stream(request, datasette, conversation_id):
+    """Stream the resumed turn back on this response, exactly as the
+    question-answer endpoint does - the completing tab is the tab
+    watching the conversation, so it receives the resumed turn's
+    events on the same connection.
+    """
+
+    return _turn_response(
+        lambda: resume_agent(
             datasette=datasette,
             actor=request.actor,
             conversation_id=conversation_id,
-            writer=writer,
+        )
+    )
+
+
+async def api_claim_task(request, datasette):
+    """Atomically claim a pending browser task: pending -> running.
+
+    The claim succeeds exactly once and is the only way the payload is
+    ever handed out - history replay, duplicate tabs, and re-renders
+    all hit "already claimed" and do nothing.
+    """
+    db, task, error = await _task_request_checks(request, datasette)
+    if error is not None:
+        return error
+
+    claimed, state = await claim_task(db, task["id"], _actor_id(request))
+    if claimed is None:
+        return Response.json({"ok": False, "state": state})
+    return Response.json(
+        {
+            "ok": True,
+            "task": {
+                "id": claimed["id"],
+                "payload": (
+                    json.loads(claimed["payload_json"])
+                    if claimed["payload_json"]
+                    else None
+                ),
+                "timeout_ms": claimed["timeout_ms"],
+            },
+        }
+    )
+
+
+async def api_complete_task(request, datasette):
+    """Store the result envelope a browser task posted, then resume the
+    suspended conversation, streaming SSE like the answer endpoint.
+
+    Completing from 'pending' - without claiming first - is allowed by
+    design, for hosts that skip claiming (callback executors, future
+    headless runners). It is safe because the endpoint is actor-bound
+    and the payload is still only obtainable through the one-shot
+    claim.
+    """
+    db, task, error = await _task_request_checks(request, datasette)
+    if error is not None:
+        return error
+
+    body = await request.post_body()
+    if len(body) > MAX_RESULT_BYTES:
+        return Response.json(
+            {
+                "ok": False,
+                "error": {
+                    "code": "result_too_large",
+                    "message": "Result exceeds {} bytes - post a trimmed result".format(
+                        MAX_RESULT_BYTES
+                    ),
+                },
+            },
+            status=400,
+        )
+    try:
+        envelope = json.loads(body)
+    except json.JSONDecodeError:
+        return Response.json({"error": "Invalid JSON body"}, status=400)
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("ok"), bool):
+        return Response.json(
+            {"error": 'Body must be a JSON object with a boolean "ok"'}, status=400
         )
 
-    return AsgiStream(
-        stream_fn,
-        headers={
-            "Cache-Control": "no-cache",
-            "Content-Encoding": "none",
-        },
-        content_type="text/event-stream",
-    )
+    state = await complete_task(db, task["id"], envelope, _actor_id(request))
+    if state is not None:
+        return Response.json({"ok": False, "state": state}, status=400)
+
+    return _resume_stream(request, datasette, task["conversation_id"])
+
+
+async def _resync_event():
+    yield "event: resync\ndata: {}\n\n"
+
+
+async def api_watch_turn(request, datasette):
+    """Follow a running turn from a page opened after it started.
+
+    ?after= is the watermark the page was rendered with. If it still
+    matches the turn's current step, stream that step's events so far and
+    then each new one until the turn ends. Otherwise - the turn has moved
+    on to a new step, or ended - send a single resync event telling the
+    page to reload.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != _actor_id(request):
+        return Response.json({"error": "Forbidden"}, status=403)
+    after = request.args.get("after")
+
+    turn = get_turn(datasette, conversation_id)
+    if turn is None or str(turn.watermark) != after:
+        return _sse_response(_resync_event())
+    # No await between that check and events(), so no event is missed.
+    return _sse_response(turn.events())
+
+
+async def api_stop_turn(request, datasette):
+    """Stop the conversation's running turn, if there is one. A tool that
+    has started finishes first; the turn then ends without another
+    model call."""
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    row = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if row["actor_id"] != _actor_id(request):
+        return Response.json({"error": "Forbidden"}, status=403)
+    stopping = stop_turn(datasette, conversation_id)
+    return Response.json({"ok": True, "stopping": stopping})
+
+
+async def api_cancel_task(request, datasette):
+    """User-initiated skip: pending/running -> cancelled, then resume.
+    The escape hatch that stops a hung task bricking the conversation -
+    the tool resumes with a failure result."""
+    db, task, error = await _task_request_checks(request, datasette)
+    if error is not None:
+        return error
+
+    state = await cancel_task(db, task["id"], _actor_id(request))
+    if state is not None:
+        return Response.json({"ok": False, "state": state}, status=400)
+
+    return _resume_stream(request, datasette, task["conversation_id"])
+
+
+async def api_resume_conversation(request, datasette):
+    """Resume a turn suspended with no live pending work - e.g. a
+    browser task that expired while no page was open, leaving nothing
+    to complete or cancel.
+
+    Runs the lazy-expiry sweep first, then refuses unless the
+    conversation is verifiably stuck: 409 while a task or question is
+    still genuinely pending (the frontend deadline watcher re-arms on
+    this - it can never steal a claim by poking here), 400 when the
+    history is not suspended. On success streams the resumed turn as
+    SSE like the answer endpoint.
+    """
+    await datasette.ensure_permission(action="datasette-agent", actor=request.actor)
+    if request.method != "POST":
+        return Response.json({"error": "POST required"}, status=405)
+
+    db = datasette.get_internal_database()
+    await ensure_tables(db)
+    conversation_id = request.url_vars["conversation_id"]
+    actor_id = _actor_id(request)
+
+    conversation = (
+        await db.execute(
+            "SELECT actor_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if conversation is None:
+        return Response.json({"error": "Not found"}, status=404)
+    if conversation["actor_id"] != actor_id:
+        return Response.json({"error": "Forbidden"}, status=403)
+
+    await expire_overdue_tasks(db, conversation_id)
+    state = await _conversation_resume_state(db, conversation_id)
+    if state in ("pending", "question_pending"):
+        return Response.json({"ok": False, "state": state}, status=409)
+    if state is not None:
+        return Response.json({"ok": False, "state": state}, status=400)
+
+    return _resume_stream(request, datasette, conversation_id)
 
 
 async def agent_background_index(request, datasette):
@@ -483,163 +1007,3 @@ async def api_cancel_background_agent(request, datasette):
         task.cancel()
 
     return Response.json({"agent_id": agent_id, "status": "error", "cancelled": True})
-
-
-async def explorer_page(request, datasette):
-    await datasette.ensure_permission(
-        action="datasette-agent-explore", actor=request.actor
-    )
-    db = datasette.get_internal_database()
-    await ensure_tables(db)
-
-    database_name = tilde_decode(request.url_vars["database"])
-    table_name = request.url_vars.get("table")
-    if table_name:
-        table_name = tilde_decode(table_name)
-    actor_id = _actor_id(request)
-
-    # Verify the database exists
-    try:
-        target_db = datasette.get_database(database_name)
-    except KeyError:
-        raise NotFound("Database not found")
-
-    # Verify the table exists if specified
-    if table_name:
-        tables = await target_db.table_names()
-        if table_name not in tables:
-            raise NotFound("Table not found")
-
-    # Fetch reports for this database/table
-    if table_name:
-        reports = (
-            await db.execute(
-                "SELECT r.*, a.status as agent_status, "
-                "a.final_message as agent_final_message, "
-                "a.error as agent_error, "
-                "a.conversation_id as agent_conversation_id "
-                "FROM agent_explorer_reports r "
-                "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
-                "WHERE r.database_name = ? AND r.table_name = ? AND r.actor_id = ? "
-                "ORDER BY r.created_at DESC",
-                [database_name, table_name, actor_id],
-            )
-        ).rows
-    else:
-        # Database-level page: show all reports for this database
-        # (both database-wide and table-specific)
-        reports = (
-            await db.execute(
-                "SELECT r.*, a.status as agent_status, "
-                "a.final_message as agent_final_message, "
-                "a.error as agent_error, "
-                "a.conversation_id as agent_conversation_id "
-                "FROM agent_explorer_reports r "
-                "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
-                "WHERE r.database_name = ? AND r.actor_id = ? "
-                "ORDER BY r.created_at DESC",
-                [database_name, actor_id],
-            )
-        ).rows
-
-    return Response.html(
-        await datasette.render_template(
-            "agent_explorer.html",
-            {
-                "database_name": database_name,
-                "table_name": table_name,
-                "reports": [dict(r) for r in reports],
-            },
-            request=request,
-        )
-    )
-
-
-async def explorer_report_page(request, datasette):
-    await datasette.ensure_permission(
-        action="datasette-agent-explore", actor=request.actor
-    )
-    db = datasette.get_internal_database()
-    await ensure_tables(db)
-
-    report_id = request.url_vars["report_id"]
-    actor_id = _actor_id(request)
-
-    row = (
-        await db.execute(
-            "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
-            "a.error as agent_error, a.conversation_id as agent_conversation_id "
-            "FROM agent_explorer_reports r "
-            "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
-            "WHERE r.id = ?",
-            [report_id],
-        )
-    ).first()
-    if row is None:
-        raise NotFound("Report not found")
-    if row["actor_id"] != actor_id:
-        raise Forbidden("Forbidden")
-
-    return Response.html(
-        await datasette.render_template(
-            "agent_explorer_report.html",
-            {"report": dict(row)},
-            request=request,
-        )
-    )
-
-
-async def api_start_explorer(request, datasette):
-    await datasette.ensure_permission(
-        action="datasette-agent-explore", actor=request.actor
-    )
-    if request.method != "POST":
-        return Response.json({"error": "POST required"}, status=405)
-
-    body = await request.post_body()
-    data = json.loads(body)
-    database_name = data.get("database")
-    table_name = data.get("table")
-    extra_prompt = data.get("extra_prompt") or None
-
-    if not database_name:
-        return Response.json({"error": "database is required"}, status=400)
-
-    from .explorer import start_explorer
-
-    report_id, agent_id = await start_explorer(
-        datasette=datasette,
-        actor=request.actor,
-        database_name=database_name,
-        table_name=table_name,
-        extra_prompt=extra_prompt,
-    )
-    return Response.json({"report_id": report_id, "agent_id": agent_id})
-
-
-async def api_explorer_report(request, datasette):
-    await datasette.ensure_permission(
-        action="datasette-agent-explore", actor=request.actor
-    )
-    db = datasette.get_internal_database()
-    await ensure_tables(db)
-
-    report_id = request.url_vars["report_id"]
-    actor_id = _actor_id(request)
-
-    row = (
-        await db.execute(
-            "SELECT r.*, a.status as agent_status, a.final_message as agent_final_message, "
-            "a.error as agent_error, a.conversation_id as agent_conversation_id "
-            "FROM agent_explorer_reports r "
-            "LEFT JOIN agent_background_agents a ON r.agent_id = a.id "
-            "WHERE r.id = ?",
-            [report_id],
-        )
-    ).first()
-    if row is None:
-        return Response.json({"error": "Not found"}, status=404)
-    if row["actor_id"] != actor_id:
-        return Response.json({"error": "Forbidden"}, status=403)
-
-    return Response.json(dict(row))

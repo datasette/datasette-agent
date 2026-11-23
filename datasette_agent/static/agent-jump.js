@@ -8,8 +8,10 @@
     registered = true;
     const config = window.datasetteAgentJumpConfig || {};
     const createConversationUrl = config.createConversationUrl;
+    const modelsUrl = config.modelsUrl;
     const conversationBaseUrl = config.conversationBaseUrl;
     const pluginVersion = config.pluginVersion;
+    const MODEL_STORAGE_KEY = "datasette-agent-model";
     manager.registerPlugin("datasette-agent", {
       version: pluginVersion,
       makeJumpSections() {
@@ -50,9 +52,29 @@
                   .datasette-agent-jump-actions {
                     align-items: center;
                     display: flex;
+                    flex-wrap: wrap;
                     gap: 0.75rem;
                   }
-                  .datasette-agent-jump-start button {
+                  .datasette-agent-jump-model {
+                    align-items: center;
+                    color: #6b7280;
+                    display: flex;
+                    font-size: 0.8rem;
+                    gap: 0.4rem;
+                  }
+                  .datasette-agent-jump-model select {
+                    background: #fff;
+                    border: 1px solid #d1d5db;
+                    border-radius: 0.375rem;
+                    color: #111827;
+                    font: inherit;
+                    max-width: 14rem;
+                    padding: 0.3rem 0.4rem;
+                  }
+                  .datasette-agent-jump-model code {
+                    color: #374151;
+                  }
+                  .datasette-agent-jump-actions button {
                     background: #2563eb;
                     border: 0;
                     border-radius: 0.375rem;
@@ -62,7 +84,7 @@
                     font-weight: 600;
                     padding: 0.45rem 0.75rem;
                   }
-                  .datasette-agent-jump-start button:disabled {
+                  .datasette-agent-jump-actions button:disabled {
                     cursor: default;
                     opacity: 0.65;
                   }
@@ -82,10 +104,13 @@
                 </style>
                 <form class="datasette-agent-jump-start">
                   <label for="datasette-agent-jump-message">Start a new agent chat</label>
-                  <textarea id="datasette-agent-jump-message" name="message" placeholder="Ask a question about your data..." rows="3"></textarea>
+                  <div class="datasette-agent-jump-anchor">
+                    <textarea id="datasette-agent-jump-message" name="message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="3"></textarea>
+                  </div>
                   <p class="datasette-agent-jump-hint">Press Enter to start. Shift+Enter adds a new line.</p>
                   <div class="datasette-agent-jump-actions">
                     <button type="submit">Start chat</button>
+                    <span class="datasette-agent-jump-model" data-agent-jump-model hidden></span>
                   </div>
                   <p class="datasette-agent-jump-error" data-agent-jump-error role="alert"></p>
                 </form>`;
@@ -94,6 +119,71 @@
               const textarea = node.querySelector("textarea");
               const button = node.querySelector("button");
               const error = node.querySelector("[data-agent-jump-error]");
+              const modelSlot = node.querySelector("[data-agent-jump-model]");
+
+              // # to tag tables, views, queries and databases, using the same
+              // picker as /-/agent. references.js is an ES module and this
+              // file is a classic script, so load it with import().
+              let referencePicker = null;
+              if (config.referencesModuleUrl) {
+                if (config.referencesUrl) {
+                  textarea.dataset.referenceSearchUrl = config.referencesUrl;
+                }
+                import(config.referencesModuleUrl)
+                  .then((module) => {
+                    referencePicker = module.attachReferencePicker(textarea, {
+                      placement: "below",
+                    });
+                  })
+                  .catch((e) => console.error("Could not load # tagging", e));
+              }
+              // Holds the <select> (several models) or <input type=hidden>
+              // (exactly one) once the model list has loaded; null until
+              // then, or when there is nothing to choose from - in which
+              // case the server's default model is used.
+              let modelInput = null;
+
+              // Fetch the model list lazily: the jump section renders on
+              // every page, and the list depends on which API keys the
+              // actor has, so it is not worth inlining in every response.
+              if (modelsUrl) {
+                fetch(modelsUrl)
+                  .then((response) => (response.ok ? response.json() : null))
+                  .then((data) => {
+                    const models = (data && data.models) || [];
+                    if (!models.length) return;
+                    if (models.length === 1) {
+                      modelInput = document.createElement("input");
+                      modelInput.type = "hidden";
+                      modelInput.value = models[0];
+                      const code = document.createElement("code");
+                      code.textContent = models[0];
+                      modelSlot.append("Model: ", code, modelInput);
+                    } else {
+                      modelInput = document.createElement("select");
+                      modelInput.setAttribute("aria-label", "Model");
+                      models.forEach((modelId) => {
+                        const option = document.createElement("option");
+                        option.value = modelId;
+                        option.textContent = modelId;
+                        modelInput.appendChild(option);
+                      });
+                      let selected = data.default_model;
+                      try {
+                        const remembered = localStorage.getItem(MODEL_STORAGE_KEY);
+                        if (remembered && models.includes(remembered)) {
+                          selected = remembered;
+                        }
+                      } catch (e) {}
+                      if (selected && models.includes(selected)) {
+                        modelInput.value = selected;
+                      }
+                      modelSlot.append("Model: ", modelInput);
+                    }
+                    modelSlot.hidden = false;
+                  })
+                  .catch(() => {});
+              }
 
               textarea.addEventListener("keydown", (event) => {
                 if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -114,11 +204,19 @@
                 button.disabled = true;
                 button.textContent = "Starting...";
 
+                const body = {message};
+                if (modelInput && modelInput.value) {
+                  body.model = modelInput.value;
+                  try {
+                    localStorage.setItem(MODEL_STORAGE_KEY, modelInput.value);
+                  } catch (e) {}
+                }
+
                 try {
                   const response = await fetch(createConversationUrl, {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({message}),
+                    body: JSON.stringify(body),
                   });
                   if (!response.ok) {
                     throw new Error("HTTP " + response.status);
@@ -129,6 +227,12 @@
                   }
                   try {
                     sessionStorage.setItem("agent_pending_message", message);
+                    sessionStorage.setItem(
+                      "agent_pending_references",
+                      JSON.stringify(
+                        referencePicker ? referencePicker.getReferences() : [],
+                      ),
+                    );
                   } catch (e) {}
                   window.location.assign(conversationBaseUrl + data.conversation_id);
                 } catch (e) {

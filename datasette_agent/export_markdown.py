@@ -34,6 +34,15 @@ def format_conversation_markdown(title, messages):
 
         if role == "user":
             parts.append(f"## User\n\n{content}\n")
+            references = msg.get("references")
+            if references:
+                tagged = ", ".join(
+                    "`{}` ({})".format(
+                        r["name"], r.get("description") or r.get("label") or r["type"]
+                    )
+                    for r in references
+                )
+                parts.append(f"Tagged: {tagged}\n")
 
         elif role == "assistant":
             if content:

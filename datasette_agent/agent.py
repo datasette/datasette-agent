@@ -1,23 +1,33 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 
-from datasette.resources import DatabaseResource
-from datasette_llm import LLM
+import llm
 
 from .context import current_conversation_id
 from .messages import (
     insert_message,
     insert_response,
+    latest_panel_url,
     load_messages,
+    make_panel_note_part,
     make_tool_message_dict,
     make_user_message_dict,
     message_dict_text,
     prepare_tool_output_for_model,
     strip_internal_keys,
 )
+from .browser_tasks import BrowserTaskPending
+from .models import get_agent_model
 from .questions import QuestionPending
+from .references import prepare_references
 from .schema import ensure_tables
 from .tools import filter_tools_for_actor, get_agent_tools, make_llm_tools
+from .turns import start_turn
+
+# Returned by _run_chain when the user stopped the turn.
+STOPPED = ("stopped", {})
+STOPPED_TOOL_OUTPUT = "Cancelled: the user stopped this turn before the tool ran"
 
 
 def _custom_system_prompt(datasette):
@@ -26,25 +36,34 @@ def _custom_system_prompt(datasette):
 
 
 async def _build_system_prompt(datasette, actor):
-    parts = [
+    example_path = datasette.urls.path("/sales/orders?region=west")
+    prompt = (
         "You are a helpful data analysis assistant. "
-        "You have access to tools that let you explore and query databases. "
+        "You have access to tools that let you explore and query SQLite databases. "
         "Use the tools to answer questions about the data. "
-        "The available databases and tables are listed below - do not call "
-        "list_databases_and_tables or describe_table if you already have the "
-        "information you need from this prompt or the conversation history. "
+        "Call list_databases_and_tables to find out which databases and tables "
+        "are available. Do not call list_databases_and_tables or describe_table "
+        "if you already have the information you need from the conversation "
+        "history, but list again if a table seems to be missing - the list can "
+        "go out of date. "
         "Only describe a table when you need column details you haven't seen yet.\n\n"
         "When calling a tool, pass the arguments directly as a flat JSON object matching "
         "the tool's parameters. Always explicitly specify the 'database' parameter for any "
-        "database tools (e.g., sql_query, describe_table) based on the available databases "
-        "listed below. For sql_query, provide your SQL in the 'sql' parameter. "
-        "Do NOT wrap tool arguments inside a 'kwargs' key (e.g., "
-        'do not use {"kwargs": {"param": "value"}}).\n\n'
+        "database tools (e.g., sql_query, describe_table), using a database name from "
+        "list_databases_and_tables. For sql_query, provide your SQL in the 'sql' parameter.\n\n"
         "Your output will be rendered as markdown. "
+        "Markdown images are not supported; do not include them in your output. "
         "Escape underscores in identifiers like column names and table names "
         "with a backslash (e.g. table\\_name, row\\_count) to prevent "
         "them from being interpreted as italic markers. "
         "This is not necessary inside backtick code spans like `table_name`.\n\n"
+        "When you link to a page in this Datasette instance, use a "
+        "root-relative path with no scheme or hostname, for example "
+        f"[orders in the west region]({example_path}). You do not know "
+        "the hostname the user is browsing, so never invent one such as "
+        "localhost or datasette.local. Only link to paths you have seen "
+        "in tool results or know exist; if a tool result says the user "
+        "already has a rendered link, you do not need to add another.\n\n"
         "When you call sql_query, pick a `display` mode for the result:\n"
         "- `model` (default): rows come back to you only. Pick this when "
         "you need to reason over the numbers but won't be quoting them "
@@ -54,7 +73,7 @@ async def _build_system_prompt(datasette, actor):
         "the user. Pick this whenever your answer will reference specific "
         "data — the user gets the table inline, you get to comment on it.\n"
         "- `user`: a rendered table is shown to the user; you only see "
-        "column names and row_count, not the rows themselves. Pick this "
+        "column names and num_rows_shown_to_user, not the rows themselves. Pick this "
         'for "show me…", "list the…", or "what are the top…" requests '
         "where the user wants to read the data and you don't need to "
         "summarize the contents. This saves tokens on bulk fetches.\n\n"
@@ -65,47 +84,36 @@ async def _build_system_prompt(datasette, actor):
         "doesn't: a one-line takeaway, a caveat, a follow-up suggestion, "
         "or just a brief framing sentence. If there's nothing to add, "
         "say nothing."
-    ]
+    )
     custom = _custom_system_prompt(datasette)
     if custom:
-        parts.append("\n" + custom)
-    db_info = {}
-    for db_name, db in datasette.databases.items():
-        if not await datasette.allowed(
-            action="execute-sql",
-            resource=DatabaseResource(database=db_name),
-            actor=actor,
-        ):
-            continue
-        tables = await db.table_names()
-        if tables:
-            db_info[db_name] = tables
-    if db_info:
-        parts.append("\nAvailable databases and tables:")
-        for db_name, tables in db_info.items():
-            parts.append(f"\n  {db_name}: {', '.join(tables)}")
-    return "\n".join(parts)
+        prompt += "\n\n" + custom
+    return prompt
 
 
-async def _send_sse(writer, event, data):
-    await writer.write(f"event: {event}\ndata: {json.dumps(data)}\n\n")
+def _send_sse(control, event, data):
+    control.publish(f"event: {event}\ndata: {json.dumps(data)}\n\n")
 
 
-async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
+async def _run_chain(datasette, actor, conversation_id, control):
     """Run one model.chain() over the conversation's persisted history,
-    streaming SSE events and persisting messages.
+    streaming SSE events and persisting messages. control is the turn's
+    TurnControl, used to stop and watch it.
 
-    Returns the pending question dict if a tool suspended on ask_user()
-    (QuestionPending is an llm.PauseChain, so it propagates here from
-    the chain), else None. The caller sends the final done/question
-    events. If the history ends in unresolved tool calls - a turn that
-    previously suspended - the chain re-executes them through the
-    normal tool machinery before calling the model.
+    Returns ("question", question_dict) if a tool suspended on
+    ask_user(), ("browser_task", task_dict) if it suspended on
+    browser_task() (both are llm.PauseChain, so they propagate here
+    from the chain), STOPPED if the user stopped the turn, else None.
+    The caller sends the final done/question/browser_task/stopped
+    events. If the history ends in
+    unresolved tool calls - a turn that previously suspended - the
+    chain re-executes them through the normal tool machinery before
+    calling the model.
 
-    prompt_text is passed through to chain() for adapters that read
-    prompt.prompt directly (e.g. echo); the persisted history passed as
-    messages= is authoritative and must already contain the
-    corresponding user row.
+    The persisted history passed as messages= is the whole input and
+    must already contain this turn's user row. No prompt text is passed
+    to chain(): llm appends that to messages= as a further user message,
+    which would send the user's message to the model twice.
     """
     db = datasette.get_internal_database()
 
@@ -117,13 +125,28 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         actor,
         conversation_id=conversation_id,
         supports_questions=True,
+        supports_browser_tasks=True,
     )
 
     system_prompt = await _build_system_prompt(datasette, actor)
     prior_messages = await load_messages(db, conversation_id)
 
-    llm_instance = LLM(datasette)
-    model = await llm_instance.model(purpose="agent", actor=actor)
+    # A conversation is pinned to one model for its whole life. The
+    # model is chosen when the conversation is created (or, for
+    # conversations created without an explicit choice, resolved from
+    # the datasette-llm default on the first turn) and written back to
+    # the row so every later turn reuses it - even if the configured
+    # default changes in between. It stops being used if it is later
+    # blocked, dropped from the allowlist or loses its key.
+    conversation_row = (
+        await db.execute(
+            "SELECT model_id FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    stored_model_id = conversation_row["model_id"] if conversation_row else None
+
+    model = await get_agent_model(datasette, actor, stored_model_id)
 
     now = datetime.now(timezone.utc).isoformat()
     await db.execute_write(
@@ -169,8 +192,8 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         stream_id = matching_streamed_tool_call_id(tool_call)
         if stream_id in streamed_tool_calls:
             streamed_tool_calls[stream_id]["finalized"] = True
-        await _send_sse(
-            writer,
+        _send_sse(
+            control,
             "tool_call",
             {
                 "id": stream_id,
@@ -179,14 +202,36 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
                 "streamed": bool(stream_id and stream_id in streamed_tool_calls),
             },
         )
+        if control.stop_requested:
+            # Skip a tool that has not started. llm does not call
+            # after_call for a cancelled call, so record its result
+            # here: without one the history would end in an unresolved
+            # tool call that a later resume would run.
+            _send_sse(
+                control,
+                "tool_result",
+                {
+                    "id": stream_id,
+                    "name": tool_call.name,
+                    "output": STOPPED_TOOL_OUTPUT,
+                },
+            )
+            pending_tool_messages.append(
+                make_tool_message_dict(
+                    tool_call.name, STOPPED_TOOL_OUTPUT, tool_call.tool_call_id
+                )
+            )
+            raise llm.CancelToolCall("the user stopped this turn")
+        control.tools_running += 1
 
     async def after_call(tool, tool_call, tool_result):
+        control.tools_running -= 1
         output = tool_result.output or ""
         stream_id = tool_call_stream_id(tool_result) or matching_streamed_tool_call_id(
             tool_call, require_unfinalized=False
         )
-        await _send_sse(
-            writer,
+        _send_sse(
+            control,
             "tool_result",
             {
                 "id": stream_id,
@@ -201,8 +246,39 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         # Strip user-only keys and safely cap JSON before the model sees it.
         tool_result.output = prepare_tool_output_for_model(output)
 
+    async def _stream_event(event):
+        if event.type == "text":
+            _send_sse(control, "text_chunk", {"content": event.chunk})
+        elif event.type == "reasoning" and event.chunk:
+            _send_sse(control, "reasoning_chunk", {"content": event.chunk})
+        elif event.type == "tool_call_name":
+            stream_id = tool_call_stream_id(event)
+            if stream_id is None:
+                stream_id = f"streamed:{len(streamed_tool_calls)}"
+            state = streamed_tool_calls.setdefault(stream_id, {"name": "", "args": ""})
+            state["name"] += event.chunk
+            if len(state["name"]) == len(event.chunk):
+                _send_sse(
+                    control,
+                    "tool_call_start",
+                    {"id": stream_id, "name": state["name"]},
+                )
+        elif event.type == "tool_call_args":
+            stream_id = tool_call_stream_id(event)
+            if stream_id is None:
+                stream_id = f"streamed:{len(streamed_tool_calls)}"
+            state = streamed_tool_calls.setdefault(stream_id, {"name": "", "args": ""})
+            state["args"] += event.chunk
+            _send_sse(
+                control,
+                "tool_call_args_chunk",
+                {"id": stream_id, "chunk": event.chunk},
+            )
+        # tool_result events are surfaced via after_call once the
+        # chain framework invokes the local tool.
+
     chain_response = model.chain(
-        prompt_text,
+        None,
         messages=prior_messages,
         system=system_prompt,
         tools=llm_tools,
@@ -222,41 +298,41 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
             # an order OpenAI rejects ("tool_calls must be followed by
             # tool messages").
             await flush_tool_messages()
+            # Everything before this response is saved: a page opened
+            # from here on renders it and replays this response's events.
+            await control.new_step(db, conversation_id)
 
-            async for event in response.astream_events():
-                if event.type == "text":
-                    await _send_sse(writer, "text_chunk", {"content": event.chunk})
-                elif event.type == "reasoning" and event.chunk:
-                    await _send_sse(writer, "reasoning_chunk", {"content": event.chunk})
-                elif event.type == "tool_call_name":
-                    stream_id = tool_call_stream_id(event)
-                    if stream_id is None:
-                        stream_id = f"streamed:{len(streamed_tool_calls)}"
-                    state = streamed_tool_calls.setdefault(
-                        stream_id, {"name": "", "args": ""}
+            # Stopped while tools ran: they have finished and their
+            # results are saved, so stop before this model call starts.
+            if control.stop_requested:
+                return STOPPED
+
+            text_chunks = []
+            control.streaming = True
+            try:
+                async for event in response.astream_events():
+                    if event.type == "text":
+                        text_chunks.append(event.chunk)
+                    await _stream_event(event)
+            except asyncio.CancelledError:
+                if not control.stop_requested:
+                    raise
+                # Stopped mid-response: keep the text the user has seen.
+                # Partly streamed tool calls never ran, so they are dropped.
+                asyncio.current_task().uncancel()
+                text = "".join(text_chunks)
+                if text:
+                    await insert_message(
+                        db,
+                        conversation_id,
+                        {
+                            "role": "assistant",
+                            "parts": [{"type": "text", "text": text}],
+                        },
                     )
-                    state["name"] += event.chunk
-                    if len(state["name"]) == len(event.chunk):
-                        await _send_sse(
-                            writer,
-                            "tool_call_start",
-                            {"id": stream_id, "name": state["name"]},
-                        )
-                elif event.type == "tool_call_args":
-                    stream_id = tool_call_stream_id(event)
-                    if stream_id is None:
-                        stream_id = f"streamed:{len(streamed_tool_calls)}"
-                    state = streamed_tool_calls.setdefault(
-                        stream_id, {"name": "", "args": ""}
-                    )
-                    state["args"] += event.chunk
-                    await _send_sse(
-                        writer,
-                        "tool_call_args_chunk",
-                        {"id": stream_id, "chunk": event.chunk},
-                    )
-                # tool_result events are surfaced via after_call once the
-                # chain framework invokes the local tool.
+                return STOPPED
+            finally:
+                control.streaming = False
 
             await insert_response(db, conversation_id, response)
 
@@ -268,7 +344,13 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
         # paused call - that missing row is what marks it pending, so
         # resuming the chain re-executes it.
         await flush_tool_messages()
-        return ex.question
+        return ("question", ex.question)
+
+    except BrowserTaskPending as ex:
+        # A tool is waiting on browser_task() - same PauseChain
+        # semantics as QuestionPending above.
+        await flush_tool_messages()
+        return ("browser_task", ex.task)
 
     # Final flush: tool results from the last response in the chain
     # (chain_limit hit or terminal tool call) would otherwise be lost.
@@ -277,19 +359,74 @@ async def _run_chain(datasette, actor, conversation_id, writer, prompt_text):
     return None
 
 
-async def _finish_turn(writer, question):
-    if question is not None:
-        await _send_sse(writer, "question", question)
-        await _send_sse(writer, "done", {"question_pending": True})
+def _finish_turn(control, pending):
+    if pending is STOPPED:
+        _send_sse(control, "stopped", {})
+        _send_sse(control, "done", {"stopped": True})
+    elif pending is not None:
+        event, data = pending
+        _send_sse(control, event, data)
+        _send_sse(control, "done", {"{}_pending".format(event): True})
     else:
-        await _send_sse(writer, "done", {})
+        _send_sse(control, "done", {})
 
 
-async def run_agent(datasette, actor, conversation_id, user_message, writer):
+def _start_turn(datasette, conversation_id, body):
+    """Start a turn that runs body(control), reporting any exception it
+    raises as an error event. Returns the turn's TurnControl."""
     db = datasette.get_internal_database()
-    await ensure_tables(db)
 
-    current_conversation_id.set(conversation_id)
+    async def run(control):
+        current_conversation_id.set(conversation_id)
+        try:
+            await ensure_tables(db)
+            await control.new_step(db, conversation_id)
+            await body(control)
+        except Exception as e:
+            _send_sse(control, "error", {"message": str(e)})
+
+    return start_turn(datasette, conversation_id, run)
+
+
+def run_agent(
+    datasette,
+    actor,
+    conversation_id,
+    user_message,
+    references=None,
+    panel_url=None,
+):
+    """Start a turn for a new user message.
+
+    Returns the turn's TurnControl straight away: the turn runs in a task
+    of its own, and control.events() iterates the SSE events it sends.
+    Raises TurnAlreadyRunning if the conversation already has a turn.
+    """
+    return _start_turn(
+        datasette,
+        conversation_id,
+        lambda control: _run_new_turn(
+            datasette,
+            actor,
+            conversation_id,
+            user_message,
+            references,
+            panel_url,
+            control,
+        ),
+    )
+
+
+async def _run_new_turn(
+    datasette,
+    actor,
+    conversation_id,
+    user_message,
+    references,
+    panel_url,
+    control,
+):
+    db = datasette.get_internal_database()
 
     # Drain any pending notifications and prepend their text to the user
     # turn so the model sees them on this turn.
@@ -309,57 +446,61 @@ async def run_agent(datasette, actor, conversation_id, user_message, writer):
             )
         user_message = "\n".join(prefix_parts) + "\n\n" + user_message
 
-    try:
-        # Persist the user turn as a MessageDict.
-        await insert_message(db, conversation_id, make_user_message_dict(user_message))
+    # #-tagged items: validate their shape and attach a note
+    # listing them - with details such as schemas, where the type
+    # provides them and the actor may see them - to the user turn.
+    references, references_context = await prepare_references(
+        datasette, actor, references or []
+    )
 
-        question = await _run_chain(
-            datasette, actor, conversation_id, writer, user_message
+    # Persist the user turn as a MessageDict.
+    user_message_dict = make_user_message_dict(
+        user_message, references, references_context
+    )
+    if panel_url != await latest_panel_url(db, conversation_id):
+        user_message_dict["parts"].append(make_panel_note_part(panel_url))
+    await insert_message(db, conversation_id, user_message_dict)
+    await control.new_step(db, conversation_id)
+
+    pending = await _run_chain(datasette, actor, conversation_id, control)
+
+    # Auto-set title from the first user message if not yet set.
+    row = (
+        await db.execute(
+            "SELECT title FROM agent_conversations WHERE id = ?",
+            [conversation_id],
+        )
+    ).first()
+    if row and not row["title"]:
+        title = user_message[:100]
+        if len(user_message) > 100:
+            title += "..."
+        await db.execute_write(
+            "UPDATE agent_conversations SET title = ? WHERE id = ?",
+            [title, conversation_id],
         )
 
-        # Auto-set title from the first user message if not yet set.
-        row = (
-            await db.execute(
-                "SELECT title FROM agent_conversations WHERE id = ?",
-                [conversation_id],
-            )
-        ).first()
-        if row and not row["title"]:
-            title = user_message[:100]
-            if len(user_message) > 100:
-                title += "..."
-            await db.execute_write(
-                "UPDATE agent_conversations SET title = ? WHERE id = ?",
-                [title, conversation_id],
-            )
-
-        await _finish_turn(writer, question)
-
-    except Exception as e:
-        await _send_sse(writer, "error", {"message": str(e)})
+    _finish_turn(control, pending)
 
 
-async def resume_agent(datasette, actor, conversation_id, writer):
-    """Resume a conversation suspended on ask_user().
+def resume_agent(datasette, actor, conversation_id):
+    """Resume a conversation suspended on ask_user() or browser_task().
 
     The persisted history ends in an assistant message with unresolved
     tool calls, so the llm chain re-executes them through the normal
-    tool machinery before calling the model; answered questions replay
-    from the agent_questions table instead of suspending again. May
-    suspend again if a tool asks a further question.
+    tool machinery before calling the model; answered questions and
+    finished browser tasks replay from their tables instead of
+    suspending again. May suspend again if a tool asks a further
+    question or issues a further task.
+
+    Starts the turn and returns its TurnControl, like run_agent().
     """
-    db = datasette.get_internal_database()
-    await ensure_tables(db)
 
-    current_conversation_id.set(conversation_id)
+    async def body(control):
+        pending = await _run_chain(datasette, actor, conversation_id, control)
+        _finish_turn(control, pending)
 
-    try:
-        question = await _run_chain(
-            datasette, actor, conversation_id, writer, prompt_text=None
-        )
-        await _finish_turn(writer, question)
-    except Exception as e:
-        await _send_sse(writer, "error", {"message": str(e)})
+    return _start_turn(datasette, conversation_id, body)
 
 
 # Re-exports for background_agent.py / cli_chat.py compatibility.
