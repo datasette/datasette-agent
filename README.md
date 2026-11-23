@@ -426,7 +426,6 @@ If your plugin runs SQL and displays the results in HTML, add a link below the r
 ### Example plugins
 
 - [datasette-agent-charts](https://github.com/datasette/datasette-agent-charts) - renders charts from SQL query results using Observable Plot
-- [datasette-charts](https://github.com/datasette/datasette-charts) - adds `suggest_charts` and `chart` tools. Charts are drawn in the chat and open in the panel with a builder for changing them
 - [datasette-agent-openai-imagegen](https://github.com/datasette/datasette-agent-openai-imagegen) - generates images using OpenAI's image generation API
 
 ## CLI commands
