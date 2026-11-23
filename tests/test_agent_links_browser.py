@@ -332,7 +332,9 @@ def test_panel_hides_datasette_header_and_footer(page, server):
     """The chat page supplies the header and footer, so a page shown in
     the panel drops its own. Opened directly it keeps both."""
     home = server["prefix"] + "/"
-    page.evaluate("url => window.datasetteAgentPanel.open(url, {source: 'agent'})", home)
+    page.evaluate(
+        "url => window.datasetteAgentPanel.open(url, {source: 'agent'})", home
+    )
     page.wait_for_function("window.datasetteAgentPanel.currentUrl() !== null")
     frame = page.frame_locator(".agent-panel-frame").last
     frame.locator("h1").first.wait_for()
@@ -345,3 +347,24 @@ def test_panel_hides_datasette_header_and_footer(page, server):
     assert page.locator("header.hd").is_visible()
     assert page.locator("footer.ft").is_visible()
 
+
+def test_panel_url_follows_a_page_that_changes_its_own_address(page, server):
+    """A page that rewrites its address without loading a new one fires
+    no load event. The address sent with the next message is still the
+    current one."""
+    home = server["prefix"] + "/"
+    page.evaluate(
+        "url => window.datasetteAgentPanel.open(url, {source: 'agent'})", home
+    )
+    frame = page.frame_locator(".agent-panel-frame").last
+    frame.locator("h1").first.wait_for()
+    page.wait_for_selector(".agent-panel.agent-panel-ready:not(.agent-panel-loading)")
+    assert page.evaluate("window.datasetteAgentPanel.currentUrl()") == home
+    frame.locator("body").evaluate(
+        "() => history.replaceState(null, '', '?_x=1#chart=%7B%22v%22%3A1%7D')"
+    )
+    changed = home + "?_x=1#chart=%7B%22v%22%3A1%7D"
+    assert page.evaluate("window.datasetteAgentPanel.currentUrl()") == changed
+    # A hidden panel still counts as nothing being shown
+    page.click(".agent-panel-toggle")
+    assert page.evaluate("window.datasetteAgentPanel.currentUrl()") is None

@@ -347,11 +347,34 @@ function setupPanel() {
     setHidden(Boolean(saved && saved.hidden));
   }
 
+  // A page can change its own address without loading a new one - with
+  // history.replaceState() or a #fragment. No load event follows, so the
+  // address is read again when it is needed.
+  function refreshUrl() {
+    // Not while a page is on its way: the frame still holds the last one
+    if (!currentFrame || pendingFrame || expectedUrl || !currentUrl) return;
+    let loc;
+    try {
+      loc = currentFrame.contentWindow.location;
+      if (loc.origin !== window.location.origin) return;
+    } catch (e) {
+      return; // another site
+    }
+    const url = loc.pathname + loc.search + loc.hash;
+    if (loc.href !== "about:blank" && url !== currentUrl && !isAgentUrl(loc.href)) showUrl(url);
+  }
+
+  // Keeps the saved address current, so a reload reopens the same view
+  window.addEventListener("pagehide", refreshUrl);
+
   window.datasetteAgentPanel = {
     open,
     // What the user is looking at, sent along with each message. A
     // panel they have hidden doesn't count.
-    currentUrl: () => (hidden ? null : currentUrl),
+    currentUrl: () => {
+      refreshUrl();
+      return hidden ? null : currentUrl;
+    },
   };
 }
 
