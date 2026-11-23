@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from datasette.app import Datasette
 import pytest
@@ -87,39 +88,38 @@ async def test_system_prompt_warns_against_repeating_rendered_tables(
 
 
 @pytest.mark.asyncio
-async def test_system_prompt_hides_dbs_without_execute_sql(tmp_path):
-    """The system prompt lists the databases the agent can use. If the
-    actor lacks execute-sql on a database, naming it in the prompt is
-    misleading — the model will be told it can query something it can't."""
+@pytest.mark.parametrize(
+    "base_url,expected_link",
+    [
+        ("/", "](/sales/orders?region=west)"),
+        ("/prefix/", "](/prefix/sales/orders?region=west)"),
+    ],
+)
+async def test_system_prompt_shows_relative_markdown_link(
+    tmp_path, base_url, expected_link
+):
+    """Models otherwise invent a hostname (https://datasette.local/...) when
+    linking to pages on this instance. The prompt includes an example
+    root-relative Markdown link that respects base_url."""
     from datasette_agent.agent import _build_system_prompt
 
     ds = Datasette(
         memory=True,
-        metadata={"plugins": {"datasette-llm": {"default_model": "echo"}}},
-        config={
-            "permissions": {"datasette-agent": {"id": "user"}},
-            "databases": {
-                "private": {"permissions": {"execute-sql": {"id": "someone_else"}}}
-            },
-        },
+        settings={"base_url": base_url},
         internal=str(tmp_path / "internal.db"),
     )
-    public = ds.add_memory_database("public")
-    private = ds.add_memory_database("private")
-    await public.execute_write("CREATE TABLE IF NOT EXISTS p (id INTEGER PRIMARY KEY)")
-    await private.execute_write("CREATE TABLE IF NOT EXISTS s (id INTEGER PRIMARY KEY)")
     await ds.invoke_startup()
-
     prompt = await _build_system_prompt(ds, {"id": "user"})
-    assert "public" in prompt
-    assert "private" not in prompt
+    assert expected_link in prompt
+    assert "root-relative" in prompt
+    assert "hostname" in prompt
 
 
 @pytest.mark.asyncio
-async def test_system_prompt_includes_underscore_databases(tmp_path):
-    """Databases whose name starts with `_` (e.g. `_internal`, custom
-    underscore-prefixed databases) must appear in the system prompt
-    listing — the agent should see anything the actor can query."""
+async def test_system_prompt_does_not_change_with_schema_or_actor(tmp_path):
+    """Any change to the system prompt invalidates the provider's prompt
+    cache for the whole conversation, so it must not depend on the schema
+    or on who is asking. The model finds tables with its tools instead."""
     from datasette_agent.agent import _build_system_prompt
 
     ds = Datasette(
@@ -128,12 +128,17 @@ async def test_system_prompt_includes_underscore_databases(tmp_path):
         config={"permissions": {"datasette-agent": {"id": "user"}}},
         internal=str(tmp_path / "internal.db"),
     )
-    db = ds.add_memory_database("_custom")
-    await db.execute_write("CREATE TABLE IF NOT EXISTS foo (id INTEGER PRIMARY KEY)")
+    db = ds.add_memory_database("mydatabase")
+    await db.execute_write("CREATE TABLE before_table (id INTEGER PRIMARY KEY)")
     await ds.invoke_startup()
 
-    prompt = await _build_system_prompt(ds, {"id": "user"})
-    assert "_custom" in prompt
+    before = await _build_system_prompt(ds, {"id": "user"})
+    await db.execute_write("CREATE TABLE after_table (id INTEGER PRIMARY KEY)")
+    assert await _build_system_prompt(ds, {"id": "user"}) == before
+    assert await _build_system_prompt(ds, {"id": "other"}) == before
+    assert "mydatabase" not in before
+    assert "before_table" not in before
+    assert "list_databases_and_tables" in before
 
 
 @pytest.mark.asyncio
@@ -147,6 +152,162 @@ async def test_agent_index(datasette_instance, cookies):
     response = await datasette_instance.client.get("/-/agent", cookies=cookies)
     assert response.status_code == 200
     assert "Datasette Agent" in response.text
+
+
+@pytest.mark.asyncio
+async def test_agent_index_paginates_own_conversations(datasette_instance, cookies):
+    from datasette_agent.schema import ensure_tables
+    from datasette_agent.views import AGENT_INDEX_PAGE_SIZE
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    start = datetime(2026, 10, 31, tzinfo=timezone.utc)
+    count = AGENT_INDEX_PAGE_SIZE + 2
+    for index in range(count):
+        timestamp = (start + timedelta(minutes=index)).isoformat()
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                f"test-{index:03d}",
+                "user",
+                f"Conversation {index:03d}",
+                timestamp,
+                timestamp,
+            ],
+        )
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            "other-user",
+            "someone-else",
+            "Private conversation",
+            start.isoformat(),
+            start.isoformat(),
+        ],
+    )
+
+    first = await datasette_instance.client.get("/-/agent", cookies=cookies)
+    assert first.status_code == 200
+    assert first.text.count('class="agent-conversation-row"') == AGENT_INDEX_PAGE_SIZE
+    assert f"Conversation {count - 1:03d}" in first.text
+    assert "Conversation 002" in first.text
+    assert "Conversation 001" not in first.text
+    assert "Private conversation" not in first.text
+    assert 'href="/-/agent?page=2"' in first.text
+
+    second = await datasette_instance.client.get("/-/agent?page=2", cookies=cookies)
+    assert second.status_code == 200
+    assert second.text.count('class="agent-conversation-row"') == 2
+    assert "Conversation 001" in second.text
+    assert "Conversation 000" in second.text
+    assert 'href="/-/agent?page=1"' in second.text
+
+    out_of_range = await datasette_instance.client.get(
+        "/-/agent?page=999", cookies=cookies
+    )
+    assert "Page 2 of 2" in out_of_range.text
+    invalid = await datasette_instance.client.get(
+        "/-/agent?page=invalid", cookies=cookies
+    )
+    assert "Page 1 of 2" in invalid.text
+
+
+@pytest.mark.asyncio
+async def test_agent_index_searches_own_conversation_titles(
+    datasette_instance, cookies
+):
+    from datasette_agent.schema import ensure_tables
+    from datasette_agent.views import AGENT_INDEX_PAGE_SIZE
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    start = datetime(2026, 10, 31, tzinfo=timezone.utc)
+    for index in range(AGENT_INDEX_PAGE_SIZE + 2):
+        timestamp = (start + timedelta(minutes=index)).isoformat()
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                f"owl-{index:03d}",
+                "user",
+                f"Owl sighting {index:03d}",
+                timestamp,
+                timestamp,
+            ],
+        )
+    for conversation_id, actor_id, title in (
+        ("fox", "user", "Fox sighting"),
+        ("percent", "user", "100% complete"),
+        ("underscore", "user", "snake_case"),
+        ("private", "someone-else", "Private Owl sighting"),
+    ):
+        await db.execute_write(
+            "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [conversation_id, actor_id, title, start.isoformat(), start.isoformat()],
+        )
+
+    first = await datasette_instance.client.get("/-/agent?q=oWl", cookies=cookies)
+    assert first.status_code == 200
+    assert first.text.count('class="agent-conversation-row"') == AGENT_INDEX_PAGE_SIZE
+    assert f"{AGENT_INDEX_PAGE_SIZE + 2} matching" in first.text
+    assert 'href="/-/agent?q=oWl&amp;page=2"' in first.text
+    assert 'value="oWl"' in first.text
+    assert 'placeholder="Search conversation titles"' in first.text
+    assert "Fox sighting" not in first.text
+    assert "Private Owl sighting" not in first.text
+
+    second = await datasette_instance.client.get(
+        "/-/agent?q=oWl&page=2", cookies=cookies
+    )
+    assert second.text.count('class="agent-conversation-row"') == 2
+    assert 'href="/-/agent?q=oWl&amp;page=1"' in second.text
+
+    percent = await datasette_instance.client.get("/-/agent?q=%25", cookies=cookies)
+    assert percent.text.count('class="agent-conversation-row"') == 1
+    assert "100% complete" in percent.text
+    underscore = await datasette_instance.client.get("/-/agent?q=_", cookies=cookies)
+    assert underscore.text.count('class="agent-conversation-row"') == 1
+    assert "snake_case" in underscore.text
+
+    missing = await datasette_instance.client.get("/-/agent?q=missing", cookies=cookies)
+    assert "0 matching" in missing.text
+    assert "No conversation titles match" in missing.text
+    assert 'value="missing"' in missing.text
+
+
+@pytest.mark.asyncio
+async def test_agent_patterns(datasette_instance):
+    # Sample content only, so it needs view-instance, like /-/patterns,
+    # not the datasette-agent permission
+    response = await datasette_instance.client.get("/-/patterns/agent")
+    assert response.status_code == 200
+    assert "Wide conversation header" in response.text
+    assert "Narrow conversation header" in response.text
+    assert "Close panel" in response.text
+    assert 'data-open="true"' in response.text
+
+    markdown = await datasette_instance.client.get("/-/patterns/agent/markdown")
+    assert markdown.status_code == 200
+    assert "Sample content for the Export menu" in markdown.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/-/patterns/agent", "/-/patterns/agent/markdown"])
+async def test_agent_patterns_require_view_instance(tmp_path, path):
+    ds = Datasette(
+        memory=True,
+        config={
+            "allow": {"id": "root"},
+            "permissions": {"datasette-agent": True},
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    assert (await ds.client.get(path)).status_code == 403
+    root = {"ds_actor": ds.client.actor_cookie({"id": "root"})}
+    assert (await ds.client.get(path, cookies=root)).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -198,7 +359,15 @@ async def test_jump_section_script_added_for_users_with_permission(
     assert "window.datasetteAgentJumpConfig = " in response.text
     assert f'"pluginVersion": "{__version__}"' in response.text
     assert '"createConversationUrl": "/-/agent/api/conversations"' in response.text
+    assert '"modelsUrl": "/-/agent/api/models"' in response.text
     assert '"conversationBaseUrl": "/-/agent/"' in response.text
+    assert '"referencesUrl": "/-/agent/api/references"' in response.text
+    assert (
+        '"referencesModuleUrl": "/-/static-plugins/datasette-agent/references.js"'
+        in response.text
+    )
+    # agent.css styles the # reference picker in the Jump to menu
+    assert '"/-/static-plugins/datasette-agent/agent.css"' in response.text
 
     script_response = await datasette_instance.client.get(
         "/-/static-plugins/datasette-agent/agent-jump.js"
@@ -208,8 +377,50 @@ async def test_jump_section_script_added_for_users_with_permission(
     assert "version: pluginVersion" in script_response.text
     assert "datasette-agent-jump-start" in script_response.text
     assert "datasette-agent-jump-hint" in script_response.text
+    assert "datasette-agent-jump-model" in script_response.text
+    assert "fetch(modelsUrl)" in script_response.text
     assert "Press Enter to start. Shift+Enter adds a new line." in script_response.text
     assert 'event.key === "Enter" && !event.shiftKey' in script_response.text
+    assert "import(config.referencesModuleUrl)" in script_response.text
+    assert "attachReferencePicker" in script_response.text
+    assert "agent_pending_references" in script_response.text
+
+
+@pytest.mark.asyncio
+async def test_homepage_section_added_for_users_with_permission(
+    datasette_instance, cookies
+):
+    response = await datasette_instance.client.get("/", cookies=cookies)
+    assert response.status_code == 200
+    assert (
+        '<script type="module" src="/-/static-plugins/datasette-agent/agent-homepage.js"'
+        in response.text
+    )
+    assert '"/-/static-plugins/datasette-agent/agent.css"' in response.text
+    assert '"referencesUrl": "/-/agent/api/references"' in response.text
+
+    script_response = await datasette_instance.client.get(
+        "/-/static-plugins/datasette-agent/agent-homepage.js"
+    )
+    assert script_response.status_code == 200
+    assert "makeHomepageSections" in script_response.text
+    assert 'title: "Datasette Agent"' in script_response.text
+    assert "attachReferencePicker" in script_response.text
+    assert "agent_pending_references" in script_response.text
+
+    # Only on the homepage
+    database_response = await datasette_instance.client.get(
+        "/-/agent", cookies=cookies
+    )
+    assert "agent-homepage.js" not in database_response.text
+
+
+@pytest.mark.asyncio
+async def test_homepage_section_hidden_without_permission(datasette_instance):
+    response = await datasette_instance.client.get("/")
+    assert response.status_code == 200
+    assert "agent-homepage.js" not in response.text
+    assert "datasette-agent/agent.css" not in response.text
 
 
 @pytest.mark.asyncio
@@ -218,6 +429,8 @@ async def test_jump_section_script_hidden_without_permission(datasette_instance)
     assert response.status_code == 200
     assert "agent-jump.js" not in response.text
     assert "datasetteAgentJumpConfig" not in response.text
+    assert "datasette-agent/agent.css" not in response.text
+    assert "<script>None</script>" not in response.text
 
 
 @pytest.mark.asyncio
@@ -251,6 +464,52 @@ async def test_conversation_page(datasette_instance, cookies):
     )
     assert response.status_code == 200
     assert "Chat" in response.text
+
+
+@pytest.mark.asyncio
+async def test_conversation_page_skips_whitespace_only_assistant_text(
+    datasette_instance, cookies
+):
+    """Models often emit a "\\n\\n" text part right before a batch of tool
+    calls. That must not render as an empty assistant bubble (which would
+    otherwise get a copy button with nothing to copy)."""
+    from datasette_agent.messages import insert_message
+    from datasette_agent.schema import ensure_tables
+    from datetime import datetime, timezone
+
+    db = datasette_instance.get_internal_database()
+    await ensure_tables(db)
+    now = datetime.now(timezone.utc).isoformat()
+    conversation_id = "01WSCONVAAAAAAAAAAAAAAAAAA"
+    await db.execute_write(
+        "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [conversation_id, "user", "Whitespace", now, now],
+    )
+    for msg in [
+        {"role": "user", "parts": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "text": "\n\n"},
+                {
+                    "type": "tool_call",
+                    "name": "sql_query",
+                    "arguments": {"sql": "select 1"},
+                    "tool_call_id": "call_1",
+                },
+            ],
+        },
+        {"role": "assistant", "parts": [{"type": "text", "text": "Real answer"}]},
+    ]:
+        await insert_message(db, conversation_id, msg)
+
+    response = await datasette_instance.client.get(
+        f"/-/agent/{conversation_id}", cookies=cookies
+    )
+    assert response.status_code == 200
+    assert response.text.count('class="agent-message agent-message-assistant"') == 1
+    assert "Real answer" in response.text
 
 
 @pytest.mark.asyncio
@@ -558,7 +817,10 @@ async def test_stream_endpoint_headers(datasette_instance, cookies):
     assert "text/event-stream" in response.headers.get("content-type", "")
     # Content-Encoding: none is needed for SSE streaming on Fly.io
     assert response.headers.get("content-encoding") == "none"
-    assert response.headers.get("cache-control") == "no-cache"
+    # The view sends no-cache; newer Datasette replaces Cache-Control on
+    # responses for signed-in actors with "private, no-store". Either
+    # stops proxies and browsers caching the stream.
+    assert response.headers.get("cache-control") in ("no-cache", "private, no-store")
 
 
 @pytest.mark.asyncio
@@ -664,6 +926,100 @@ async def test_reasoning_streams_and_persists(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_is_first_message(datasette_instance, cookies, monkeypatch):
+    """Adapters such as OpenAI build requests from prompt.messages alone,
+    so the system prompt must be in that list on every turn, not just
+    on prompt.system. See #25."""
+    import llm_echo
+
+    from datasette_agent.agent import _build_system_prompt
+
+    seen = []
+    original_execute = llm_echo.EchoAsync.execute
+
+    async def recording_execute(self, prompt, *args, **kwargs):
+        seen.append(prompt.messages)
+        async for chunk in original_execute(self, prompt, *args, **kwargs):
+            yield chunk
+
+    monkeypatch.setattr(llm_echo.EchoAsync, "execute", recording_execute)
+    ds = datasette_instance
+    expected = await _build_system_prompt(ds, {"id": "user"})
+
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hi"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+    for message in ("First question", "Second question"):
+        response = await ds.client.post(
+            f"/-/agent/{conversation_id}/stream",
+            content=json.dumps({"message": message}),
+            headers={"Content-Type": "application/json"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200
+
+    assert len(seen) >= 2
+    for messages in seen:
+        assert messages[0].role == "system"
+        assert messages[0].parts[0].text == expected
+        assert [m.role for m in messages].count("system") == 1
+
+
+@pytest.mark.asyncio
+async def test_user_message_sent_to_model_once(
+    datasette_instance, cookies, monkeypatch
+):
+    """llm appends prompt text to messages= as another user message, so
+    the history must be the only place the user's message is passed."""
+    import llm_echo
+
+    seen = []
+    original_execute = llm_echo.EchoAsync.execute
+
+    async def recording_execute(self, prompt, *args, **kwargs):
+        seen.append(
+            [
+                "".join(getattr(part, "text", "") for part in message.parts)
+                for message in prompt.messages
+                if message.role == "user"
+            ]
+        )
+        async for chunk in original_execute(self, prompt, *args, **kwargs):
+            yield chunk
+
+    monkeypatch.setattr(llm_echo.EchoAsync, "execute", recording_execute)
+    ds = datasette_instance
+    resp = await ds.client.post(
+        "/-/agent/api/conversations",
+        content=json.dumps({"message": "hi"}),
+        headers={"Content-Type": "application/json"},
+        cookies=cookies,
+    )
+    conversation_id = resp.json()["conversation_id"]
+    # The first turn calls a tool, so it makes two model calls.
+    first = json.dumps(
+        {
+            "prompt": "First question",
+            "tool_calls": [{"name": "list_databases_and_tables", "arguments": {}}],
+        }
+    )
+    for message in (first, "Second question"):
+        response = await ds.client.post(
+            f"/-/agent/{conversation_id}/stream",
+            content=json.dumps({"message": message}),
+            headers={"Content-Type": "application/json"},
+            cookies=cookies,
+        )
+        assert response.status_code == 200
+
+    assert seen == [[first], [first], [first, "Second question"]]
+
+
+@pytest.mark.asyncio
 async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
     from llm.parts import StreamEvent
 
@@ -719,22 +1075,13 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
         def __init__(self, datasette):
             pass
 
-        async def model(self, purpose, actor):
+        async def model(self, model_id=None, purpose=None, actor=None):
             return FakeModel()
 
-    class Writer:
-        def __init__(self):
-            self.chunks = []
+    monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
+    turn = run_agent(ds, {"id": "user"}, conversation_id, "hello")
 
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
-    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
-    writer = Writer()
-
-    await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
-
-    events = _parse_sse("".join(writer.chunks))
+    events = _parse_sse("".join([chunk async for chunk in turn.events()]))
     reasoning = [event for event in events if event["event"] == "reasoning_chunk"]
     assert reasoning == [
         {"event": "reasoning_chunk", "data": {"content": "visible reasoning"}}
@@ -837,22 +1184,13 @@ async def test_tool_call_arguments_stream_before_tool_call(tmp_path, monkeypatch
         def __init__(self, datasette):
             pass
 
-        async def model(self, purpose, actor):
+        async def model(self, model_id=None, purpose=None, actor=None):
             return FakeModel()
 
-    class Writer:
-        def __init__(self):
-            self.chunks = []
+    monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
+    turn = run_agent(ds, {"id": "user"}, conversation_id, "hello")
 
-        async def write(self, chunk):
-            self.chunks.append(chunk)
-
-    monkeypatch.setattr("datasette_agent.agent.LLM", FakeLLM)
-    writer = Writer()
-
-    await run_agent(ds, {"id": "user"}, conversation_id, "hello", writer)
-
-    events = _parse_sse("".join(writer.chunks))
+    events = _parse_sse("".join([chunk async for chunk in turn.events()]))
     event_types = [event["event"] for event in events]
     assert event_types.index("tool_call_start") < event_types.index("tool_call")
     chunks = [
@@ -1128,6 +1466,152 @@ def test_chat_command_shows_tool_calls(tmp_path):
         cli, ["agent", "chat", db_path, "-m", "echo", "-p", "list tables"]
     )
     assert result.exit_code == 0
+
+
+def test_chat_command_root_option_uses_root_actor(monkeypatch):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    captured = {}
+
+    async def fake_run_chat(
+        datasette, initial_prompt=None, actor=None, auto_approve=False
+    ):
+        captured["root_enabled"] = datasette.root_enabled
+        captured["initial_prompt"] = initial_prompt
+        captured["actor"] = actor
+        captured["auto_approve"] = auto_approve
+
+    monkeypatch.setattr("datasette_agent.cli_chat.run_chat", fake_run_chat)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "chat", ":memory:", "--root"])
+    assert result.exit_code == 0
+    assert captured == {
+        "root_enabled": True,
+        "initial_prompt": None,
+        "actor": {"id": "root"},
+        "auto_approve": False,
+    }
+
+
+def test_chat_command_yes_option_auto_approves_without_root(monkeypatch):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    captured = {}
+
+    async def fake_run_chat(
+        datasette, initial_prompt=None, actor=None, auto_approve=False
+    ):
+        captured["root_enabled"] = datasette.root_enabled
+        captured["actor"] = actor
+        captured["auto_approve"] = auto_approve
+
+    monkeypatch.setattr("datasette_agent.cli_chat.run_chat", fake_run_chat)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "chat", ":memory:", "--yes"])
+    assert result.exit_code == 0
+    assert captured == {
+        "root_enabled": False,
+        "actor": {"id": "cli"},
+        "auto_approve": True,
+    }
+
+
+def test_chat_command_unsafe_combines_root_and_yes(monkeypatch):
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    captured = {}
+
+    async def fake_run_chat(
+        datasette, initial_prompt=None, actor=None, auto_approve=False
+    ):
+        captured["root_enabled"] = datasette.root_enabled
+        captured["actor"] = actor
+        captured["auto_approve"] = auto_approve
+
+    monkeypatch.setattr("datasette_agent.cli_chat.run_chat", fake_run_chat)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["agent", "chat", ":memory:", "--unsafe"])
+    assert result.exit_code == 0
+    assert captured == {
+        "root_enabled": True,
+        "actor": {"id": "root"},
+        "auto_approve": True,
+    }
+
+
+def test_chat_command_unsafe_can_execute_write_sql(tmp_path):
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    db_path = str(tmp_path / "content.db")
+    sqlite3.connect(db_path).close()
+    prompt = json.dumps(
+        {
+            "tool_calls": [
+                {
+                    "name": "execute_write_sql",
+                    "arguments": {
+                        "database": "content",
+                        "statements": [
+                            {
+                                "sql": (
+                                    "CREATE TABLE possums "
+                                    "(id INTEGER PRIMARY KEY, name TEXT)"
+                                )
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["agent", "chat", db_path, "-m", "echo", "--unsafe", "-p", prompt]
+    )
+
+    assert result.exit_code == 0
+    conn = sqlite3.connect(db_path)
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "possums" in tables
+
+
+@pytest.mark.asyncio
+async def test_terminal_question_displays_raw_html_without_text(monkeypatch, capsys):
+    from datasette_agent.cli_chat import _ask_user_in_terminal
+
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+
+    answer = await _ask_user_in_terminal(
+        {
+            "question_type": "boolean",
+            "prompt": "Approve?",
+            "html": "<table><tr><td>Ugly but visible</td></tr></table>",
+            "text": None,
+        }
+    )
+
+    assert answer is True
+    assert (
+        "<table><tr><td>Ugly but visible</td></tr></table>" in capsys.readouterr().out
+    )
 
 
 def _parse_sse(text):

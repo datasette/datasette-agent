@@ -3,33 +3,49 @@
 {% block title %}Agent - {{ conversation.title or "Chat" }}{% endblock %}
 
 {% block extra_head %}
-<link type="text/css" rel="stylesheet" href="/-/static-plugins/datasette-agent/agent.css">
+<link type="text/css" rel="stylesheet" href="{{ static('agent.css', plugin='datasette-agent') }}">
 {% endblock %}
 
 {% block content %}
-<div class="agent-chat" data-conversation-id="{{ conversation_id }}"{% if background_agent %} data-poll-url="/-/agent/{{ conversation_id }}/poll" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}>
-  <div class="agent-header">
-    <a href="/-/agent">&larr; Back</a>
-    <h1>{{ conversation.title or "Chat" }}</h1>
-    <div class="chat-export-menu" data-markdown-url="/-/agent/{{ conversation_id }}/markdown" data-title="{{ conversation.title or 'chat' }}"></div>
-  </div>
+{% from "_agent_header.html" import agent_header with context %}
+<div class="agent-chat" data-conversation-id="{{ conversation_id }}" data-conversation-url="{{ urls.path('/-/agent/' ~ conversation_id) }}"{% if needs_resume %} data-needs-resume="1"{% endif %}{% if turn_running %} data-turn-running="1" data-turn-watermark="{{ turn_watermark if turn_watermark is not none else '' }}"{% endif %}{% if background_agent %} data-poll-url="{{ urls.path('/-/agent/' ~ conversation_id ~ '/poll') }}" data-agent-status="{{ background_agent.status }}" data-message-count="{{ messages|length }}"{% endif %}{% if panel_url %} data-panel-url="{{ panel_url }}"{% endif %} data-agent-view="chat">
+  {{ agent_header(conversation.title or "Chat", urls.path("/-/agent/" ~ conversation_id ~ "/markdown"), conversation.title or "chat", model_id=conversation.model_id) }}
 
+  <div class="agent-panes">
+  <div class="agent-chat-pane">
   <div class="agent-messages" id="messages">
     {% set in_tool_group = namespace(value=false) %}
     {% for msg in messages %}
-      {% if msg.role in ("tool_call", "tool_result") %}
+      {% if msg.role == "tool" %}
         {% if not in_tool_group.value %}
         <div class="agent-tool-group">
           {% set in_tool_group.value = true %}
         {% endif %}
-        {% if msg.role == "tool_call" %}
-        <details class="agent-tool-call">
-          <summary>Tool: {{ msg.tool_name }}</summary>
-          <pre>{{ msg.tool_arguments }}</pre>
-        </details>
-        {% elif msg.role == "tool_result" %}
         {% set html_content = msg.tool_output | agent_extract_html %}
         {% set edit_sql_url = msg.tool_output | agent_extract_edit_sql_url %}
+        <details class="agent-tool-call{% if msg.tool_output is not none %} done{% else %} waiting{% endif %}">
+          <summary>
+            <span class="agent-tool-name">{{ msg.tool_name }}</span>
+            {% if msg.tool_output is none %}
+            <span class="agent-tool-status">Waiting</span>
+            {% endif %}
+          </summary>
+          {% if msg.tool_arguments is not none %}
+          <div class="agent-tool-payload agent-tool-request">
+            <h4>Request</h4>
+            <pre>{{ msg.tool_arguments | agent_pretty_json }}</pre>
+          </div>
+          {% endif %}
+          {% if msg.tool_output is not none %}
+          <div class="agent-tool-payload agent-tool-response">
+            <h4>Response</h4>
+            <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
+            {% if edit_sql_url and not html_content %}
+            <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
+            {% endif %}
+          </div>
+          {% endif %}
+        </details>
         {% if html_content %}
         </div>
         {% set in_tool_group.value = false %}
@@ -42,24 +58,16 @@
         <div class="agent-tool-group">
         {% set in_tool_group.value = true %}
         {% endif %}
-        <details class="agent-tool-result">
-          <summary>Result: {{ msg.tool_name }}</summary>
-          <pre>{{ msg.tool_output | agent_pretty_json }}</pre>
-          {% if edit_sql_url and not html_content %}
-          <p class="agent-sql-edit-link"><a href="{{ edit_sql_url }}" target="_blank" rel="noopener">View SQL query</a></p>
-          {% endif %}
-        </details>
-        {% endif %}
       {% else %}
         {% if in_tool_group.value %}
         </div>
         {% set in_tool_group.value = false %}
         {% endif %}
         {% if msg.role == "user" %}
-        <div class="agent-message agent-message-user">
+        <div class="agent-message agent-message-user"{% if msg.references %} data-references='{{ msg.references | tojson }}'{% endif %}>
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
-        {% elif msg.role == "assistant" %}
+        {% elif msg.role == "assistant" and msg.content|trim %}
         <div class="agent-message agent-message-assistant">
           <div class="agent-message-content">{{ msg.content }}</div>
         </div>
@@ -78,25 +86,48 @@
 
   {% if not background_agent %}
   <form id="chat-form" class="agent-input">
-    <textarea autofocus id="message-input" placeholder="Type a message..." rows="2"></textarea>
-    <button type="submit" id="send-btn">Send</button>
+    <textarea autofocus id="message-input" placeholder="Type a message... (# to tag a table or query)" rows="2" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
+    <button type="submit" id="send-btn"><span class="agent-send-label">Send</span><span class="agent-stop-label"><svg class="agent-stop-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect width="16" height="16" rx="2.5" fill="currentColor"/></svg>Stop</span></button>
   </form>
+  <div id="agent-status" class="agent-visually-hidden" role="status"></div>
   {% endif %}
+  </div>
+
+  <section class="agent-panel" aria-label="Panel">
+    <iframe class="agent-panel-frame" name="agent-panel" title="Panel"></iframe>
+    <div class="agent-panel-error" role="alert" hidden>
+      <p>This page can't be shown in the panel.</p>
+      <p><a target="_blank">Open it in a new tab</a></p>
+    </div>
+  </section>
+  </div>
 </div>
 
 {% if pending_question_json %}
 <script type="application/json" id="pending-question-data">{{ pending_question_json | safe }}</script>
 {% endif %}
 
-<script type="module" src="/-/static-plugins/datasette-agent/agent.js"></script>
-<script src="/-/static-plugins/datasette-agent/chat-export.js"></script>
+{% if pending_tasks_json %}
+<script type="application/json" id="pending-tasks-data">{{ pending_tasks_json | safe }}</script>
+{% endif %}
+
+<script type="module" src="{{ static('agent-panel.js', plugin='datasette-agent') }}"></script>
+<script type="module" src="{{ static('agent.js', plugin='datasette-agent') }}"></script>
+<script src="{{ static('chat-export.js', plugin='datasette-agent') }}"></script>
 {% if not background_agent %}
 <script type="module">
 const conversationId = document.querySelector(".agent-chat").dataset.conversationId;
 const pending = sessionStorage.getItem("agent_pending_message");
 if (pending) {
   sessionStorage.removeItem("agent_pending_message");
-  window.sendMessage(conversationId, pending);
+  let pendingReferences = [];
+  try {
+    pendingReferences = JSON.parse(
+      sessionStorage.getItem("agent_pending_references") || "[]"
+    );
+  } catch (e) {}
+  sessionStorage.removeItem("agent_pending_references");
+  window.sendMessage(conversationId, pending, pendingReferences);
 }
 </script>
 {% else %}

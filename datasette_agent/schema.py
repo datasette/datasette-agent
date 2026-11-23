@@ -1,3 +1,5 @@
+import asyncio
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS agent_conversations (
     id TEXT PRIMARY KEY,
@@ -7,6 +9,8 @@ CREATE TABLE IF NOT EXISTS agent_conversations (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_actor_updated
+    ON agent_conversations(actor_id, updated_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS agent_responses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,21 +74,45 @@ CREATE TABLE IF NOT EXISTS agent_questions (
 CREATE INDEX IF NOT EXISTS idx_agent_questions_conversation
     ON agent_questions(conversation_id, status);
 
-CREATE TABLE IF NOT EXISTS agent_explorer_reports (
+CREATE TABLE IF NOT EXISTS agent_browser_tasks (
     id TEXT PRIMARY KEY,
-    agent_id TEXT REFERENCES agent_background_agents(id),
-    actor_id TEXT,
-    database_name TEXT NOT NULL,
-    table_name TEXT,
-    extra_prompt TEXT,
-    content TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL REFERENCES agent_conversations(id),
+    call_key TEXT NOT NULL,
+    task_index INTEGER NOT NULL,
+    tool_name TEXT NOT NULL,
+    label TEXT,
+    html TEXT NOT NULL,
+    payload_json TEXT,
+    timeout_ms INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_json TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    claimed_at TEXT,
+    claimed_by TEXT,
+    completed_at TEXT,
+    completed_by TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_conversation
+    ON agent_browser_tasks(conversation_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_browser_tasks_call
+    ON agent_browser_tasks(conversation_id, call_key, task_index);
 """
 
 
 async def ensure_tables(db):
+    """Initialize once per database instance, retrying if initialization fails."""
+    if getattr(db, "_agent_tables_ensured", False):
+        return
+    if not hasattr(db, "_agent_tables_lock"):
+        db._agent_tables_lock = asyncio.Lock()
+    async with db._agent_tables_lock:
+        if getattr(db, "_agent_tables_ensured", False):
+            return
+        await _initialize_tables(db)
+        db._agent_tables_ensured = True
+
+
+async def _initialize_tables(db):
     await db.execute_write_script(SCHEMA_SQL)
     # Migration: agent_questions.html was added after the table first
     # shipped; CREATE TABLE IF NOT EXISTS won't add it to existing DBs.

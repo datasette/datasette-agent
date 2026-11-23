@@ -7,7 +7,7 @@ import llm as llm_library
 from datasette.utils import await_me_maybe
 from datasette.plugins import pm
 
-from .questions import ToolContext
+from .tool_context import ToolContext
 
 
 @dataclass
@@ -63,6 +63,10 @@ def make_tool_context(
     arguments,
     tool_call_id=None,
     supports_questions=False,
+    auto_approve=False,
+    ask_user_callback=None,
+    supports_browser_tasks=False,
+    browser_task_callback=None,
 ):
     return ToolContext(
         datasette=datasette,
@@ -72,6 +76,10 @@ def make_tool_context(
         arguments=arguments,
         tool_call_id=tool_call_id,
         supports_questions=supports_questions,
+        auto_approve=auto_approve,
+        ask_user_callback=ask_user_callback,
+        supports_browser_tasks=supports_browser_tasks,
+        browser_task_callback=browser_task_callback,
     )
 
 
@@ -84,11 +92,15 @@ async def execute_agent_tool(
     conversation_id=None,
     tool_call_id=None,
     supports_questions=False,
+    auto_approve=False,
+    ask_user_callback=None,
+    supports_browser_tasks=False,
+    browser_task_callback=None,
 ):
     """Execute one AgentTool: a fresh ToolContext per invocation for
-    tools that declare `context`, consumed-question bookkeeping on
-    success, output coerced to str. QuestionPending propagates to the
-    caller.
+    tools that declare `context`, consumed-question and consumed-task
+    bookkeeping on success, output coerced to str. QuestionPending and
+    BrowserTaskPending propagate to the caller.
     """
     kwargs = dict(arguments)
     if tool_wants_context(agent_tool):
@@ -100,13 +112,18 @@ async def execute_agent_tool(
             arguments=dict(kwargs),
             tool_call_id=tool_call_id,
             supports_questions=supports_questions,
+            auto_approve=auto_approve,
+            ask_user_callback=ask_user_callback,
+            supports_browser_tasks=supports_browser_tasks,
+            browser_task_callback=browser_task_callback,
         )
         result = await agent_tool.fn(
             datasette=datasette, actor=actor, context=context, **kwargs
         )
-        # The call completed: its answered questions must not replay
-        # for a later identical call.
+        # The call completed: its answered questions and finished
+        # browser tasks must not replay for a later identical call.
         await context.mark_questions_consumed()
+        await context.mark_browser_tasks_consumed()
     else:
         result = await agent_tool.fn(datasette=datasette, actor=actor, **kwargs)
     if result is not None and not isinstance(result, str):
@@ -121,6 +138,10 @@ def make_llm_tools(
     *,
     conversation_id=None,
     supports_questions=False,
+    auto_approve=False,
+    ask_user_callback=None,
+    supports_browser_tasks=False,
+    browser_task_callback=None,
 ):
     """Convert AgentTool instances to llm.Tool instances with context bound.
 
@@ -144,6 +165,10 @@ def make_llm_tools(
                         llm_tool_call.tool_call_id if llm_tool_call else None
                     ),
                     supports_questions=supports_questions,
+                    auto_approve=auto_approve,
+                    ask_user_callback=ask_user_callback,
+                    supports_browser_tasks=supports_browser_tasks,
+                    browser_task_callback=browser_task_callback,
                 )
 
         else:

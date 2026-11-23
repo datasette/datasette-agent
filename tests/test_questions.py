@@ -25,7 +25,7 @@ def datasette_instance(tmp_path):
 
 
 async def make_context(datasette, **kwargs):
-    from datasette_agent.questions import ToolContext
+    from datasette_agent.tool_context import ToolContext
     from datasette_agent.schema import ensure_tables
 
     await datasette.invoke_startup()
@@ -211,6 +211,37 @@ async def test_ask_user_unsupported_context(datasette_instance):
         await context.ask_user("Is it OK?")
     # No orphaned question row
     assert await get_questions(datasette_instance) == []
+
+
+@pytest.mark.asyncio
+async def test_ask_user_auto_approve_boolean(datasette_instance):
+    context = await make_context(
+        datasette_instance, supports_questions=False, auto_approve=True
+    )
+    assert await context.ask_user("Is it OK?") is True
+    assert await get_questions(datasette_instance) == []
+
+
+@pytest.mark.asyncio
+async def test_ask_user_auto_approve_does_not_answer_choices(datasette_instance):
+    from datasette_agent.questions import QuestionsNotSupported
+
+    context = await make_context(
+        datasette_instance, supports_questions=False, auto_approve=True
+    )
+    with pytest.raises(QuestionsNotSupported):
+        await context.ask_user("Which mode?", options=["dry-run", "apply"])
+
+
+@pytest.mark.asyncio
+async def test_ask_user_text_displays_as_escaped_html(datasette_instance):
+    from datasette_agent.questions import QuestionPending
+
+    context = await make_context(datasette_instance)
+    with pytest.raises(QuestionPending) as exc_info:
+        await context.ask_user("Review this?", text="<b>plain text</b>")
+
+    assert exc_info.value.question["html"] == "<pre>&lt;b&gt;plain text&lt;/b&gt;</pre>"
 
 
 @pytest.mark.asyncio

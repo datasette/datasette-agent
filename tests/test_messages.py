@@ -6,9 +6,92 @@ import pytest
 
 from datasette_agent.messages import (
     _shrink_json_value,
+    combine_tool_messages_for_render,
     prepare_tool_output_for_model,
     strip_internal_keys,
 )
+
+
+def test_combine_tool_messages_pairs_results_by_id():
+    messages = [
+        {
+            "role": "tool_call",
+            "tool_name": "echo",
+            "tool_arguments": '{"value": 1}',
+            "tool_output": None,
+            "tool_call_id": "call_1",
+        },
+        {
+            "role": "tool_call",
+            "tool_name": "echo",
+            "tool_arguments": '{"value": 2}',
+            "tool_output": None,
+            "tool_call_id": "call_2",
+        },
+        {
+            "role": "tool_result",
+            "tool_name": "echo",
+            "tool_arguments": None,
+            "tool_output": '"second"',
+            "tool_call_id": "call_2",
+        },
+        {
+            "role": "tool_result",
+            "tool_name": "echo",
+            "tool_arguments": None,
+            "tool_output": '"first"',
+            "tool_call_id": "call_1",
+        },
+    ]
+
+    assert combine_tool_messages_for_render(messages) == [
+        {
+            "role": "tool",
+            "tool_name": "echo",
+            "tool_arguments": '{"value": 1}',
+            "tool_output": '"first"',
+            "tool_call_id": "call_1",
+        },
+        {
+            "role": "tool",
+            "tool_name": "echo",
+            "tool_arguments": '{"value": 2}',
+            "tool_output": '"second"',
+            "tool_call_id": "call_2",
+        },
+    ]
+
+
+def test_combine_tool_messages_pairs_by_name_without_ids():
+    messages = [
+        {
+            "role": "tool_call",
+            "tool_name": "echo",
+            "tool_arguments": "first",
+            "tool_output": None,
+        },
+        {
+            "role": "tool_call",
+            "tool_name": "echo",
+            "tool_arguments": "second",
+            "tool_output": None,
+        },
+        {
+            "role": "tool_result",
+            "tool_name": "echo",
+            "tool_arguments": None,
+            "tool_output": "one",
+        },
+        {
+            "role": "tool_result",
+            "tool_name": "echo",
+            "tool_arguments": None,
+            "tool_output": "two",
+        },
+    ]
+
+    paired = combine_tool_messages_for_render(messages)
+    assert [message["tool_output"] for message in paired] == ["one", "two"]
 
 
 def test_strip_internal_keys_removes_underscore_prefixed():

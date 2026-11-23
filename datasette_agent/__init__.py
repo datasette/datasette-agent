@@ -22,10 +22,6 @@ def register_actions():
             description="Access the agent chat assistant",
         ),
         Action(
-            name="datasette-agent-explore",
-            description="Launch and view AI explorer reports on databases and tables",
-        ),
-        Action(
             name="datasette-agent-background",
             description="Spawn and inspect background agents",
         ),
@@ -37,8 +33,13 @@ def register_routes():
     from . import views
 
     return [
+        (r"^/-/patterns/agent$", views.agent_patterns),
+        (r"^/-/patterns/agent/markdown$", views.agent_patterns_markdown),
         (r"^/-/agent$", views.agent_index),
         (r"^/-/agent/api/conversations$", views.api_create_conversation),
+        (r"^/-/agent/api/models$", views.api_models),
+        (r"^/-/agent/api/references$", views.api_references),
+        (r"^/-/agent/api/running$", views.api_running),
         (r"^/-/agent/background$", views.agent_background_index),
         (r"^/-/agent/api/background$", views.api_create_background_agent),
         (
@@ -48,20 +49,6 @@ def register_routes():
         (
             r"^/-/agent/api/background/(?P<agent_id>[A-Za-z0-9]{26})/cancel$",
             views.api_cancel_background_agent,
-        ),
-        (
-            r"^/-/agent/explore/report/(?P<report_id>[A-Za-z0-9]{26})$",
-            views.explorer_report_page,
-        ),
-        (
-            r"^/-/agent/explore/(?P<database>[^/]+)/(?P<table>[^/]+)$",
-            views.explorer_page,
-        ),
-        (r"^/-/agent/explore/(?P<database>[^/]+)$", views.explorer_page),
-        (r"^/-/agent/api/explore$", views.api_start_explorer),
-        (
-            r"^/-/agent/api/explore/(?P<report_id>[A-Za-z0-9]{26})$",
-            views.api_explorer_report,
         ),
         (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})$",
@@ -82,6 +69,30 @@ def register_routes():
         (
             r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/question/(?P<question_id>[A-Za-z0-9]{26})$",
             views.api_answer_question,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/claim$",
+            views.api_claim_task,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/complete$",
+            views.api_complete_task,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/task/(?P<task_id>[A-Za-z0-9]{26})/cancel$",
+            views.api_cancel_task,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/resume$",
+            views.api_resume_conversation,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/stop$",
+            views.api_stop_turn,
+        ),
+        (
+            r"^/-/agent/(?P<conversation_id>[A-Za-z0-9]{26})/watch$",
+            views.api_watch_turn,
         ),
     ]
 
@@ -164,6 +175,10 @@ def prepare_jinja2_environment(env, datasette):
 
     env.filters["agent_format_datetime"] = format_datetime
 
+    from .date_format import format_recent_datetime
+
+    env.filters["agent_format_recent_datetime"] = format_recent_datetime
+
 
 @hookimpl
 def menu_links(datasette, actor, request):
@@ -203,7 +218,12 @@ def _agent_jump_config_script(datasette):
 
     config = {
         "createConversationUrl": datasette.urls.path("/-/agent/api/conversations"),
+        "modelsUrl": datasette.urls.path("/-/agent/api/models"),
         "conversationBaseUrl": datasette.urls.path("/-/agent/"),
+        "referencesUrl": datasette.urls.path("/-/agent/api/references"),
+        "referencesModuleUrl": datasette.urls.static_plugins(
+            "datasette-agent", "references.js"
+        ),
         "pluginVersion": __version__,
     }
     return "window.datasetteAgentJumpConfig = {};".format(json.dumps(config))
@@ -215,7 +235,8 @@ def extra_body_script(datasette, request):
         if not request or not await datasette.allowed(
             action="datasette-agent", actor=request.actor
         ):
-            return None
+            # Datasette renders a None result as <script>None</script>
+            return ""
         return _agent_jump_config_script(datasette)
 
     return inner
@@ -228,47 +249,39 @@ def extra_js_urls(datasette, request):
             action="datasette-agent", actor=request.actor
         ):
             return []
-        return [datasette.urls.static_plugins("datasette-agent", "agent-jump.js")]
+        urls = [datasette.urls.static_plugins("datasette-agent", "agent-jump.js")]
+        if _is_homepage(datasette, request):
+            urls.append(
+                {
+                    "url": datasette.urls.static_plugins(
+                        "datasette-agent", "agent-homepage.js"
+                    ),
+                    "module": True,
+                }
+            )
+        return urls
 
     return inner
 
 
-@hookimpl
-def database_actions(datasette, actor, database, request):
-    from datasette.utils import tilde_encode
-
-    async def inner():
-        if not await datasette.allowed(action="datasette-agent-explore", actor=actor):
-            return []
-        return [
-            {
-                "href": datasette.urls.path(
-                    f"/-/agent/explore/{tilde_encode(database)}"
-                ),
-                "label": "Explore with AI agent",
-                "description": "Launch an AI agent to explore this database and generate a report",
-            }
-        ]
-
-    return inner
+def _is_homepage(datasette, request):
+    return request.path in (datasette.urls.instance(), datasette.urls.path("/-/"))
 
 
 @hookimpl
-def table_actions(datasette, actor, database, table, request):
-    from datasette.utils import tilde_encode
-
+def extra_css_urls(datasette, request):
     async def inner():
-        if not await datasette.allowed(action="datasette-agent-explore", actor=actor):
+        # agent.css has the styles for the # reference picker used by the
+        # Jump to menu and homepage sections. Every rule in it is scoped to
+        # .agent-* classes, so it is safe to load on any page.
+        if (
+            not request
+            or not await datasette.allowed(
+                action="datasette-agent", actor=request.actor
+            )
+        ):
             return []
-        return [
-            {
-                "href": datasette.urls.path(
-                    f"/-/agent/explore/{tilde_encode(database)}/{tilde_encode(table)}"
-                ),
-                "label": "Explore with AI agent",
-                "description": "Launch an AI agent to explore this table and generate a report",
-            }
-        ]
+        return [datasette.urls.static_plugins("datasette-agent", "agent.css")]
 
     return inner
 
@@ -278,6 +291,7 @@ def register_commands(cli):
     import asyncio
     import click
     import json
+    from datasette.cli import Setting
 
     @cli.group()
     def agent():
@@ -322,9 +336,44 @@ def register_commands(cli):
     @click.argument("files", nargs=-1, type=click.Path(exists=False))
     @click.option("-p", "--prompt", help="Initial prompt to send")
     @click.option("-m", "--model", "model_id", help="LLM model to use")
-    def chat(files, prompt, model_id):
+    @click.option(
+        "-c",
+        "--config",
+        "config_file",
+        type=click.File(mode="r"),
+        help="Path to JSON/YAML Datasette configuration file",
+    )
+    @click.option(
+        "-s",
+        "--setting",
+        "settings",
+        type=Setting(),
+        multiple=True,
+        help="nested.key, value setting to use in Datasette configuration",
+    )
+    @click.option(
+        "--root",
+        "use_root",
+        is_flag=True,
+        help="Run as Datasette root actor, allowing all permissions",
+    )
+    @click.option(
+        "--yes",
+        "auto_approve",
+        is_flag=True,
+        help="Auto-approve yes/no confirmation prompts",
+    )
+    @click.option("--unsafe", is_flag=True, help="Equivalent to --root --yes")
+    def chat(
+        files, prompt, model_id, config_file, settings, use_root, auto_approve, unsafe
+    ):
         "Interactive chat session with the agent"
         from datasette.app import Datasette
+        from datasette.utils import (
+            deep_dict_update,
+            pairs_to_nested_config,
+            parse_metadata,
+        )
         from .cli_chat import run_chat
 
         db_files = []
@@ -339,18 +388,47 @@ def register_commands(cli):
         if memory or not db_files:
             kwargs["memory"] = True
 
-        metadata = {}
+        config = (parse_metadata(config_file.read()) if config_file else None) or {}
+        deep_dict_update(config, pairs_to_nested_config(settings))
         if model_id:
-            metadata = {"plugins": {"datasette-llm": {"default_model": model_id}}}
+            config.setdefault("plugins", {}).setdefault("datasette-llm", {})[
+                "default_model"
+            ] = model_id
 
-        ds = Datasette(db_files, metadata=metadata, **kwargs)
-        asyncio.run(run_chat(ds, initial_prompt=prompt))
+        ds = Datasette(db_files, config=config, **kwargs)
+        if unsafe:
+            use_root = True
+            auto_approve = True
+        actor = {"id": "root"} if use_root else {"id": "cli"}
+        if use_root:
+            ds.root_enabled = True
+        asyncio.run(
+            run_chat(
+                ds,
+                initial_prompt=prompt,
+                actor=actor,
+                auto_approve=auto_approve,
+            )
+        )
 
 
 @hookimpl
 def register_agent_tools(datasette):
     from .background_tools import get_background_tools
+    from .panel_tools import get_panel_tools
     from .query_tools import get_query_tools
     from .sql_tools import get_default_tools
 
-    return get_default_tools() + get_query_tools() + get_background_tools()
+    return (
+        get_default_tools()
+        + get_query_tools()
+        + get_background_tools()
+        + get_panel_tools()
+    )
+
+
+@hookimpl
+def register_agent_reference_types(datasette):
+    from .references import builtin_reference_types
+
+    return builtin_reference_types()

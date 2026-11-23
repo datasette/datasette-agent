@@ -27,9 +27,47 @@ plugins:
     default_model: gpt-5.4-mini
 ```
 
-The "Explore with AI agent" entries that appear in the database and table action menus launch a background agent that explores the selected database or table and writes a report. Reports live under `/-/agent/explore/`.
+### Choosing a model
+
+When more than one model is available, the new-chat form on `/-/agent` (and the "Start a new agent chat" section on other Datasette pages) shows a model picker. The choice is made when a conversation starts and is pinned for that conversation's whole life - later messages keep using the same model even if the configured default changes, and the model cannot be switched mid-conversation. Start a new chat to use a different model. The conversation page shows the model it is using next to the title. If a pinned model is later blocked, removed from the allowlist or loses its API key, the conversation stops with an error asking you to start a new chat.
+
+The list comes from datasette-llm's model list for the `agent` purpose: models whose API key is available, minus any excluded by datasette-llm's allowlist and blocklist configuration, and minus any that cannot call tools (the agent needs tool calling). The configured default is preselected. To offer a specific set of models for the agent, configure the purpose in `datasette.yml`:
+
+```yaml
+plugins:
+  datasette-llm:
+    purposes:
+      agent:
+        model: gpt-5.5
+        models:
+        - gpt-5.5
+        - gpt-5.4-mini
+        - claude-sonnet-5
+```
+
+Here `model` is the default for the agent and `models` is the allowlist offered in the picker. Without a `purposes.agent` section the picker offers every tool-capable model that datasette-llm considers available, with `default_model` preselected.
+
+The same list is available as JSON from `/-/agent/api/models`, and `POST /-/agent/api/conversations` accepts an optional `{"model": "..."}` to pin a model when creating a conversation programmatically. Background agents and `datasette agent chat` use the default model. If no default is configured they use the first model in the list, the one the picker preselects.
 
 Visit `/-/agent/background` to launch background agents directly. Each one is given a goal and runs toward it without further input. The listing includes a Stop button for cancelling agents that are still running.
+
+### Tagging tables, queries, databases and more with #
+
+Type `#` in the chat input (on `/-/agent` or in a conversation) to open an autocomplete list of the tables, views, stored queries and databases you have permission to see. Keep typing to filter it, use the up and down arrow keys to move through the matches, and press Enter or Tab (or tap a match) to tag it. Escape dismisses the list.
+
+A tagged item shows as a pill above the input and as `#name` in the message text; deleting that text or clicking the pill's × removes the tag. When the message is sent, a note listing the tagged items is attached to it for the model, with details for each item the user is allowed to see: the `CREATE TABLE`/`CREATE VIEW` statement for a table or view; the title, description, parameters and SQL (unless hidden) for a stored query; and the names of the visible tables and views for a database. Permissions are checked again on the server when the message is sent - an item the user can't see is listed without details. The model can use `describe_table` and `describe_query` to look up more. The note is kept out of the rendered conversation, where the tags appear as pills in the message, and the Markdown export lists them on a "Tagged:" line.
+
+Plugins can add their own kinds of taggable item - see [Registering reference types for # tagging](#registering-reference-types-for--tagging).
+
+The autocomplete list comes from `/-/agent/api/references?q=...`.
+
+### The panel
+
+The conversation page can show Datasette pages - tables, query results, row pages, pages from other plugins such as datasette-apps - in a panel next to the chat. The agent opens pages there with its built-in `show_in_panel` tool, and links in the conversation that point at this Datasette instance open there too. You can keep clicking around inside the panel, and when you send a message the agent is told if the panel has moved to a different page, so you can ask about "this table".
+
+On wide screens (tablet landscape and desktop) the chat takes a third of the width and the panel the other two thirds, with a button to hide the panel. On narrow screens a Chat | Panel switch in the header slides between the two; when the agent opens a page while you are reading the chat, the Panel switch shows a dot instead of pulling you away.
+
+`show_in_panel` only accepts paths on the same Datasette instance, checks that the page renders for the current actor before opening it, and is not offered to background agents or `datasette agent chat`.
 
 ### Saving queries
 
@@ -37,15 +75,37 @@ The agent has a built-in `save_query` tool that saves SQL it has written as a [D
 
 Saving always requires human approval: the agent shows you the full SQL plus the proposed name, database and visibility, and nothing is stored until you click Yes. Validation and persistence run through Datasette's own `/-/queries/analyze` and `/-/queries/store` endpoints as the requesting actor, so the actor needs `execute-sql` and `store-query` on the target database (plus the relevant row permissions for write queries) - the same rules as the query creation web UI. Saved queries default to private.
 
+### SQL parameters
+
+The `sql_query` tool accepts optional named parameters as an array of name/value entries:
+
+```json
+{
+  "database": "demo",
+  "sql": "select * from items where name = :name and qty >= :qty",
+  "params": [
+    {"name": "name", "value": "apple"},
+    {"name": "qty", "value": 3}
+  ]
+}
+```
+
+Parameter names omit the placeholder prefix and must be unique. Values can be strings, numbers, booleans or null. Each statement in `execute_write_sql` accepts the same `params` format. Both tools also accept parameter dictionaries, preserving compatibility with saved write-tool calls.
+
+### Executing write SQL
+
+The agent also has a built-in `execute_write_sql` tool that can run one or more ordered write SQL statements against a mutable database. It analyzes each statement first and asks the user for explicit approval in chat before anything runs.
+
+The approval prompt shows the SQL, parameters, required permissions and destructive-operation warnings. Execution runs through Datasette's own `/-/execute-write` endpoint as the requesting actor, so the actor needs `execute-write-sql` on the target database plus the Datasette write permissions for the operations being performed. Statements run in order; if one fails, later statements are skipped and earlier successes are not rolled back. Use `sql_query` for read-only SQL.
+
 ### Permissions
 
-This plugin registers three independent permissions:
+This plugin registers two independent permissions:
 
 - `datasette-agent` — required to use the chat assistant under `/-/agent`.
-- `datasette-agent-explore` — required to see the "Explore with AI agent" entries in the database/table action menus and to use the explorer routes under `/-/agent/explore/`.
 - `datasette-agent-background` — required to use the `spawn_background_agent` and `check_background_agent` tools from chat, and to access the `/-/agent/background` page and `/-/agent/api/background/*` endpoints. The background-agent endpoints require both `datasette-agent` and `datasette-agent-background`.
 
-The three permissions are independent: an actor may hold any subset. The `--root` user holds all of them.
+The two permissions are independent: an actor may hold either or both. The `--root` user holds both.
 
 ## Registering additional tools from plugins
 
@@ -179,11 +239,144 @@ Three kinds of question are supported:
 
 Pass `html=` to display trusted HTML above the question - use this to show the user exactly what they are approving, for example the full SQL of a query inside a `<pre>` tag. Escape any interpolated content yourself (e.g. with `html.escape()`); the string is rendered as-is in the chat UI.
 
+Pass `text=` to provide a plain-text version for terminal contexts such as `datasette agent chat`. If `text=` is provided without `html=`, the web chat displays the text too, HTML-escaped inside a `<pre>` block. The CLI displays `text=` when available; if only `html=` was provided, it prints that HTML directly.
+
 When `ask_user()` has no answer yet it suspends the agent turn: the question is rendered as a form in the chat UI, and persisted to the internal database so it survives a server restart - the form re-renders when the conversation page is reloaded. Once the user answers, the tool function is **re-executed from the top**; previously answered questions return their stored answers immediately and execution proceeds past the `ask_user()` call. Because of this replay model you should call `ask_user()` *before* performing side effects.
 
 The `context` object also exposes `context.actor`, `context.conversation_id`, `context.tool_name`, `context.arguments` and `context.tool_call_id`.
 
-In contexts with no human watching - background agents and `datasette agent chat` on the CLI - `ask_user()` raises `QuestionsNotSupported`, which surfaces to the model as a tool error so it can proceed without input. Tools that only declare `datasette` and `actor` are unaffected by all of this.
+In contexts with no human watching - for example background agents, or CLI chat when terminal input is unavailable - `ask_user()` raises `QuestionsNotSupported`, which surfaces to the model as a tool error so it can proceed without input. Tools that only declare `datasette` and `actor` are unaffected by all of this.
+
+### Running work in the user's browser from a tool
+
+Some tools need code to run in the user's browser - screenshotting a rendered page, executing JavaScript against a live DOM, measuring layout. **Browser tasks** are the primitive for this: a tool hands the user's browser a unit of work, the agent turn suspends, and the tool receives the result when the browser posts it back - even if that takes minutes, a page reload or a server restart.
+
+Declare a `context` parameter on your handler and call `await context.browser_task(...)`:
+
+```python
+import json
+
+
+async def measure_page(datasette, actor, context, url):
+    outcome = await context.browser_task(
+        html=BROWSER_HARNESS_HTML,
+        payload={"url": url, "token": make_capability_token(url)},
+        label="Measuring {} in your browser".format(url),
+        timeout_ms=30_000,
+    )
+    if not outcome["ok"]:
+        return json.dumps({"error": outcome["error"], "outcome": outcome["outcome"]})
+    return json.dumps({"measurements": outcome["result"]})
+```
+
+The four arguments:
+
+- `html` - **trusted, server-authored HTML** rendered into the chat page. Unlike question `html=`, its `<script>` elements execute; this is the sanctioned script-execution path. Never interpolate model output or user input into it unescaped.
+- `payload` - optional JSON handed to the executing page **exactly once**, through a one-shot claim (see below). Put per-run secrets here - tokens, capability URLs - never in `html`, because `html` is persisted for audit.
+- `label` - human-visible status line shown next to a spinner (falls back to "Working in your browser…").
+- `timeout_ms` - server-enforced deadline for the whole task, capped at 10 minutes.
+
+The return value is the envelope the page posted - `{"ok": True, "result": ...}` or `{"ok": False, "error": {...}}` - plus an `"outcome"` key:
+
+- `"completed"` - the page posted a result (which may itself report `ok: False`, e.g. a script error)
+- `"expired"` - the deadline passed with no completion (crashed or closed tab)
+- `"cancelled"` - the user clicked the **Skip this step** button that renders alongside every task
+
+Failures come back as data, never exceptions, because your tool re-executes from the top on resume and handles them as ordinary results. The same replay model as `ask_user()` applies: when no result exists yet, `browser_task()` suspends the turn; on resume the tool function re-runs from the top and finished tasks return their stored envelopes immediately. Call `browser_task()` **before** performing side effects. Results are size-capped at 512 KB - tools with bigger appetites should store the data themselves and post a summary.
+
+#### Writing the task HTML
+
+Task HTML must claim the task to receive its payload, do its work, then complete. It talks to the runtime through the public `window.datasetteAgent` API - never by fetching endpoints by hand or reaching into the chat page's markup:
+
+```python
+BROWSER_HARNESS_HTML = """
+<div hidden>
+<script type="module">
+const taskId = "__DATASETTE_TASK_ID__";
+const claimed = await window.datasetteAgent.claimTask(taskId);
+if (claimed.ok) {
+  // claimed.payload is the payload= object; claimed.timeoutMs the deadline
+  try {
+    const result = await doTheWork(claimed.payload);
+    await window.datasetteAgent.completeTask(taskId, {ok: true, result});
+  } catch (err) {
+    await window.datasetteAgent.completeTask(taskId, {
+      ok: false, error: {message: String(err)},
+    });
+  }
+}
+// claimed.ok === false: another tab already claimed it, or the task is
+// finished - render nothing, do nothing.
+</script>
+</div>
+"""
+```
+
+The literal string `__DATASETTE_TASK_ID__` anywhere in your `html` is substituted with the real task id at render time. (Classic, non-module scripts can alternatively find it structurally via `document.currentScript.closest("[data-task-id]").dataset.taskId` - module scripts should use the placeholder, since `document.currentScript` is `null` inside them.)
+
+The API:
+
+- `claimTask(taskId)` - atomically claims the task and resolves `{ok: true, payload, timeoutMs}` **exactly once per task, ever**. Any later or concurrent claim - a duplicate tab, a reloaded page re-rendering conversation history - resolves `{ok: false, state}` and the caller should stand down. This claim gate is what makes script-bearing HTML safe to re-render: execution happens at most once no matter how many times the markup appears.
+- `completeTask(taskId, envelope)` - posts `{ok, result?, error?}`. First write wins. The suspended turn resumes immediately and its events stream into the transcript on the same connection.
+- `cancelTask(taskId)` - equivalent to the user clicking Skip.
+
+Once a task leaves the pending state its HTML is torn down and never rendered again - reloading the conversation shows an inert one-line record instead. Keep task HTML hermetic: render, execute, complete, tear down. A tool that needs several rounds of browser work should issue several `browser_task()` calls in sequence.
+
+#### Capability detection and testing
+
+`context.supports_browser_tasks` is `True` in the web chat and `False` for background agents and CLI chat, where calling `browser_task()` raises `BrowserTasksNotSupported` - surfaced to the model as a tool error, like `QuestionsNotSupported`. Check the flag first if your tool has a browserless fallback.
+
+For tests, pass a `browser_task_callback` when constructing the `ToolContext` (or through `make_llm_tools()`): it receives `{tool_name, html, payload, label, timeout_ms}` and returns the envelope directly, synchronously or as a coroutine, without touching the database or any browser. Envelopes returned this way are normalized with `outcome: "completed"` exactly like real completions, so your tool cannot tell the executors apart.
+
+## Registering reference types for # tagging
+
+Tables, stored queries and databases are the built-in things a user can tag with `#` in a chat message. Plugins can add more - apps, documents, dashboards - by implementing the `register_agent_reference_types` hook, which returns a list of `ReferenceType` instances (or an awaitable returning one). datasette-agent registers its own three types through this same hook.
+
+```python
+from datasette import hookimpl
+from datasette_agent.references import Reference, ReferenceType
+
+
+async def search_notes(datasette, actor, q, limit):
+    # Return only items the actor is allowed to see.
+    rows = await find_notes_visible_to(datasette, actor, q, limit)
+    return [
+        Reference(
+            type="note",
+            id=str(row["id"]),
+            name=row["slug"],
+            description=row["title"],
+        )
+        for row in rows
+    ]
+
+
+@hookimpl
+def register_agent_reference_types(datasette):
+    return [
+        ReferenceType(
+            type="note",
+            label="note",
+            search=search_notes,
+            url=lambda datasette, ref: datasette.urls.path(f"/-/notes/{ref.id}"),
+            instructions="For a tagged note, call read_note with its id.",
+        )
+    ]
+```
+
+`ReferenceType` fields:
+
+- `type` - a unique string identifying the type. It is also used in the `agent-ref-<type>` CSS class on pills.
+- `label` - short label shown on pills and in the autocomplete list.
+- `search` - `async def search(datasette, actor, q, limit)` (a plain function works too) returning a list of `Reference` objects matching `q` (an empty `q` should return everything, up to `limit`). Only return items `actor` can see. An exception here is ignored so it can't break autocomplete for other types.
+- `url` - optional `def url(datasette, ref)` returning the URL a pill links to, or `None`. URLs are always computed on the server, never taken from the client.
+- `instructions` - optional text added to the model's note when an item of this type is tagged, usually telling it which tool to call with the reference's `id`.
+- `context` - optional `async def context(datasette, actor, ref)` (a plain function works too) returning text to include in the model's note under the reference, such as the item's content or schema, or `None`. It runs when the message is sent. **References come from the client, so this function must check that `actor` is allowed to see the item** and return `None` if not, or if the item doesn't exist. Text over 20,000 characters is truncated; an exception means no context.
+- `order` - optional tie-break when results of different types match equally well; built-ins use 0-2, the default is 100.
+
+`Reference` fields are `type`, `id` (an opaque string your tools can use to find the item), `name` (shown after the `#` and on the pill) and `description` (shown in the autocomplete list and included in the model's note).
+
+When a message is sent, datasette-agent checks each reference's shape and that its type is registered, then lists it for the model along with any `context` text. Since anyone can send any id, both `context` and the tools the model uses to read an item must do their own permission checks.
 
 ## Rendering custom HTML from tools
 
@@ -239,10 +432,34 @@ datasette agent chat mydata.db -m gpt-5.4-mini
 datasette agent chat mydata.db -m gpt-5.4-mini -p "List all tables"
 ```
 
+Use `-c` / `--config` to load a Datasette JSON or YAML configuration file, with the same behavior as `datasette serve`:
+
+```bash
+datasette agent chat mydata.db -c datasette.yml -p "List all tables"
+datasette agent chat mydata.db --config datasette.json
+```
+
+Use repeatable `-s` / `--setting` options to supply individual configuration values, using the same nested keys and JSON values as `datasette serve`. For example, to use Qwen3.8 27B in LM Studio through the OpenAI-compatible Responses API with an endpoint-capable version of datasette-llm:
+
+```bash
+datasette agent chat :memory: \
+  -s plugins.datasette-llm.default_model '{"model":"lmstudio-qwen","model_name":"qwen/qwen3.8-27b","api_base":"http://localhost:1234/v1","responses":true}' \
+  -p "Use SQL to calculate 21 * 2"
+```
+
+Configuration is loaded from `-c` first, then `-s` values are merged recursively so other nested values are preserved. `-m` overrides a `default_model` supplied using either option, regardless of option order. Other settings are preserved.
+
 Options:
 
 - `-p`, `--prompt` — Send a single prompt and exit (non-interactive mode)
 - `-m`, `--model` — LLM model to use
+- `-c`, `--config` — Path to a JSON/YAML Datasette configuration file
+- `-s`, `--setting` — Repeatable configuration key and value, with support for nested keys and JSON values
+- `--root` — Run as the Datasette root actor, allowing all permissions
+- `--yes` — Automatically approve yes/no confirmation prompts
+- `--unsafe` — Equivalent to `--root --yes`
+
+By default the CLI runs as an actor called `cli` and respects Datasette permissions. Tools that ask for approval show a terminal prompt; for example, `execute_write_sql` shows a plain-text version of the SQL, parameters, permissions and warnings before asking for confirmation. Use `--yes` to skip yes/no confirmations, `--root` to run with root permissions, or `--unsafe` to do both.
 
 ### Listing available tools
 
@@ -252,16 +469,20 @@ To see all registered agent tools, grouped by plugin:
 datasette agent tools
 ```
 
-Output:
+Output includes:
 
 ```
 agent:
   list_databases_and_tables
     List all available databases and their tables
+  list_tables
+    List the tables in one database. Use this if list_databases_and_tables says there are too many tables to list
   describe_table
     Get column names, types, and foreign keys for a table
   sql_query
     Execute a read-only SQL query against a database
+  execute_write_sql
+    Execute ordered write SQL statements against a database
 ```
 
 Add `--json` for machine-readable output:
