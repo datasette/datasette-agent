@@ -43,9 +43,26 @@ jobs:
     - uses: actions/setup-python@v7
       with:
         python-version: "3.13"
-    - name: Install dependencies and Chromium
+        cache: pip
+        cache-dependency-path: pyproject.toml
+    - name: Install dependencies
       run: |
         pip install . --group dev
-        playwright install --with-deps chromium
+    - name: Get Playwright version
+      id: playwright-version
+      run: |
+        echo "version=$(python -c 'import importlib.metadata; print(importlib.metadata.version("playwright"))')" >> "$GITHUB_OUTPUT"
+    - name: Cache Playwright browsers
+      id: playwright-cache
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+    - name: Install Chromium
+      if: steps.playwright-cache.outputs.cache-hit != 'true'
+      run: playwright install --with-deps chromium
+    - name: Install Chromium system dependencies
+      if: steps.playwright-cache.outputs.cache-hit == 'true'
+      run: playwright install-deps chromium
     - name: Test link confirmation in the browser
       run: python -m pytest tests/test_agent_links_browser.py

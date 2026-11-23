@@ -639,7 +639,7 @@ async def _describe_table(datasette, actor, database: str, table: str):
             "database": database,
             "table": table,
             "columns": [
-                {"name": col.name, "type": col.type, "notnull": col.notnull}
+                {"name": col.name, "type": col.type or "", "notnull": col.notnull}
                 for col in columns
             ],
             "foreign_keys": [
@@ -696,6 +696,7 @@ async def _sql_query(
         result = await db.execute(sql, bound_params, truncate=True)
         query_ms = round((time.perf_counter() - start) * 1000, 2)
         rows = [dict(row) for row in result.rows]
+        columns = list(result.columns.names)
 
         # A single row costs little and is often the answer, such as a COUNT(*)
         if display == "user" and len(rows) > 1:
@@ -703,22 +704,22 @@ async def _sql_query(
             # can reason over (columns + num_rows_shown_to_user) and stash the
             # actual rows under _rows for export.
             payload = {
-                "columns": result.columns,
+                "columns": columns,
                 "num_rows_shown_to_user": len(rows),
                 "note": _USER_DISPLAY_NOTE,
                 "has_more_rows": result.truncated,
                 "query_ms": query_ms,
-                "_html": _render_rows_html(result.columns, rows, result.truncated),
+                "_html": _render_rows_html(columns, rows, result.truncated),
                 "_rows": rows,
                 "_edit_sql_url": edit_sql_url,
             }
         elif display in ("both", "user"):
             payload = {
-                "columns": result.columns,
+                "columns": columns,
                 "rows": rows,
                 "has_more_rows": result.truncated,
                 "query_ms": query_ms,
-                "_html": _render_rows_html(result.columns, rows, result.truncated),
+                "_html": _render_rows_html(columns, rows, result.truncated),
                 "_edit_sql_url": edit_sql_url,
             }
             # The model's copy of the rows may be cut to fit the output limit
@@ -726,7 +727,7 @@ async def _sql_query(
                 payload["num_rows_shown_to_user"] = len(rows)
         else:  # "model" — unchanged default
             payload = {
-                "columns": result.columns,
+                "columns": columns,
                 "rows": rows,
                 "has_more_rows": result.truncated,
                 "query_ms": query_ms,
