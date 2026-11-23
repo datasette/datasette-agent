@@ -12,7 +12,7 @@
 
 <form id="new-chat-form" class="agent-composer">
   <div class="agent-composer-input">
-    <textarea id="new-message" aria-label="New chat message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="4" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
+    <textarea autofocus id="new-message" aria-label="New chat message" placeholder="Ask a question about your data... (# to tag a table or query)" rows="4" data-reference-search-url="{{ urls.path('/-/agent/api/references') }}"></textarea>
   </div>
   <div class="agent-composer-footer">
   {% if models|length > 1 %}

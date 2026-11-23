@@ -142,6 +142,28 @@ async def test_system_prompt_does_not_change_with_schema_or_actor(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_appends_custom_system_prompt(tmp_path):
+    from datasette_agent.agent import _build_system_prompt
+
+    plain = Datasette(memory=True, internal=str(tmp_path / "plain.db"))
+    await plain.invoke_startup()
+    default_prompt = await _build_system_prompt(plain, {"id": "user"})
+
+    ds = Datasette(
+        memory=True,
+        config={
+            "plugins": {
+                "datasette-agent": {"system_prompt": "Always report revenue in USD."}
+            }
+        },
+        internal=str(tmp_path / "internal.db"),
+    )
+    await ds.invoke_startup()
+    prompt = await _build_system_prompt(ds, {"id": "user"})
+    assert prompt == default_prompt + "\n\nAlways report revenue in USD."
+
+
+@pytest.mark.asyncio
 async def test_agent_permission_denied(datasette_instance):
     response = await datasette_instance.client.get("/-/agent")
     assert response.status_code == 403

@@ -30,9 +30,14 @@ STOPPED = ("stopped", {})
 STOPPED_TOOL_OUTPUT = "Cancelled: the user stopped this turn before the tool ran"
 
 
+def _custom_system_prompt(datasette):
+    config = datasette.plugin_config("datasette-agent") or {}
+    return config.get("system_prompt") or None
+
+
 async def _build_system_prompt(datasette, actor):
     example_path = datasette.urls.path("/sales/orders?region=west")
-    return (
+    prompt = (
         "You are a helpful data analysis assistant. "
         "You have access to tools that let you explore and query SQLite databases. "
         "Use the tools to answer questions about the data. "
@@ -80,6 +85,10 @@ async def _build_system_prompt(datasette, actor):
         "or just a brief framing sentence. If there's nothing to add, "
         "say nothing."
     )
+    custom = _custom_system_prompt(datasette)
+    if custom:
+        prompt += "\n\n" + custom
+    return prompt
 
 
 def _send_sse(control, event, data):
@@ -497,6 +506,7 @@ def resume_agent(datasette, actor, conversation_id):
 # Re-exports for background_agent.py / cli_chat.py compatibility.
 __all__ = [
     "_build_system_prompt",
+    "_custom_system_prompt",
     "insert_message",
     "insert_response",
     "load_messages",

@@ -639,7 +639,7 @@ async def _describe_table(datasette, actor, database: str, table: str):
             "database": database,
             "table": table,
             "columns": [
-                {"name": col.name, "type": col.type, "notnull": col.notnull}
+                {"name": col.name, "type": col.type or "", "notnull": col.notnull}
                 for col in columns
             ],
             "foreign_keys": [
@@ -696,8 +696,7 @@ async def _sql_query(
         result = await db.execute(sql, bound_params, truncate=True)
         query_ms = round((time.perf_counter() - start) * 1000, 2)
         rows = [dict(row) for row in result.rows]
-        # Datasette 1.0a44 returns Column objects here, earlier versions names
-        columns = [getattr(column, "name", column) for column in result.columns]
+        columns = list(result.columns.names)
 
         # A single row costs little and is often the answer, such as a COUNT(*)
         if display == "user" and len(rows) > 1:
