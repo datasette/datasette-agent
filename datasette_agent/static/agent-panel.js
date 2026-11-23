@@ -348,9 +348,8 @@ function setupPanel() {
   }
 
   // A page can change its own address without loading a new one - with
-  // history.replaceState() or a #fragment, as datasette-charts does when a
-  // chart is selected. No load event follows, so the address is read again
-  // when it is needed.
+  // history.replaceState() or a #fragment. No load event follows, so the
+  // address is read again when it is needed.
   function refreshUrl() {
     // Not while a page is on its way: the frame still holds the last one
     if (!currentFrame || pendingFrame || expectedUrl || !currentUrl) return;

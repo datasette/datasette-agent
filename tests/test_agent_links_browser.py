@@ -349,9 +349,9 @@ def test_panel_hides_datasette_header_and_footer(page, server):
 
 
 def test_panel_url_follows_a_page_that_changes_its_own_address(page, server):
-    """A page that rewrites its address without loading a new one - as
-    datasette-charts does when a chart is selected - fires no load event.
-    The address sent with the next message is still the current one."""
+    """A page that rewrites its address without loading a new one fires
+    no load event. The address sent with the next message is still the
+    current one."""
     home = server["prefix"] + "/"
     page.evaluate(
         "url => window.datasetteAgentPanel.open(url, {source: 'agent'})", home
