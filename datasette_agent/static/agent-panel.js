@@ -262,6 +262,23 @@ function setupPanel() {
     requestAnimationFrame(() => requestAnimationFrame(() => revealFrame(loadedFrame)));
   }
 
+  // Whether going to url only moves frame to a fragment of the page it
+  // shows. The browser then stays on the same document, so no load event
+  // ever comes to uncover the frame.
+  function isFragmentNavigation(frame, url) {
+    let current;
+    try {
+      current = new URL(frame.contentWindow.location.href);
+    } catch (err) {
+      return false;
+    }
+    const next = new URL(url, current);
+    return next.href.includes("#") &&
+      next.origin === current.origin &&
+      next.pathname === current.pathname &&
+      next.search === current.search;
+  }
+
   // Navigate the visible frame so the visit joins the browser history
   // and Back returns to the previous panel page.
   function navigateFrame(url) {
@@ -269,10 +286,16 @@ function setupPanel() {
       loadFrame(url);
       return;
     }
-    expectedUrl = localPath(url);
     setError(null);
     if (pendingFrame && pendingFrame !== firstFrame) pendingFrame.remove();
     pendingFrame = null;
+    if (isFragmentNavigation(currentFrame, url)) {
+      expectedUrl = null;
+      panel.classList.remove("agent-panel-loading");
+      currentFrame.contentWindow.location.assign(url);
+      return;
+    }
+    expectedUrl = localPath(url);
     panel.classList.add("agent-panel-loading");
     try {
       currentFrame.contentWindow.location.assign(url);
