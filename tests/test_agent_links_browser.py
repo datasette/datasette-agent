@@ -1,6 +1,7 @@
 """Run browser regressions with: uv run --with playwright pytest tests/test_agent_links_browser.py."""
 
 import json
+import re
 import socket
 import sqlite3
 import subprocess
@@ -368,3 +369,36 @@ def test_panel_url_follows_a_page_that_changes_its_own_address(page, server):
     # A hidden panel still counts as nothing being shown
     page.click(".agent-panel-toggle")
     assert page.evaluate("window.datasetteAgentPanel.currentUrl()") is None
+
+
+def test_panel_link_changing_only_the_fragment(page, server):
+    """A link to the panel's page that differs only in its fragment does
+    not reload the page, so no load event comes to uncover the panel."""
+    versions = server["prefix"] + "/-/versions"
+    panel = page.locator(".agent-panel")
+    loading = re.compile(r"\bagent-panel-loading\b")
+    page.evaluate("url => window.datasetteAgentPanel.open(url)", versions + "#one")
+    playwright.expect(panel).to_have_class(re.compile(r"\bagent-panel-ready\b"))
+    frame = page.locator(".agent-panel-frame-ready").element_handle().content_frame()
+    frame.evaluate("window.sameDocument = true")
+
+    # A different fragment, then the same one again
+    for fragment in ["#two", "#two"]:
+        page.evaluate(
+            "url => window.datasetteAgentPanel.open(url)", versions + fragment
+        )
+        playwright.expect(panel).not_to_have_class(loading)
+        assert frame.evaluate("location.hash") == fragment
+        assert frame.evaluate("window.sameDocument") is True
+        assert (
+            page.evaluate("window.datasetteAgentPanel.currentUrl()")
+            == versions + fragment
+        )
+
+    # Dropping the fragment is a real navigation, and still uncovers
+    page.evaluate("url => window.datasetteAgentPanel.open(url)", versions)
+    page.wait_for_function(
+        "() => !document.querySelector('.agent-panel-frame-ready')"
+        ".contentWindow.sameDocument"
+    )
+    playwright.expect(panel).not_to_have_class(loading)
