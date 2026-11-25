@@ -364,8 +364,22 @@ def register_commands(cli):
         help="Auto-approve yes/no confirmation prompts",
     )
     @click.option("--unsafe", is_flag=True, help="Equivalent to --root --yes")
+    @click.option(
+        "--internal",
+        type=click.Path(),
+        help="Path to a persistent Datasette internal SQLite database",
+        envvar="DATASETTE_INTERNAL",
+    )
     def chat(
-        files, prompt, model_id, config_file, settings, use_root, auto_approve, unsafe
+        files,
+        prompt,
+        model_id,
+        config_file,
+        settings,
+        use_root,
+        auto_approve,
+        unsafe,
+        internal,
     ):
         "Interactive chat session with the agent"
         from datasette.app import Datasette
@@ -387,6 +401,8 @@ def register_commands(cli):
         kwargs = {}
         if memory or not db_files:
             kwargs["memory"] = True
+        if internal:
+            kwargs["internal"] = internal
 
         config = (parse_metadata(config_file.read()) if config_file else None) or {}
         deep_dict_update(config, pairs_to_nested_config(settings))

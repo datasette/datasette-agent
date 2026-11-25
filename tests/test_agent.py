@@ -1458,6 +1458,45 @@ def test_chat_command_with_prompt(tmp_path):
     assert "hello" in result.output
 
 
+@pytest.mark.parametrize("use_envvar", (False, True))
+def test_chat_command_internal_option(tmp_path, monkeypatch, use_envvar):
+    import json
+    import sqlite3
+
+    from click.testing import CliRunner
+    from datasette.cli import cli
+
+    internal_path = str(tmp_path / "internal.db")
+    args = ["agent", "chat", ":memory:", "-m", "echo", "-p", "remember this"]
+    if use_envvar:
+        monkeypatch.setenv("DATASETTE_INTERNAL", internal_path)
+    else:
+        monkeypatch.delenv("DATASETTE_INTERNAL", raising=False)
+        args += ["--internal", internal_path]
+
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 0, result.output
+
+    # The conversation persists in the internal database after exit
+    conn = sqlite3.connect(internal_path)
+    conversations = conn.execute(
+        "select id, actor_id from agent_conversations"
+    ).fetchall()
+    assert len(conversations) == 1
+    assert conversations[0][1] == "cli"
+    messages = [
+        json.loads(row[0])
+        for row in conn.execute(
+            "select message_json from agent_messages where conversation_id = ?",
+            [conversations[0][0]],
+        )
+    ]
+    conn.close()
+    assert messages[0]["role"] == "user"
+    assert messages[0]["parts"][0]["text"] == "remember this"
+    assert any(m["role"] == "assistant" for m in messages)
+
+
 def test_chat_command_interactive(tmp_path):
     from click.testing import CliRunner
     from datasette.cli import cli
