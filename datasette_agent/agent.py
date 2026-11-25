@@ -250,7 +250,13 @@ async def _run_chain(datasette, actor, conversation_id, control):
         if event.type == "text":
             _send_sse(control, "text_chunk", {"content": event.chunk})
         elif event.type == "reasoning" and event.chunk:
-            _send_sse(control, "reasoning_chunk", {"content": event.chunk})
+            data = {"content": event.chunk}
+            # Separate reasoning parts (e.g. back-to-back OpenAI reasoning
+            # items) get separate Thinking blocks, as when the saved
+            # conversation is rendered.
+            if event.part_index is not None:
+                data["part"] = event.part_index
+            _send_sse(control, "reasoning_chunk", data)
         elif event.type == "tool_call_name":
             stream_id = tool_call_stream_id(event)
             if stream_id is None:
