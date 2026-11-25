@@ -1041,10 +1041,9 @@ async def test_user_message_sent_to_model_once(
     assert seen == [[first], [first], [first, "Second question"]]
 
 
-@pytest.mark.asyncio
-async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
-    from llm.parts import StreamEvent
-
+async def _stream_fake_events(tmp_path, monkeypatch, stream_events):
+    """Run an agent turn against a fake model that yields stream_events,
+    returning the parsed SSE events."""
     from datasette_agent.agent import run_agent
     from datasette_agent.schema import ensure_tables
 
@@ -1056,7 +1055,7 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
     await ds.invoke_startup()
     db = ds.get_internal_database()
     await ensure_tables(db)
-    conversation_id = "test-empty-reasoning"
+    conversation_id = "test-fake-events"
     now = "2026-05-19T00:00:00+00:00"
     await db.execute_write(
         "INSERT INTO agent_conversations (id, actor_id, title, created_at, updated_at) "
@@ -1066,9 +1065,8 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
 
     class FakeResponse:
         async def astream_events(self):
-            yield StreamEvent(type="reasoning", chunk="")
-            yield StreamEvent(type="reasoning", chunk="visible reasoning")
-            yield StreamEvent(type="text", chunk="final answer")
+            for event in stream_events:
+                yield event
 
         def to_dict(self):
             return {
@@ -1102,11 +1100,49 @@ async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
 
     monkeypatch.setattr("datasette_agent.models.LLM", FakeLLM)
     turn = run_agent(ds, {"id": "user"}, conversation_id, "hello")
+    return _parse_sse("".join([chunk async for chunk in turn.events()]))
 
-    events = _parse_sse("".join([chunk async for chunk in turn.events()]))
+
+@pytest.mark.asyncio
+async def test_empty_reasoning_chunks_are_not_streamed(tmp_path, monkeypatch):
+    from llm.parts import StreamEvent
+
+    events = await _stream_fake_events(
+        tmp_path,
+        monkeypatch,
+        [
+            StreamEvent(type="reasoning", chunk=""),
+            StreamEvent(type="reasoning", chunk="visible reasoning"),
+            StreamEvent(type="text", chunk="final answer"),
+        ],
+    )
     reasoning = [event for event in events if event["event"] == "reasoning_chunk"]
     assert reasoning == [
         {"event": "reasoning_chunk", "data": {"content": "visible reasoning"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_chunks_include_part_index(tmp_path, monkeypatch):
+    # Back-to-back reasoning parts need distinct part values so the page
+    # can render each one in its own Thinking block
+    from llm.parts import StreamEvent
+
+    events = await _stream_fake_events(
+        tmp_path,
+        monkeypatch,
+        [
+            StreamEvent(type="reasoning", chunk="First item", part_index=0),
+            StreamEvent(type="reasoning", chunk=" continued", part_index=0),
+            StreamEvent(type="reasoning", chunk="Second item", part_index=1),
+            StreamEvent(type="text", chunk="final answer", part_index=2),
+        ],
+    )
+    reasoning = [event["data"] for event in events if event["event"] == "reasoning_chunk"]
+    assert reasoning == [
+        {"content": "First item", "part": 0},
+        {"content": " continued", "part": 0},
+        {"content": "Second item", "part": 1},
     ]
 
 

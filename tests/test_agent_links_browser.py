@@ -284,6 +284,40 @@ def test_streamed_links_are_protected_before_receiving_a_href(page):
     assert page.external_requests == []
 
 
+def test_streamed_reasoning_parts_get_separate_blocks(page):
+    events = [
+        f"event: reasoning_chunk\ndata: {json.dumps(data)}\n\n"
+        for data in [
+            {"content": "**First**\n\nOne.", "part": 0},
+            {"content": "\n\n**Second**\n\nTwo.", "part": 0},
+            {"content": "**Third**\n\nThree.", "part": 1},
+        ]
+    ]
+    events.append(f"event: text_chunk\ndata: {json.dumps({'content': 'Done'})}\n\n")
+    events.append("event: done\ndata: {}\n\n")
+    page.route(
+        "**/stream",
+        lambda route: route.fulfill(
+            status=200, content_type="text/event-stream", body="".join(events)
+        ),
+    )
+    before = page.locator(".agent-reasoning").count()
+    page.evaluate('() => window.sendMessage("", "Think twice")')
+    page.get_by_text("Done", exact=True).wait_for()
+    blocks = page.locator(".agent-reasoning-content")
+    assert blocks.count() == before + 2
+    first = blocks.nth(before)
+    assert first.locator("strong").all_text_contents() == ["First", "Second"]
+    assert first.locator("p").all_text_contents() == [
+        "First",
+        "One.",
+        "Second",
+        "Two.",
+    ]
+    second = blocks.nth(before + 1)
+    assert second.locator("strong").all_text_contents() == ["Third"]
+
+
 def test_long_url_fits_dialog_and_keeps_actions_visible(page, tmp_path):
     page.set_viewport_size({"width": 800, "height": 500})
     page.get_by_role("link", name="Long external", exact=True).click()

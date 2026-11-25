@@ -911,8 +911,13 @@ async function streamAgentEvents(url, payload) {
               eventType = null;
               continue;
             }
+            // A new reasoning part starts a new Thinking block
+            if (currentReasoning && currentReasoning.part !== data.part) {
+              closeReasoning();
+            }
             if (!currentReasoning) {
               currentReasoning = startReasoningBlock();
+              currentReasoning.part = data.part;
             }
             appendReasoningChunk(currentReasoning, data.content);
             scrollToBottomIfFollowing();
