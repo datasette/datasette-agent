@@ -471,6 +471,7 @@ Options:
 - `--root` — Run as the Datasette root actor, allowing all permissions
 - `--yes` — Automatically approve yes/no confirmation prompts
 - `--unsafe` — Equivalent to `--root --yes`
+- `--internal` — Path to a persistent Datasette internal database, as with `datasette serve --internal`. Conversations, messages and responses from the chat session are stored there instead of in a temporary database, so they can be inspected afterwards or viewed in the web interface. Defaults to the `DATASETTE_INTERNAL` environment variable if set
 
 By default the CLI runs as an actor called `cli` and respects Datasette permissions. Tools that ask for approval show a terminal prompt; for example, `execute_write_sql` shows a plain-text version of the SQL, parameters, permissions and warnings before asking for confirmation. Use `--yes` to skip yes/no confirmations, `--root` to run with root permissions, or `--unsafe` to do both.
 
